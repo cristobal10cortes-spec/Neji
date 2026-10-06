@@ -1,5 +1,7 @@
-# Solo para compilar NejiPOS.exe (ver empaquetado/LEEME.md). La app en sí usa requirements.txt.
--r requirements.txt
+# Solo para compilar NejiPOS.exe (ver README, «Para desarrolladores»). Lleva solo lo que usa
+# Neji POS: sin PyQt6 ni pandas de CORAND, para que el programa no pese de más.
+Flask>=3.0
+waitress>=3.0
 pywebview==6.2.1
 pythonnet==3.0.5; sys_platform == "win32"
 pyinstaller==6.22.3

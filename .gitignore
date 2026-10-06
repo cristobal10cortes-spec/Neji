@@ -1,5 +1,8 @@
 # Datos del negocio (base de datos, respaldos, clave de sesión): nunca al repositorio
 datos/
+*.db
+*.db-wal
+*.db-shm
 
 # Python
 __pycache__/

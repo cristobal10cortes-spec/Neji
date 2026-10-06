@@ -45,7 +45,9 @@ a = Analysis(
     # pywebview trae su propio hook (DLL de WebView2 y su JS) y pyinstaller-hooks-contrib
     # los de pythonnet (clr, clr_loader): no hacen falta hiddenimports.
     hiddenimports=[],
-    excludes=["tkinter", "pytest"],
+    # CORAND.ERP (en el mismo repositorio) usa PyQt6 y pandas: no son parte de Neji POS.
+    excludes=["tkinter", "pytest", "PyQt6", "PyQt5", "PySide6", "PySide2", "qtpy", "pyqtgraph",
+              "pandas", "numpy", "openpyxl"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

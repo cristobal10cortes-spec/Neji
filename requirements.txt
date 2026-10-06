@@ -1,2 +1,9 @@
+# Neji POS (run.py, iniciar.bat)
 Flask>=3.0
 waitress>=3.0
+
+# CORAND.ERP, el programa anterior (corand_erp.py en VS Code)
+PyQt6
+pyqtgraph
+pandas
+openpyxl
