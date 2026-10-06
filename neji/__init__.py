@@ -63,7 +63,8 @@ def create_app(config=None):
     @app.errorhandler(Exception)
     def _error_inesperado(error):
         app.logger.exception("Error inesperado")
-        return jsonify(error="Ocurrió un error inesperado. Revisa la consola del servidor."), 500
+        return jsonify(error="Ocurrió un error inesperado. El detalle quedó en el registro de Neji "
+                             "(neji.log en la carpeta de datos, o la consola si se inició con run.py)."), 500
 
     if app.config["RESPALDO_AUTOMATICO"]:
         ultima_revision = {"t": 0.0}

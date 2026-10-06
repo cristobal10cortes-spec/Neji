@@ -183,6 +183,12 @@ cuandoSeCierreSesion(() => {
 });
 
 document.addEventListener('keydown', (e) => {
+  // Recargar la pantalla (en la ventana de escritorio no existe F5 del navegador).
+  if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'r') {
+    e.preventDefault();
+    location.reload();
+    return;
+  }
   if (teclaEnModal(e)) return;
   if (!estado.usuario) return;
   const vista = vistasPermitidas().find((v) => v.tecla === e.key);
@@ -195,4 +201,11 @@ document.addEventListener('keydown', (e) => {
 });
 
 window.addEventListener('hashchange', mostrarVista);
+
+// Soltar un archivo fuera de un campo de archivo haría que la ventana lo abra y reemplace a Neji.
+for (const tipo of ['dragover', 'drop']) {
+  window.addEventListener(tipo, (e) => {
+    if (!e.target.closest?.('input[type=file]')) e.preventDefault();
+  });
+}
 iniciar();

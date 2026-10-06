@@ -1,0 +1,6 @@
+# Solo para compilar NejiPOS.exe (ver empaquetado/LEEME.md). La app en sí usa requirements.txt.
+-r requirements.txt
+pywebview==6.2.1
+pythonnet==3.0.5; sys_platform == "win32"
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.8

@@ -5,7 +5,7 @@ import os
 from flask import current_app, jsonify, send_from_directory, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from .. import respaldos
+from .. import equipo, respaldos
 from ..auth import solo_admin, usuario_actual
 from ..chile import formatear_rut, validar_rut
 from ..db import CONFIG_POR_DEFECTO, ahora, filas, get_db, leer_config, transaccion
@@ -14,7 +14,8 @@ from . import bp, datos_json
 
 OPCIONES_SI_NO = {
     "imprimir_automatico", "redondeo_efectivo", "permitir_stock_negativo",
-    "cajero_puede_devolver", "cajero_puede_cambiar_precio", "modulo_farmacia",
+    "cajero_puede_devolver", "cajero_puede_cambiar_precio", "modulo_farmacia", "modo_red",
+    "impresion_directa",
 }
 CONFIG_EDITABLE = set(CONFIG_POR_DEFECTO) - {"ultimo_respaldo", "recetario_semilla"}
 
@@ -277,6 +278,15 @@ def borrar_departamento(dep_id):
         con.execute("UPDATE productos SET departamento_id = NULL WHERE departamento_id = ?", (dep_id,))
         con.execute("DELETE FROM departamentos WHERE id = ?", (dep_id,))
     return jsonify(ok=True)
+
+
+# --- Equipo ------------------------------------------------------------------
+
+@bp.get("/equipo")
+@solo_admin
+def datos_equipo():
+    """Dónde están los datos y la dirección que usan las otras cajas para conectarse."""
+    return jsonify(equipo.describir(current_app.config["DATOS"]))
 
 
 # --- Respaldos ---------------------------------------------------------------

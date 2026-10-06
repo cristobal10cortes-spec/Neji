@@ -21,6 +21,38 @@ en una base SQLite con respaldo automático diario.
 
 ## Instalación en Windows
 
+### Recomendado: el programa NejiPOS.exe
+
+1. Descarga **`NejiPOS-Instalador.exe`**. Cada versión se compila sola en GitHub:
+   pestaña **Actions → NejiPOS.exe (Windows)**, en el último resultado con ✓, sección
+   *Artifacts*.
+2. Ábrelo y sigue los pasos. No pide clave de administrador y crea el acceso directo
+   **Neji POS** en el escritorio.
+   - Windows puede mostrar «Windows protegió su PC» porque el programa no tiene firma
+     digital pagada: haz clic en **Más información → Ejecutar de todas formas**.
+3. Configura el nombre del negocio y el usuario administrador (si es farmacia, marca
+   «Es una farmacia»). ¡Listo para vender!
+
+Neji POS se abre en **su propia ventana**, sin navegador ni ventana negra:
+
+- Funciona con **Microsoft Edge WebView2**, que ya viene en Windows 10 y 11. Si falta,
+  el programa lo avisa y ofrece instalarlo.
+- **Tus datos no están en la carpeta del programa**, sino en
+  `%LOCALAPPDATA%\NejiPOS\datos`; la ruta exacta aparece en
+  **Configuración → Respaldos**. Por eso actualizar o desinstalar el programa no los toca.
+- Para actualizar, instala la versión nueva encima de la anterior.
+- **Versión portátil:** `NejiPOS-portable.zip` trae la carpeta del programa sin
+  instalador. Si junto a `NejiPOS.exe` pones una carpeta `datos` con tu `neji.db`, usa
+  esa (útil para llevarlo en un pendrive o para pasar los datos de la versión anterior).
+- F5 y F12 no hacen nada fuera de la venta: son atajos de Neji (cliente, cobrar).
+  Para recargar la pantalla usa `Ctrl+Shift+R`.
+
+**Imprimir el ticket sin el cuadro de impresión:** deja tu impresora térmica (58 u
+80 mm) como predeterminada en Windows y marca **Configuración → Negocio y ticket →
+Imprimir directo**. Se aplica al volver a abrir Neji POS.
+
+### Con Python (para quien prefiera el navegador)
+
 1. Instala **Python 3.10 o superior** desde <https://www.python.org/downloads/>.
    En el instalador marca **«Add Python to PATH»**.
 2. Descarga esta carpeta (botón *Code → Download ZIP* en GitHub) y descomprímela,
@@ -28,25 +60,19 @@ en una base SQLite con respaldo automático diario.
 3. Haz doble clic en **`iniciar.bat`**.
    - La primera vez instala lo necesario; demora un minuto.
    - Después se abre el navegador en <http://localhost:5000>.
-4. Configura el nombre del negocio y el usuario administrador (si es farmacia, marca
-   «Es una farmacia»). ¡Listo para vender!
 
-Para cerrarlo, cierra la ventana negra.
-En Linux o macOS se usa `./iniciar.sh`.
+Para cerrarlo, cierra la ventana negra. En Linux o macOS se usa `./iniciar.sh`.
+Los datos quedan en la carpeta `datos/` del proyecto.
 
-### Recomendado: abrirlo como aplicación
-
-Crea un acceso directo en el escritorio con este destino:
+Para abrirlo como aplicación desde el navegador, crea un acceso directo con este destino:
 
 ```
 "C:\Program Files\Google\Chrome\Application\chrome.exe" --app=http://localhost:5000 --kiosk-printing
 ```
 
 - `--app` lo abre en su propia ventana, sin barra de direcciones.
-- `--kiosk-printing` imprime el ticket directo en la impresora predeterminada,
-  sin mostrar el cuadro de impresión.
+- `--kiosk-printing` imprime el ticket directo en la impresora predeterminada.
 
-Deja tu impresora térmica (58 u 80 mm) como predeterminada en Windows.
 El ancho del ticket se elige en **Configuración → Negocio y ticket**.
 
 ### Lector de código de barras
@@ -57,14 +83,19 @@ tecla lo devuelve ahí.
 
 ### Varias cajas (multicaja)
 
-1. En el computador principal abre **`iniciar-red.bat`**. La ventana muestra una
-   dirección del tipo `http://192.168.1.20:5000`.
-2. En los otros computadores o tablets de la misma red, abre esa dirección en
-   el navegador.
+1. En el computador principal, marca **Configuración → Cajas → Permitir que otras
+   cajas de la red se conecten** y vuelve a abrir Neji POS. Ahí mismo aparece la
+   dirección para las otras cajas, del tipo `http://192.168.1.20:5000`.
+   - La primera vez Windows pregunta si permite el acceso a la red: acepta en
+     **Redes privadas**.
+   - Con Python, `iniciar-red.bat` hace lo mismo.
+2. En los otros computadores abre esa dirección en el navegador, o crea un acceso
+   directo a `NejiPOS.exe --conectar 192.168.1.20` para usarla en su propia ventana.
 3. Crea las cajas en **Configuración → Cajas**.
 4. En cada equipo elige qué caja es en **Configuración → Esta terminal**.
 
-Cada caja tiene su propio turno y su propio corte.
+El computador principal debe quedar encendido y con Neji POS abierto mientras las
+otras cajas vendan. Cada caja tiene su propio turno y su propio corte.
 
 ---
 
@@ -253,14 +284,17 @@ El detalle del análisis del programa anterior está en
 
 ## Respaldos y restauración
 
-- Los datos viven en la carpeta `datos/`: `neji.db` y la subcarpeta `respaldos/`.
+- Los datos viven en la carpeta de datos: `neji.db` y la subcarpeta `respaldos/`.
+  Con `NejiPOS.exe` es `%LOCALAPPDATA%\NejiPOS\datos`; con Python, `datos/` dentro
+  del proyecto. La ruta exacta aparece en **Configuración → Respaldos**.
 - Descarga un respaldo de vez en cuando desde **Configuración → Respaldos** y
   guárdalo fuera del computador (en un pendrive o en la nube).
 
 Para restaurar un respaldo:
 
 1. Cierra Neji.
-2. Reemplaza `datos/neji.db` por el archivo del respaldo, renombrado a `neji.db`.
+2. Reemplaza `neji.db` de la carpeta de datos por el archivo del respaldo, renombrado
+   a `neji.db`.
 3. Vuelve a abrir Neji.
 
 ## Migrar desde eleventa u otro sistema
@@ -294,6 +328,9 @@ neji/
   api/                 rutas JSON bajo /api
   static/              interfaz (index.html, css/, js/, js/vistas/)
 tests/                 pruebas con pytest
+run.py                 inicia el servidor y abre el navegador
+escritorio.py          NejiPOS.exe: servidor + ventana propia (pywebview / WebView2)
+empaquetado/           receta de PyInstaller, instalador (Inno Setup) e ícono
 importar_corand.py     importación desde CORAND.ERP por línea de comandos
 docs/investigacion.md  lo mejor de cada POS y qué se tomó de cada uno
 ```
@@ -309,6 +346,16 @@ Para correr las pruebas:
 python -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt     # Windows: .venv\Scripts\pip ...
 .venv/bin/python -m pytest
+```
+
+Para compilar `NejiPOS.exe` (lo hace solo el workflow
+`.github/workflows/windows-exe.yml` en cada cambio; a mano, en Windows con Python 3.12):
+
+```
+py -3.12 -m pip install -r requirements-dev.txt -r requirements-exe.txt
+py -3.12 -m PyInstaller --noconfirm --clean empaquetado\NejiPOS.spec
+dist\NejiPOS\NejiPOS.exe --prueba          # prueba sin ventana: sale con 0 si todo responde
+iscc empaquetado\NejiPOS.iss                # instalador (Inno Setup 6) -> dist\NejiPOS-Instalador.exe
 ```
 
 Para agregar una función nueva:

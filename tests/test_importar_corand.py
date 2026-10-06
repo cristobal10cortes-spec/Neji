@@ -1,13 +1,17 @@
 """Importación desde la base de CORAND.ERP (mismo esquema que crea su BaseDatos)."""
 
 import io
+import os
 import sqlite3
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from neji import db
+
+RAIZ = Path(__file__).resolve().parents[1]
 
 ESQUEMA_CORAND = [
     "CREATE TABLE usuarios (usuario TEXT PRIMARY KEY, password TEXT NOT NULL, rol TEXT NOT NULL)",
@@ -132,7 +136,7 @@ def test_cajero_no_puede_importar(api, corand):
 def test_migracion_de_base_antigua(tmp_path):
     """Una base creada con la primera versión de Neji recibe las columnas nuevas."""
     antiguo = subprocess.run(["git", "show", "6fecf6e:neji/schema.sql"], capture_output=True, text=True,
-                             cwd=__file__.rsplit("/tests/", 1)[0])
+                             cwd=RAIZ)
     if antiguo.returncode != 0:
         pytest.skip("No está disponible el historial de git")
     ruta = tmp_path / "vieja.db"
@@ -148,9 +152,9 @@ def test_migracion_de_base_antigua(tmp_path):
 
 
 def test_cli(tmp_path, corand):
-    raiz = __file__.rsplit("/tests/", 1)[0]
+    raiz = RAIZ
     datos = tmp_path / "datos_cli"
-    entorno = {"NEJI_DATOS": str(datos), "PATH": "/usr/bin:/bin"}
+    entorno = {**os.environ, "NEJI_DATOS": str(datos)}
     sin_admin = subprocess.run([sys.executable, "importar_corand.py", str(corand)], cwd=raiz,
                                capture_output=True, text=True, env=entorno)
     assert sin_admin.returncode != 0 and "administrador" in sin_admin.stderr

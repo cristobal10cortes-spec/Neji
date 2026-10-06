@@ -11,3 +11,7 @@ venv/
 # Sistema
 .DS_Store
 Thumbs.db
+
+# Compilación de NejiPOS.exe
+build/
+dist/

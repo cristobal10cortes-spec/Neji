@@ -1,0 +1,136 @@
+# Compila NejiPOS.exe en Windows: pruebas, ejecutable, prueba de la ventana real e instalador.
+# El resultado se descarga desde la pestaña Actions (artefactos «NejiPOS-Instalador» y
+# «NejiPOS-portable»). Al subir un tag vX.Y.Z además se publica como Release.
+name: NejiPOS.exe (Windows)
+
+on:
+  push:
+    branches: [main, "claude/**"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-exe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compilar:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # una prueba lee una versión antigua del esquema con git show
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            requirements-exe.txt
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt -r requirements-exe.txt
+
+      - name: Pruebas
+        run: python -m pytest -q
+
+      - name: Versión
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { $v = $env:GITHUB_REF_NAME.TrimStart('v') }
+          else { $v = "0.1.$env:GITHUB_RUN_NUMBER" }
+          Add-Content -Path $env:GITHUB_ENV -Value "NEJI_VERSION=$v"
+          Write-Host "Versión: $v"
+
+      - name: Compilar NejiPOS.exe
+        run: python -m PyInstaller --noconfirm --clean empaquetado/NejiPOS.spec
+
+      - name: Prueba sin ventana (servidor, archivos y motor WebView2 empaquetado)
+        timeout-minutes: 5
+        run: |
+          $informe = Join-Path $env:RUNNER_TEMP 'prueba.json'
+          $p = Start-Process -FilePath 'dist\NejiPOS\NejiPOS.exe' -ArgumentList '--prueba', '--salida', "`"$informe`"" -Wait -PassThru
+          if (Test-Path $informe) { Get-Content $informe -Raw } else { Write-Host 'No se generó el informe' }
+          if ($p.ExitCode -ne 0) { throw "La prueba falló (código $($p.ExitCode))" }
+
+      - name: Asegurar Microsoft Edge WebView2 Runtime
+        run: |
+          $claves = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+                    'HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $pv = $claves | Where-Object { Test-Path $_ } | ForEach-Object { (Get-ItemProperty $_).pv } | Select-Object -First 1
+          if ($pv) { Write-Host "WebView2 Runtime $pv"; exit 0 }
+          Write-Host 'Instalando WebView2 Runtime...'
+          $instalador = Join-Path $env:RUNNER_TEMP 'webview2.exe'
+          Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $instalador
+          Start-Process $instalador -ArgumentList '/silent', '/install' -Wait
+
+      - name: Prueba con la ventana real (dos veces, para ver que se conserva lo guardado)
+        timeout-minutes: 8
+        run: |
+          $carpeta = Join-Path $env:RUNNER_TEMP 'ventana'
+          foreach ($vez in 1, 2) {
+            $informe = Join-Path $env:RUNNER_TEMP "ventana-$vez.json"
+            $p = Start-Process -FilePath 'dist\NejiPOS\NejiPOS.exe' -ArgumentList '--prueba-ventana', "`"$carpeta`"", '--salida', "`"$informe`"" -Wait -PassThru
+            if (Test-Path $informe) { Get-Content $informe -Raw } else { Write-Host 'No se generó el informe' }
+            if ($p.ExitCode -ne 0) { throw "La ventana no cargó bien (vez $vez, código $($p.ExitCode))" }
+          }
+          $segunda = Get-Content (Join-Path $env:RUNNER_TEMP 'ventana-2.json') -Raw | ConvertFrom-Json
+          if ($segunda.anterior -ne 'guardado') { throw 'La ventana no conservó lo guardado entre aperturas' }
+
+      - name: Revisar el paquete
+        run: |
+          if (Test-Path 'dist\NejiPOS\datos') { throw 'El paquete no debe llevar datos' }
+          "{0:N1} MB" -f ((Get-ChildItem dist\NejiPOS -Recurse | Measure-Object Length -Sum).Sum / 1MB)
+
+      - name: Instalador (Inno Setup)
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            choco install innosetup -y --no-progress
+            $env:Path += ";${env:ProgramFiles(x86)}\Inno Setup 6"
+          }
+          iscc empaquetado\NejiPOS.iss
+          Get-Item dist\NejiPOS-Instalador.exe | Format-List Name, Length
+
+      - name: Versión portátil
+        run: Compress-Archive -Path dist\NejiPOS -DestinationPath dist\NejiPOS-portable.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NejiPOS-Instalador
+          path: dist/NejiPOS-Instalador.exe
+          if-no-files-found: error
+          retention-days: 60
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NejiPOS-portable
+          path: dist/NejiPOS-portable.zip
+          if-no-files-found: error
+          retention-days: 60
+
+  publicar:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: compilar
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: descargas
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            descargas/NejiPOS-Instalador.exe
+            descargas/NejiPOS-portable.zip

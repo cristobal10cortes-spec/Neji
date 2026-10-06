@@ -32,6 +32,8 @@ CONFIG_POR_DEFECTO = {
     "modulo_farmacia": "0",
     "receta_redondeo": "1",
     "recetario_semilla": "0",
+    "modo_red": "0",
+    "impresion_directa": "0",
 }
 
 # Formas farmacéuticas iniciales del recetario (mismos valores que CORAND.ERP).

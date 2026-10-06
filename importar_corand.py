@@ -18,6 +18,9 @@ from neji.validar import ErrorNegocio
 
 
 def main():
+    for flujo in (sys.stdout, sys.stderr):  # la consola de Windows no siempre acepta todo carácter
+        if hasattr(flujo, "reconfigure"):
+            flujo.reconfigure(errors="replace")
     parser = argparse.ArgumentParser(description="Importar datos de CORAND.ERP a Neji POS")
     parser.add_argument("archivo", help="ruta a corand_erp_pro.db")
     parser.add_argument("--sin-existencias", action="store_true",

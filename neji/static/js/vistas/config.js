@@ -44,7 +44,7 @@ function formularioConfig(claves, construir) {
 function vistaNegocio() {
   return formularioConfig({
     negocio_nombre: 'texto', negocio_rut: 'texto', negocio_giro: 'texto', negocio_direccion: 'texto', negocio_telefono: 'texto', negocio_email: 'texto',
-    ticket_encabezado: 'area', ticket_pie: 'area', ticket_leyenda: 'texto', ticket_ancho: 'texto', imprimir_automatico: 'check',
+    ticket_encabezado: 'area', ticket_pie: 'area', ticket_leyenda: 'texto', ticket_ancho: 'texto', imprimir_automatico: 'check', impresion_directa: 'check',
   }, (c) => {
     const ancho = h('select', h('option', { value: '80', selected: estado.config.ticket_ancho !== '58' }, '80 mm'), h('option', { value: '58', selected: estado.config.ticket_ancho === '58' }, '58 mm'));
     c.ticket_ancho = ancho;
@@ -60,6 +60,8 @@ function vistaNegocio() {
         campo('Mensaje al final', c.ticket_pie),
         campo('Leyenda legal', c.ticket_leyenda, 'Mientras no emitas boleta electrónica desde Neji, el ticket es un comprobante interno.')),
       check('Imprimir el ticket automáticamente al cobrar', c.imprimir_automatico),
+      check('Imprimir directo, sin mostrar el cuadro de impresión (programa NejiPOS.exe)', c.impresion_directa,
+        'Usa la impresora predeterminada de Windows: deja tu impresora de tickets como predeterminada. Se aplica al volver a abrir Neji POS. En el navegador, usa el acceso directo con --kiosk-printing.'),
     ];
   });
 }
@@ -116,6 +118,38 @@ async function vistaUsuarios(zona) {
   await cargar();
 }
 
+/** Varias cajas: las otras se conectan a este equipo por la red local. */
+function panelRed(equipo) {
+  const permitir = h('input', { type: 'checkbox', checked: estado.config.modo_red === '1' });
+  const situacion = h('div');
+  const pintar = () => {
+    if (equipo?.red_activa && permitir.checked) {
+      vaciar(situacion, h('p', 'Las otras cajas entran desde su navegador a ', h('b.mono', equipo.direccion_red),
+        ' (o abren NejiPOS.exe con ', h('span.mono', `--conectar ${equipo.direccion_red.replace('http://', '')}`), ').'));
+    } else if (permitir.checked !== Boolean(equipo?.red_activa)) {
+      vaciar(situacion, h('p', h('b', 'El cambio se aplica la próxima vez que abras Neji POS en este equipo.')));
+    } else {
+      vaciar(situacion, h('p.suave', 'Ahora solo este equipo puede usar Neji POS.'));
+    }
+  };
+  permitir.addEventListener('change', async () => {
+    try {
+      estado.config = await api.put('/api/config', { modo_red: permitir.checked });
+      aviso('Listo. El cambio se aplica al volver a abrir Neji POS en este equipo.', 'ok', 6000);
+    } catch (e) {
+      permitir.checked = !permitir.checked;
+      avisoError(e);
+    }
+    pintar();
+  });
+  pintar();
+  return h('div', { style: { marginTop: '1.2rem' } },
+    h('h3', 'Varias cajas en la red'),
+    h('label.check', permitir, 'Permitir que otras cajas de la red se conecten a este equipo'),
+    situacion,
+    h('p.ayuda', 'Este equipo debe quedar encendido y con Neji POS abierto mientras las otras cajas vendan. La primera vez, Windows puede preguntar si permite el acceso a la red: acepta en «Redes privadas». Luego elige en cada equipo qué caja es, en la pestaña «Esta terminal».'));
+}
+
 async function vistaCajas(zona) {
   const cargar = async () => {
     const cajas = await api.get('/api/cajas');
@@ -126,8 +160,9 @@ async function vistaCajas(zona) {
         { titulo: 'Nombre', valor: (c) => c.nombre },
         { titulo: 'Estado', valor: (c) => h(`span.etiqueta.${c.activa ? 'ok' : 'mal'}`, c.activa ? 'Activa' : 'Inactiva') },
       ], cajas, { alClic: (c) => editar(c) }),
-      h('p.ayuda', 'Para usar varias cajas, inicia Neji con «iniciar-red» en el computador principal y entra desde los otros equipos con la dirección que aparece en la ventana. Luego elige en cada equipo qué caja es en la pestaña «Esta terminal».')));
+      panelRed(equipo)));
   };
+  const equipo = await api.get('/api/equipo').catch(() => null);
   const editar = async (c = null) => {
     const r = await formulario({
       titulo: c ? `Editar ${c.nombre}` : 'Nueva caja',
@@ -243,7 +278,8 @@ function vistaImportar(resumen = null) {
 
 async function vistaRespaldos(zona) {
   const cargar = async () => {
-    const respaldos = await api.get('/api/respaldos');
+    const [respaldos, equipo] = await Promise.all([api.get('/api/respaldos'), api.get('/api/equipo').catch(() => null)]);
+    const carpeta = equipo?.carpeta_datos || 'datos';
     vaciar(zona, h('div.panel',
       h('div.fila.entre', h('h3', 'Respaldos'),
         h('button.btn.primario', { type: 'button', onclick: async () => { try { await api.post('/api/respaldos'); aviso('Respaldo creado.', 'ok'); cargar(); } catch (e) { avisoError(e); } } }, 'Respaldar ahora')),
@@ -254,7 +290,8 @@ async function vistaRespaldos(zona) {
         { titulo: 'Tamaño', valor: (r) => `${numero(Math.round(r.tamano / 1024))} KB`, clase: 'num' },
         { titulo: '', valor: (r) => h('button.btn.chico', { type: 'button', onclick: () => descargar(`/api/respaldos/${encodeURIComponent(r.nombre)}`) }, 'Descargar') },
       ], respaldos, { vacio: 'Aún no hay respaldos.' }),
-      h('p.ayuda', 'Para restaurar: cierra Neji, reemplaza el archivo datos/neji.db por el respaldo (renómbralo a neji.db) y vuelve a abrir.')));
+      h('p', 'Tus datos están en ', h('b.mono', carpeta), '. Los respaldos automáticos quedan en la carpeta «respaldos» dentro de ella.'),
+      h('p.ayuda', `Para restaurar: cierra Neji POS, reemplaza el archivo neji.db de esa carpeta por el respaldo (renómbralo a neji.db) y vuelve a abrir.`)));
   };
   await cargar();
 }

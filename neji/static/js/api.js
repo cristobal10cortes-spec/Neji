@@ -1,5 +1,7 @@
 // Llamadas a la API del servidor. Los errores traen el mensaje listo para mostrar.
 
+import { avisoError } from './ui.js';
+
 export class ErrorApi extends Error {
   constructor(mensaje, status, codigo) {
     super(mensaje);
@@ -52,7 +54,22 @@ export function qs(parametros) {
   return s ? `?${s}` : '';
 }
 
-export function descargar(url) {
+/**
+ * Descarga un archivo del servidor (CSV, respaldos). Primero revisa que el servidor responda bien:
+ * si hay un error se muestra el mensaje, en vez de bajar un archivo vacío o abrir el diálogo Guardar
+ * para nada (en la ventana de escritorio cada descarga pregunta dónde guardar).
+ */
+export async function descargar(url) {
+  try {
+    const r = await fetch(url, { method: 'HEAD', credentials: 'same-origin' });
+    if (!r.ok) {
+      const cuerpo = await fetch(url, { credentials: 'same-origin' }).then((x) => x.json()).catch(() => ({}));
+      throw new ErrorApi(cuerpo.error || `No se pudo descargar el archivo (error ${r.status}).`, r.status);
+    }
+  } catch (e) {
+    avisoError(e instanceof ErrorApi ? e : new ErrorApi('No hay conexión con el servidor de Neji.', 0));
+    return;
+  }
   const a = document.createElement('a');
   a.href = url;
   a.download = '';
