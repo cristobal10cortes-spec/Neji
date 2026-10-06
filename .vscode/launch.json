@@ -1,0 +1,13 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Ejecutar CORAND ERP",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/corand_erp.py",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        }
+    ]
+}
