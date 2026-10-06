@@ -102,7 +102,13 @@ jobs:
           function Prueba-Ventana($exe, $nombre) {
             $informe = Join-Path $env:RUNNER_TEMP "$nombre.json"
             $carpeta = Join-Path $env:RUNNER_TEMP "datos-$nombre"
-            $p = Start-Process -FilePath $exe -ArgumentList '--prueba-ventana', "`"$carpeta`"", '--salida', "`"$informe`"" -Wait -PassThru
+            # Se inicia sin pasar por el aviso «¿Desea ejecutar este archivo?» de Windows (en el PC
+            # del usuario ese aviso ya se aceptó; aquí nadie puede presionar «Ejecutar»).
+            $inicio = [System.Diagnostics.ProcessStartInfo]::new($exe)
+            foreach ($argumento in '--prueba-ventana', $carpeta, '--salida', $informe) { $inicio.ArgumentList.Add($argumento) }
+            $inicio.UseShellExecute = $false
+            $p = [System.Diagnostics.Process]::Start($inicio)
+            $p.WaitForExit()
             if (Test-Path $informe) { Write-Host (Get-Content $informe -Raw) } else { Write-Host 'No se generó el informe' }
             return $p.ExitCode
           }
