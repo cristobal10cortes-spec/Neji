@@ -195,3 +195,46 @@ def test_formas_solo_admin_y_validaciones(api, recetario):
     api.post("/api/recetario/formas", {"nombre": "Óvulos", "unidad": "unidad"}, esperado=403)
     # el cajero sí puede calcular y guardar recetas
     guardar(api, recetario)
+
+
+def test_numeros_con_punto_de_miles_y_coma_decimal():
+    from neji.servicios.recetario import numero
+
+    assert numero("5.000", "dosis") == 5000
+    assert numero("1.234,5", "dosis") == 1234.5
+    assert numero("0,5", "dosis") == 0.5
+    assert numero("1.5", "dosis") == 1.5       # un solo punto con menos de 3 decimales: decimal
+    assert numero("0.500", "dosis") == 0.5     # parte entera 0: nunca es punto de miles
+
+
+def test_numeros_gigantes_se_rechazan(api, recetario):
+    calcular(api, recetario, "Cápsulas", "1e20", [], esperado=400)
+    calcular(api, recetario, "Cápsulas", 30, [("PARACETAMOL", "9" * 30)], esperado=400)
+    forma = recetario["formas"]["Cápsulas"]
+    api.put(f"/api/recetario/formas/{forma['id']}", {"nombre": "Cápsulas", "unidad": "unidad",
+                                                    "precio_base": "1e30"}, esperado=400)
+    api.put(f"/api/recetario/formas/{forma['id']}", {"nombre": "Cápsulas", "unidad": "unidad",
+                                                    "cantidad_sugerida": "30,5"}, esperado=400)
+
+
+def test_plural_de_la_forma():
+    from neji.servicios.recetario import unidad_plural
+
+    assert unidad_plural(30, "unidad", "cápsula") == "cápsulas"
+    assert unidad_plural(30, "unidad", "cápsula blanda") == "cápsulas blandas"
+    assert unidad_plural(10, "unidad", "jabón") == "jabones"
+    assert unidad_plural(10, "unidad", "unidad") == "unidades"
+    assert unidad_plural(5, "unidad", "luz") == "luces"
+    assert unidad_plural(50, "g", "g") == "g"
+    assert unidad_plural(100, "ml", "ml") == "ml"
+    assert unidad_plural(1, "unidad", "cápsula") == "cápsula"
+    assert unidad_plural(20, "unidad", "óvulos") == "óvulos"
+
+
+def test_libro_busca_por_rut_y_csv_sin_formulas(api, recetario):
+    guardar(api, recetario, rut_paciente="12.345.678-5", paciente="=HYPERLINK(\"http://x\")")
+    guardar(api, recetario, rut_paciente="11111111-1", paciente="Otra")
+    assert [r["folio"] for r in api.get("/api/recetario/recetas?q=12345678-5")] == [1]
+    assert [r["folio"] for r in api.get("/api/recetario/recetas?q=12.345.678-5")] == [1]
+    libro = api.http.get("/api/recetario/recetas.csv").get_data(as_text=True)
+    assert "'=HYPERLINK" in libro and ";=HYPERLINK" not in libro

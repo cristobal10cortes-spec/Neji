@@ -10,7 +10,8 @@ from ..db import ahora, fila, filas, get_db, sin_acentos, transaccion
 from ..servicios.farmacia import (SQL_PRINCIPIOS_TEXTO, alternativas, guardar_principios_producto,
                                   principios_de_producto)
 from ..servicios.inventario import mover_existencia
-from ..validar import ErrorNegocio, booleano, cantidad, entero, fecha_flexible, texto
+from ..validar import (ErrorNegocio, booleano, cantidad, celda_csv, entero, fecha_flexible,
+                       leer_celda_csv, texto)
 from . import bp, datos_json, sin_costos
 
 COLUMNAS_CSV = ["codigo", "descripcion", "departamento", "tipo_venta", "precio_costo",
@@ -92,6 +93,8 @@ def _guardar_nuevo(con, p, existencia, usuario_id):
             "actualizado = ? WHERE id = ?",
             [p[c] for c in campos] + [fecha, previo["id"]])
         producto_id = previo["id"]
+        # Un producto reactivado parte sin los principios activos que tenía antes de borrarse.
+        con.execute("DELETE FROM producto_principios WHERE producto_id = ?", (producto_id,))
     else:
         producto_id = con.execute(
             f"INSERT INTO productos ({', '.join(campos)}, existencia, creado, actualizado) "
@@ -262,11 +265,11 @@ def exportar_productos():
     escritor.writerow(COLUMNAS_CSV)
     for p in get_db().execute(f"{SELECT_PRODUCTO} WHERE p.activo = 1 ORDER BY p.descripcion"):
         escritor.writerow([
-            p["codigo"], p["descripcion"], p["departamento"] or "", p["tipo_venta"],
+            celda_csv(p["codigo"]), celda_csv(p["descripcion"]), celda_csv(p["departamento"]), p["tipo_venta"],
             p["precio_costo"], p["precio_venta"], _numero_csv(p["precio_mayoreo"]),
             _numero_csv(p["cantidad_mayoreo"]), "si" if p["usa_inventario"] else "no",
             _numero_csv(p["existencia"]), _numero_csv(p["minimo"]), _numero_csv(p["maximo"]),
-            "si" if p["exento"] else "no", p["principios"] or "", p["proveedor"] or "",
+            "si" if p["exento"] else "no", celda_csv(p["principios"]), celda_csv(p["proveedor"]),
             p["vencimiento"] or "",
         ])
     return Response("﻿" + salida.getvalue(), mimetype="text/csv; charset=utf-8",
@@ -325,7 +328,7 @@ def importar_productos():
     creados = actualizados = 0
     errores = []
     for n, registro in enumerate(lector, start=2):
-        registro = {k: (v or "").strip() for k, v in registro.items() if k}
+        registro = {k: leer_celda_csv((v or "").strip()) for k, v in registro.items() if k}
         if not any(registro.values()):
             continue
         try:

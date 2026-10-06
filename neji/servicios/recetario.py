@@ -11,12 +11,11 @@ Además convierte unidades (500 mg = 0,5 g), acepta porcentajes en cremas y loci
 """
 
 import json
-import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from ..chile import desglosar_iva, formatear_rut, validar_rut
 from ..db import ahora, fila, leer_config, transaccion
-from ..validar import ErrorNegocio, entero, texto
+from ..validar import ErrorNegocio, entero, texto, texto_a_numero
 
 UNIDADES_PRINCIPIO = ("mcg", "mg", "g", "ml", "UI")
 UNIDADES_DOSIS = UNIDADES_PRINCIPIO + ("%",)
@@ -27,26 +26,25 @@ EN_BASE = {"mcg": Decimal("0.000001"), "mg": Decimal("0.001"), "g": Decimal(1), 
 PASOS_REDONDEO = (1, 10, 50, 100)
 MAX_COMPONENTES = 30
 MAX_CANTIDAD = Decimal(100000)
+MAX_PRECIO = Decimal(10) ** 9
+MAX_TOTAL = 10 ** 12
 
 
-def numero(valor, nombre, positivo=False, minimo=None, maximo=None, decimales=4, miles=False):
-    """Lee un número exacto (Decimal). Acepta '0,5', '1.5', 2 y, con miles=True, '4.000' = 4000."""
+def numero(valor, nombre, positivo=False, minimo=None, maximo=None, decimales=4):
+    """Lee un número exacto (Decimal) escrito a la chilena: '0,5', '5.000' (cinco mil), '1.5', 2."""
     if valor is None or (isinstance(valor, str) and not valor.strip()):
         raise ErrorNegocio(f"Falta {nombre}.")
     if isinstance(valor, bool):
         raise ErrorNegocio(f"{nombre.capitalize()} no es válido.")
-    texto_num = str(valor).strip().replace(" ", "").replace("$", "")
-    if isinstance(valor, str):
-        if miles and re.fullmatch(r"\d{1,3}(\.\d{3})+(,\d+)?", texto_num):
-            texto_num = texto_num.replace(".", "").replace(",", ".")
-        elif "," in texto_num:
-            texto_num = texto_num.replace(".", "").replace(",", ".")
+    texto_num = texto_a_numero(valor) if isinstance(valor, str) else str(valor)
     try:
         d = Decimal(texto_num)
     except InvalidOperation:
         raise ErrorNegocio(f"{nombre.capitalize()} no es un número válido.") from None
     if not d.is_finite():
         raise ErrorNegocio(f"{nombre.capitalize()} no es válido.")
+    if d.adjusted() > 15:
+        raise ErrorNegocio(f"{nombre.capitalize()} es demasiado grande.")
     d = d.quantize(Decimal(1).scaleb(-decimales), rounding=ROUND_HALF_UP)
     if positivo and d <= 0:
         raise ErrorNegocio(f"{nombre.capitalize()} debe ser mayor que cero.")
@@ -169,18 +167,35 @@ def calcular(con, datos):
     }
 
 
+_SIN_TILDE = str.maketrans("áéíóú", "aeiou")
+
+
+def _plural_palabra(p):
+    if len(p) <= 2 or not any(v in p for v in "aeiouáéíóú") or p.endswith(("s", "x")):
+        return p  # abreviaturas (g, ml, gr), "de", palabras ya en plural
+    if p.endswith(("l", "n", "r", "d", "z", "j")):
+        base = p[:-1] + "c" if p.endswith("z") else p
+        return base[:-2] + base[-2:].translate(_SIN_TILDE) + "es"  # jabón -> jabones
+    return p + "s"
+
+
 def unidad_plural(cantidad, unidad, nombre_unidad):
-    if unidad == "ml" or cantidad == 1 or nombre_unidad.endswith("s"):
+    """'cápsula blanda' -> 'cápsulas blandas', 'jabón' -> 'jabones', 'g' -> 'g'."""
+    if unidad == "ml" or cantidad == 1:
         return nombre_unidad
-    if nombre_unidad.endswith(("l", "n", "r", "d")):
-        return nombre_unidad + "es"
-    return nombre_unidad + "s"
+    return " ".join(_plural_palabra(p) for p in nombre_unidad.split(" "))
+
+
+def numero_texto(valor):
+    """Número sin perder decimales ni pasar a notación científica: 1234.5678 -> '1234,5678'."""
+    d = Decimal(str(valor)).normalize()
+    return format(d, "f").replace(".", ",")
 
 
 def describir(receta):
     """'Receta magistral N° 12 · Cápsulas × 30 cápsulas'."""
     cantidad = receta["cantidad"]
-    cantidad_txt = f"{cantidad:g}".replace(".", ",")
+    cantidad_txt = numero_texto(cantidad)
     return (f"Receta magistral N° {receta['folio']} · {receta['forma']} × {cantidad_txt} "
             f"{unidad_plural(cantidad, receta['unidad'], receta['nombre_unidad'])}")
 
@@ -196,6 +211,8 @@ def crear(con, datos, usuario):
         r = calcular(con, datos)
         if r["total"] <= 0:
             raise ErrorNegocio("El total de la receta debe ser mayor que cero.")
+        if r["total"] > MAX_TOTAL:
+            raise ErrorNegocio("El total de la receta es demasiado grande. Revisa dosis y cantidades.")
         folio = con.execute("SELECT COALESCE(MAX(folio), 0) + 1 FROM recetas_magistrales").fetchone()[0]
         return con.execute(
             """INSERT INTO recetas_magistrales (folio, fecha, usuario_id, forma_id, forma, unidad,

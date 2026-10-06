@@ -8,6 +8,7 @@ from flask import Response, jsonify
 from ..auth import solo_admin
 from ..db import filas, get_db
 from ..servicios.caja import SQL_DEPARTAMENTO_ITEM, SQL_GANANCIA_ITEM
+from ..validar import celda_csv
 from . import bp, rango_fechas
 
 # Importe neto de devoluciones y con el descuento del ticket repartido.
@@ -95,8 +96,9 @@ def exportar_ventas():
                LEFT JOIN clientes cl ON cl.id = v.cliente_id
                WHERE v.fecha BETWEEN ? AND ? ORDER BY v.folio, vi.id""", (inicio, fin)):
         escritor.writerow([
-            r["folio"], r["fecha"], r["caja"], r["cajero"], r["cliente"] or "", r["codigo"] or "",
-            r["descripcion"], f"{r['cantidad']:g}".replace(".", ","), r["precio_unitario"],
+            r["folio"], r["fecha"], celda_csv(r["caja"]), celda_csv(r["cajero"]), celda_csv(r["cliente"]),
+            celda_csv(r["codigo"]), celda_csv(r["descripcion"]), f"{r['cantidad']:g}".replace(".", ","),
+            r["precio_unitario"],
             r["tipo_precio"], r["importe"], f"{r['cantidad_devuelta']:g}".replace(".", ","),
             r["total"], r["estado"],
         ])

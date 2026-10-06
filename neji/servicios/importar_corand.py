@@ -12,9 +12,9 @@ import sqlite3
 import tempfile
 
 from ..chile import formatear_rut, redondear, validar_rut
-from ..db import ahora, transaccion
+from ..db import ahora, sin_acentos, transaccion
 from ..validar import ErrorNegocio, fecha_flexible
-from .farmacia import guardar_principios_producto, normalizar_nombre, obtener_o_crear
+from .farmacia import guardar_principios_producto, normalizar_nombre, obtener_o_crear, separar_principios
 from .inventario import mover_existencia
 
 UNIDADES_PRINCIPIO = {"mg": "mg", "mcg": "mcg", "ug": "mcg", "µg": "mcg", "g": "g", "gr": "g",
@@ -33,11 +33,13 @@ OPCIONES = ("productos", "existencias", "vademecum", "recetario", "negocio")
 
 def unidad_forma(texto):
     """'Cápsulas' -> ('unidad', 'cápsula'), 'Gramos' -> ('g', 'gramo'), 'Mililitros' -> ('ml', 'ml')."""
-    t = (texto or "").strip().lower()
+    t = " ".join((texto or "").split()).lower().rstrip(".")
     if t in ("g", "gr", "grs") or t.startswith("gram"):
         return "g", "gramo"
-    if t == "ml" or t.startswith("mili") or t.startswith("ml"):
+    if t in ("ml", "cc", "cm3", "cm³") or t.startswith(("mili", "ml")):
         return "ml", "ml"
+    if t in ("u", "un", "und", "uds", "unid", "unidad", "unidades"):
+        return "unidad", "unidad"
     if t.startswith(("cáps", "caps", "cap")):
         return "unidad", "cápsula"
     if not t:
@@ -93,6 +95,7 @@ def importar(con, ruta, usuario_id, opciones=None):
     negocio (todas activas por defecto). Devuelve un resumen con contadores y advertencias."""
     opciones = {k: True for k in OPCIONES} | (opciones or {})
     origen, tablas, carpeta = _abrir_copia(ruta)
+    cache = {}  # principios activos ya buscados o creados: sin_acentos(nombre) -> id
     r = {"productos_creados": 0, "productos_actualizados": 0, "productos_con_principio": 0,
          "fichas_vademecum": 0, "precios_recetario": 0, "formas": 0, "datos_negocio": 0,
          "advertencias": []}
@@ -100,13 +103,13 @@ def importar(con, ruta, usuario_id, opciones=None):
     try:
         with transaccion(con):
             if opciones["vademecum"] and "vademecum" in tablas:
-                _vademecum(con, origen, r)
+                _vademecum(con, origen, r, avisar, cache)
             if opciones["recetario"] and "recetario_insumos" in tablas:
-                _precios_recetario(con, origen, r, avisar)
+                _precios_recetario(con, origen, r, avisar, cache)
             if opciones["recetario"] and "recetario_formulas" in tablas:
                 _formas(con, origen, r)
             if opciones["productos"] and "inventario" in tablas:
-                _productos(con, origen, r, avisar, usuario_id, opciones["existencias"])
+                _productos(con, origen, r, avisar, usuario_id, opciones["existencias"], cache)
             if opciones["negocio"] and "configuracion" in tablas:
                 _negocio(con, origen, r)
             if r["fichas_vademecum"] or r["precios_recetario"] or r["productos_con_principio"]:
@@ -118,15 +121,26 @@ def importar(con, ruta, usuario_id, opciones=None):
     return r
 
 
-def _vademecum(con, origen, r):
+def _vademecum(con, origen, r, avisar, cache):
     columnas = _columnas(origen, "vademecum")
     adversos = "efectos_adversos" if "efectos_adversos" in columnas else "NULL"
     for fila in origen.execute(
             f"SELECT principio_activo, efecto_terapeutico, {adversos} AS efectos_adversos FROM vademecum"):
-        nombre = normalizar_nombre(fila["principio_activo"])
-        if not nombre:
+        clave = str(fila["principio_activo"] or "").strip()
+        try:
+            principios = separar_principios(clave)
+        except ErrorNegocio as e:
+            avisar(f"Ficha «{clave[:60]}» omitida: {e.mensaje}")
             continue
-        pid = obtener_o_crear(con, nombre)
+        if not principios:
+            continue
+        if len(principios) > 1:
+            # Una ficha de CORAND escrita como «PARACETAMOL + CAFEINA» no corresponde a un solo
+            # principio activo: cada uno debe tener su propia ficha.
+            avisar(f"Ficha «{clave[:60]}» omitida: combina varios principios activos; "
+                   "créela por separado para cada uno.")
+            continue
+        pid = obtener_o_crear(con, principios[0][0], cache)
         con.execute(
             """UPDATE principios_activos
                SET accion_terapeutica = COALESCE(NULLIF(?, ''), accion_terapeutica),
@@ -137,8 +151,8 @@ def _vademecum(con, origen, r):
         r["fichas_vademecum"] += 1
 
 
-def _precios_recetario(con, origen, r, avisar):
-    vistos = {}
+def _precios_recetario(con, origen, r, avisar, cache):
+    vistos = {}  # sin_acentos(nombre) -> (unidad, precio)
     for fila in origen.execute("SELECT nombre, unidad, precio FROM recetario_insumos"):
         nombre = normalizar_nombre(fila["nombre"])
         if not nombre:
@@ -147,14 +161,15 @@ def _precios_recetario(con, origen, r, avisar):
         precio = max(_numero(fila["precio"]), 0)
         if unidad is None:
             avisar(f"{nombre}: unidad «{fila['unidad']}» no reconocida; quedó sin precio de recetario.")
-            obtener_o_crear(con, nombre)
+            obtener_o_crear(con, nombre, cache)
             continue
-        if nombre in vistos and vistos[nombre] != (unidad, precio):
+        clave = sin_acentos(nombre)
+        if clave in vistos and vistos[clave] != (unidad, precio):
             avisar(f"{nombre} aparecía dos veces en el recetario con distinto precio; "
                    f"se usó {precio:g} por {unidad}.")
-        vistos[nombre] = (unidad, precio)
+        vistos[clave] = (unidad, precio)
         con.execute("UPDATE principios_activos SET unidad_receta = ?, precio_receta = ?, actualizado = ? "
-                    "WHERE id = ?", (unidad, precio, ahora(), obtener_o_crear(con, nombre)))
+                    "WHERE id = ?", (unidad, precio, ahora(), obtener_o_crear(con, nombre, cache)))
     r["precios_recetario"] = len(vistos)
 
 
@@ -190,7 +205,7 @@ def _departamento(con, nombre, cache):
     return cache[clave]
 
 
-def _productos(con, origen, r, avisar, usuario_id, actualizar_existencias):
+def _productos(con, origen, r, avisar, usuario_id, actualizar_existencias, cache):
     columnas = _columnas(origen, "inventario")
     opcional = {c: (c if c in columnas else "NULL") for c in
                 ("distribuidor", "departamento", "vencimiento", "principio_activo")}
@@ -242,7 +257,7 @@ def _productos(con, origen, r, avisar, usuario_id, actualizar_existencias):
         principio = str(fila["principio"] or "").strip()
         if principio:
             try:
-                guardar_principios_producto(con, producto_id, principio)
+                guardar_principios_producto(con, producto_id, principio, cache)
                 r["productos_con_principio"] += 1
             except ErrorNegocio as e:
                 avisar(f"{codigo}: principio activo «{principio[:60]}» no se pudo asignar ({e.mensaje})")

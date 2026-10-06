@@ -5,6 +5,7 @@ import { ir } from '../app.js';
 import { esAdmin } from '../estado.js';
 import { aviso, avisoError, confirmar, debounce, formulario, h, modal, numero, pesos, tabla, vaciar } from '../ui.js';
 
+const LIMITE = 5000; // principios activos que se listan de una vez (la búsqueda filtra en el servidor)
 const UNIDADES = [['', '— no se usa en el recetario —'], ['mg', 'mg'], ['mcg', 'mcg'], ['g', 'g'], ['ml', 'ml'], ['UI', 'UI']];
 
 export const textoPrecioReceta = (pa) => (pa.precio_receta == null ? '—'
@@ -114,11 +115,13 @@ export async function montar(contenedor) {
   async function cargar() {
     let principios = [];
     try {
-      principios = await api.get(`/api/principios${qs({ q: buscar.value.trim(), con_stock: conStock.checked ? 1 : '' })}`);
+      principios = await api.get(`/api/principios${qs({ q: buscar.value.trim(), con_stock: conStock.checked ? 1 : '', limite: LIMITE })}`);
     } catch (e) {
       avisoError(e);
     }
-    contador.textContent = `${principios.length} principios activos`;
+    contador.textContent = principios.length >= LIMITE
+      ? `Primeros ${numero(LIMITE)} principios activos: escribe para buscar`
+      : `${numero(principios.length)} principios activos`;
     vaciar(lista, tabla([
       { titulo: 'Principio activo', valor: (p) => h('b', p.nombre) },
       { titulo: 'Acción terapéutica', valor: (p) => p.accion_terapeutica || h('span.suave', 'sin ficha') },

@@ -181,10 +181,22 @@ const OPCIONES_IMPORTAR = [
   ['negocio', 'Datos del negocio para el ticket (nombre, dirección, teléfono, correo)'],
 ];
 
-function vistaImportar() {
+function resumenImportacion(r) {
+  return h('div.panel', { style: { marginTop: '1rem' } },
+    h('h3', 'Importación terminada'),
+    h('ul',
+      h('li', `Productos nuevos: ${r.productos_creados} · actualizados: ${r.productos_actualizados} · con principio activo: ${r.productos_con_principio}`),
+      h('li', `Fichas de vademécum: ${r.fichas_vademecum}`),
+      h('li', `Principios activos con precio de recetario: ${r.precios_recetario} · fórmulas magistrales: ${r.formas}`),
+      h('li', `Datos del negocio actualizados: ${r.datos_negocio}`)),
+    r.advertencias?.length ? [h('p.rojo', `${r.advertencias.length} advertencias:`), h('ul', r.advertencias.map((a) => h('li', a)))] : null,
+    h('button.btn', { type: 'button', onclick: () => ir('vademecum') }, 'Ir al vademécum'));
+}
+
+function vistaImportar(resumen = null) {
   const archivo = h('input', { type: 'file', accept: '.db,.sqlite,.sqlite3' });
   const opciones = Object.fromEntries(OPCIONES_IMPORTAR.map(([k]) => [k, h('input', { type: 'checkbox', checked: true })]));
-  const resultado = h('div');
+  const resultado = h('div', resumen ? resumenImportacion(resumen) : null);
   const error = h('div.error-modal.oculto', { role: 'alert' });
   const boton = h('button.btn.primario', { type: 'button' }, 'Importar');
   boton.addEventListener('click', async () => {
@@ -201,16 +213,11 @@ function vistaImportar() {
     boton.textContent = 'Importando...';
     try {
       const r = await api.subir('/api/importar/corand', datos);
-      vaciar(resultado, h('div.panel', { style: { marginTop: '1rem' } },
-        h('h3', 'Importación terminada'),
-        h('ul',
-          h('li', `Productos nuevos: ${r.productos_creados} · actualizados: ${r.productos_actualizados} · con principio activo: ${r.productos_con_principio}`),
-          h('li', `Fichas de vademécum: ${r.fichas_vademecum}`),
-          h('li', `Principios activos con precio de recetario: ${r.precios_recetario} · fórmulas magistrales: ${r.formas}`),
-          h('li', `Datos del negocio actualizados: ${r.datos_negocio}`)),
-        r.advertencias.length ? [h('p.rojo', `${r.advertencias.length} advertencias:`), h('ul', r.advertencias.map((a) => h('li', a)))] : null,
-        h('button.btn', { type: 'button', onclick: async () => { await recargarConfiguracion(); ir('vademecum'); } }, 'Ir al vademécum')));
       aviso('Importación terminada. Se hizo un respaldo antes de empezar.', 'ok', 6000);
+      // La importación puede activar el módulo farmacia y cambiar el nombre del negocio: se
+      // recarga la aplicación (menú incluido) y se vuelve a esta pestaña con el resumen.
+      await recargarConfiguracion({ pestana: 'importar', resumen: r });
+      return;
     } catch (e) {
       error.textContent = e.message;
       error.classList.remove('oculto');
@@ -258,6 +265,7 @@ export async function montar(contenedor, parametros = {}) {
     ? [['negocio', 'Negocio y ticket'], ['opciones', 'Opciones'], ['usuarios', 'Usuarios'], ['cajas', 'Cajas'], ['terminal', 'Esta terminal'], ['respaldos', 'Respaldos'], ['importar', 'Importar']]
     : [['terminal', 'Esta terminal']];
   let actual = opciones.some(([k]) => k === parametros.pestana) ? parametros.pestana : opciones[0][0];
+  let resumenImportado = parametros.resumen || null; // se muestra una vez, al volver de importar
   const barra = h('div');
   const zona = h('div');
   vaciar(contenedor, h('h2', 'Configuración'), barra, zona);
@@ -272,7 +280,7 @@ export async function montar(contenedor, parametros = {}) {
       else if (p === 'usuarios') await vistaUsuarios(zona);
       else if (p === 'cajas') await vistaCajas(zona);
       else if (p === 'respaldos') await vistaRespaldos(zona);
-      else if (p === 'importar') vaciar(zona, vistaImportar());
+      else if (p === 'importar') { vaciar(zona, vistaImportar(resumenImportado)); resumenImportado = null; }
       else vaciar(zona, vistaTerminal());
     } catch (e) {
       avisoError(e);

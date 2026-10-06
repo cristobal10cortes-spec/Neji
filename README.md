@@ -103,8 +103,13 @@ Se activa en **Configuración → Opciones → Farmacia**, o al configurar Neji 
 - **Búsqueda por componente**: en `F10` escribe `%paracetamol` para ver todos los
   productos que lo contienen.
 - **Alternativas** (`Ctrl+B`): productos con el mismo principio activo (bioequivalentes
-  u otras marcas), con stock primero y del más barato al más caro.
-  Si un producto no tiene stock, Neji las ofrece solo.
+  u otras marcas), ordenados por parecido:
+  - **misma dosis**: mismos principios activos y misma concentración (500 mg = 0,5 g);
+  - **mismo principio, revisar dosis**: otra concentración, o no está registrada;
+  - **comparte principio**: solo coincide alguno de sus principios activos.
+
+  Dentro de cada grupo van primero los que tienen stock y los más baratos. Si un
+  producto no tiene stock, el aviso recuerda usar `Ctrl+B`.
 - La pantalla **Vademécum** lista los principios activos con cuántos productos hay en
   stock. Desde la ficha se puede vender directamente.
 

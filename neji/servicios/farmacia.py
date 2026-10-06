@@ -1,6 +1,7 @@
 """Principios activos: ficha de vademécum, vínculo con productos y alternativas."""
 
 import re
+from decimal import Decimal, InvalidOperation
 
 from ..db import ahora, filas, sin_acentos
 from ..validar import ErrorNegocio
@@ -63,30 +64,40 @@ def separar_principios(entrada):
     return resultado
 
 
-def obtener_o_crear(con, nombre):
-    """Id del principio activo con ese nombre; lo crea si no existe."""
+def obtener_o_crear(con, nombre, cache=None):
+    """Id del principio activo con ese nombre; lo crea si no existe.
+
+    `cache` (opcional, un dict) evita repetir la búsqueda al importar miles de productos.
+    """
     nombre = normalizar_nombre(nombre)
     if not nombre:
         raise ErrorNegocio("Falta el nombre del principio activo.")
+    clave = sin_acentos(nombre)
+    if cache is not None and clave in cache:
+        return cache[clave]
     # Sin importar tildes: "ÁCIDO FÓLICO" y "ACIDO FOLICO" son el mismo principio activo.
-    row = con.execute("SELECT id FROM principios_activos WHERE sin_acentos(nombre) = sin_acentos(?) "
-                      "ORDER BY id LIMIT 1", (nombre,)).fetchone()
+    row = con.execute("SELECT id FROM principios_activos WHERE sin_acentos(nombre) = ? "
+                      "ORDER BY id LIMIT 1", (clave,)).fetchone()
     if row:
-        return row["id"]
-    fecha = ahora()
-    return con.execute(
-        "INSERT INTO principios_activos (nombre, creado, actualizado) VALUES (?, ?, ?)",
-        (nombre, fecha, fecha)).lastrowid
+        principio_id = row["id"]
+    else:
+        fecha = ahora()
+        principio_id = con.execute(
+            "INSERT INTO principios_activos (nombre, creado, actualizado) VALUES (?, ?, ?)",
+            (nombre, fecha, fecha)).lastrowid
+    if cache is not None:
+        cache[clave] = principio_id
+    return principio_id
 
 
-def guardar_principios_producto(con, producto_id, entrada):
+def guardar_principios_producto(con, producto_id, entrada, cache=None):
     """Reemplaza los principios activos del producto. Debe llamarse dentro de una transacción."""
     principios = separar_principios(entrada)
     con.execute("DELETE FROM producto_principios WHERE producto_id = ?", (producto_id,))
     for orden, (nombre, conc) in enumerate(principios):
         con.execute(
             "INSERT INTO producto_principios (producto_id, principio_id, concentracion, orden) "
-            "VALUES (?, ?, ?, ?)", (producto_id, obtener_o_crear(con, nombre), conc, orden))
+            "VALUES (?, ?, ?, ?)", (producto_id, obtener_o_crear(con, nombre, cache), conc, orden))
     return principios
 
 
@@ -98,27 +109,73 @@ def principios_de_producto(con, producto_id):
            WHERE pp.producto_id = ? ORDER BY pp.orden""", (producto_id,)))
 
 
+_EN_MG = {"mcg": Decimal("0.001"), "mg": Decimal(1), "g": Decimal(1000)}
+
+
+def _numero_limpio(m):
+    try:
+        return format(Decimal(m.group()).normalize(), "f")
+    except InvalidOperation:
+        return m.group()
+
+
+def concentracion_normalizada(texto):
+    """'500 mg', '500mg' y '0,5 g' -> '500mg'; '250 mg/5 ml' -> '250mg/5ml'. None si no hay dato."""
+    s = sin_acentos(texto or "").replace(" ", "").replace(",", ".")
+    if not s:
+        return None
+    s = re.sub(r"(?<![a-z])(ug|µg|μg)", "mcg", s)
+    s = re.sub(r"(?<=\d)grs?(?![a-z])", "g", s)
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)(mcg|mg|g)", s)
+    if m:
+        mg = (Decimal(m[1]) * _EN_MG[m[2]]).normalize()
+        return format(mg, "f") + "mg"
+    return re.sub(r"\d+(?:\.\d+)?", _numero_limpio, s)
+
+
+# Qué tan parecida es una alternativa al producto original (de más a menos).
+COINCIDENCIAS = ("misma_dosis", "mismo_principio", "comparte")
+
+
 def alternativas(con, producto_id):
-    """Otros productos con los mismos principios activos (primero los que tienen exactamente
-    la misma combinación, después los que comparten alguno), con stock primero y más baratos antes."""
-    propios = [r["principio_id"] for r in con.execute(
-        "SELECT principio_id FROM producto_principios WHERE producto_id = ?", (producto_id,))]
+    """Otros productos con los mismos principios activos, de lo más parecido a lo menos:
+
+    - misma_dosis: la misma combinación de principios activos y la misma concentración;
+    - mismo_principio: la misma combinación, pero la dosis es distinta o no está registrada;
+    - comparte: solo comparte alguno de los principios activos.
+
+    Dentro de cada grupo van primero los que tienen stock y los más baratos.
+    """
+    propios = {r["principio_id"]: concentracion_normalizada(r["concentracion"]) for r in con.execute(
+        "SELECT principio_id, concentracion FROM producto_principios WHERE producto_id = ?", (producto_id,))}
     if not propios:
         return []
     marcas = ",".join("?" for _ in propios)
     candidatos = filas(con.execute(
         f"""SELECT p.id, p.codigo, p.descripcion, p.precio_venta, p.existencia, p.usa_inventario,
-                   p.tipo_venta, d.nombre AS departamento, {SQL_PRINCIPIOS_TEXTO} AS principios,
-                   (SELECT COUNT(*) FROM producto_principios x
-                    WHERE x.producto_id = p.id AND x.principio_id IN ({marcas})) AS comunes,
-                   (SELECT COUNT(*) FROM producto_principios x WHERE x.producto_id = p.id) AS total_pa
+                   p.tipo_venta, d.nombre AS departamento, {SQL_PRINCIPIOS_TEXTO} AS principios
             FROM productos p LEFT JOIN departamentos d ON d.id = p.departamento_id
             WHERE p.activo = 1 AND p.id <> ?
               AND p.id IN (SELECT producto_id FROM producto_principios WHERE principio_id IN ({marcas}))""",
-        propios + [producto_id] + propios))
+        [producto_id] + list(propios)))
+    composicion = {}
+    if candidatos:
+        ids = [c["id"] for c in candidatos]
+        for r in con.execute(
+                f"SELECT producto_id, principio_id, concentracion FROM producto_principios "
+                f"WHERE producto_id IN ({','.join('?' for _ in ids)})", ids):
+            composicion.setdefault(r["producto_id"], {})[r["principio_id"]] = \
+                concentracion_normalizada(r["concentracion"])
     for c in candidatos:
-        c["equivalente"] = c["comunes"] == len(propios) == c["total_pa"]
+        suya = composicion.get(c["id"], {})
+        if suya.keys() != propios.keys():
+            c["coincidencia"] = "comparte"
+        elif None not in propios.values() and suya == propios:
+            c["coincidencia"] = "misma_dosis"
+        else:
+            c["coincidencia"] = "mismo_principio"
+        c["equivalente"] = c["coincidencia"] == "misma_dosis"
         c["con_stock"] = (not c["usa_inventario"]) or c["existencia"] > 0
-    candidatos.sort(key=lambda c: (not c["equivalente"], not c["con_stock"], c["precio_venta"],
-                                   c["descripcion"]))
+    candidatos.sort(key=lambda c: (COINCIDENCIAS.index(c["coincidencia"]), not c["con_stock"],
+                                   c["precio_venta"], c["descripcion"]))
     return candidatos[:50]

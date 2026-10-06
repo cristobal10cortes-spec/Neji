@@ -129,6 +129,7 @@ export function cantidadLegible(valor, unidad) {
   if (u === 'mcg' && Math.abs(v) >= 1000) { v /= 1000; u = 'mg'; }
   if (u === 'mg' && Math.abs(v) >= 1000) { v /= 1000; u = 'g'; }
   if (u === 'g' && Math.abs(v) > 0 && Math.abs(v) < 1) { v *= 1000; u = 'mg'; }
+  if (u === 'mg' && Math.abs(v) > 0 && Math.abs(v) < 1) { v *= 1000; u = 'mcg'; }
   return `${numero(Math.round(v * 1000) / 1000)} ${u}`;
 }
 

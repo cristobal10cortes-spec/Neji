@@ -5,7 +5,7 @@ from flask import jsonify, request
 from ..auth import solo_admin
 from ..db import ahora, fila, filas, get_db, sin_acentos, transaccion
 from ..servicios.farmacia import SQL_PRINCIPIOS_TEXTO, normalizar_nombre
-from ..servicios.recetario import UNIDADES_PRINCIPIO, numero
+from ..servicios.recetario import MAX_PRECIO, UNIDADES_PRINCIPIO, numero
 from ..validar import ErrorNegocio, booleano, entero, texto
 from . import bp, datos_json, sin_costos
 
@@ -26,7 +26,8 @@ def _leer_principio(datos):
         raise ErrorNegocio("El nombre del principio activo es demasiado largo.")
     unidad = texto(datos, "unidad_receta", max_largo=5)
     precio = datos.get("precio_receta")
-    precio = None if precio in (None, "") else float(numero(precio, "precio por unidad", minimo=0, decimales=6))
+    precio = None if precio in (None, "") else float(numero(precio, "precio por unidad", minimo=0,
+                                                             maximo=MAX_PRECIO, decimales=6))
     if unidad and unidad not in UNIDADES_PRINCIPIO:
         raise ErrorNegocio("La unidad del recetario debe ser mcg, mg, g, ml o UI.")
     if (precio is None) != (unidad is None):
@@ -51,14 +52,15 @@ def listar_principios():
         params += [f"%{sin_acentos(palabra)}%"] * 2
     if booleano(request.args.get("recetario", "")):
         condiciones.append("pa.precio_receta IS NOT NULL")
-    where = f"WHERE {' AND '.join(condiciones)}" if condiciones else ""
-    limite = min(entero(request.args.get("limite") or 1000, "límite", minimo=1), 5000)
-    principios = filas(get_db().execute(
-        f"""SELECT pa.*, {SQL_CONTEOS} FROM principios_activos pa {where}
-            ORDER BY pa.nombre LIMIT ?""", params + [limite]))
     if booleano(request.args.get("con_stock", "")):
-        principios = [p for p in principios if p["con_stock"]]
-    return jsonify(principios)
+        condiciones.append("""EXISTS (SELECT 1 FROM producto_principios pp JOIN productos p ON p.id = pp.producto_id
+                                      WHERE pp.principio_id = pa.id AND p.activo = 1
+                                        AND (p.usa_inventario = 0 OR p.existencia > 0))""")
+    where = f"WHERE {' AND '.join(condiciones)}" if condiciones else ""
+    limite = min(entero(request.args.get("limite") or 1000, "límite", minimo=1), 10000)
+    return jsonify(filas(get_db().execute(
+        f"""SELECT pa.*, {SQL_CONTEOS} FROM principios_activos pa {where}
+            ORDER BY sin_acentos(pa.nombre) LIMIT ?""", params + [limite])))
 
 
 @bp.get("/principios/<int:principio_id>")
@@ -122,10 +124,13 @@ def editar_principio(principio_id):
 def borrar_principio(principio_id):
     con = get_db()
     with transaccion(con):
-        usados = con.execute("SELECT COUNT(*) FROM producto_principios WHERE principio_id = ?",
-                             (principio_id,)).fetchone()[0]
+        usados = con.execute(
+            "SELECT COUNT(*) FROM producto_principios pp JOIN productos p ON p.id = pp.producto_id "
+            "WHERE pp.principio_id = ? AND p.activo = 1", (principio_id,)).fetchone()[0]
         if usados:
             raise ErrorNegocio(f"Está asignado a {usados} producto(s). Quítalo de esos productos antes "
                                "de eliminarlo.")
+        # Vínculos de productos eliminados (que siguen en el historial de ventas)
+        con.execute("DELETE FROM producto_principios WHERE principio_id = ?", (principio_id,))
         con.execute("DELETE FROM principios_activos WHERE id = ?", (principio_id,))
     return jsonify(ok=True)

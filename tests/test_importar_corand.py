@@ -163,3 +163,34 @@ def test_cli(tmp_path, corand):
                         capture_output=True, text=True, env=entorno)
     assert ok.returncode == 0, ok.stderr
     assert "Productos nuevos: 3" in ok.stdout and "Respaldo creado" in ok.stdout
+
+
+def test_vademecum_combinado_y_duplicados_con_tilde(api, tmp_path, corand):
+    con = sqlite3.connect(corand)
+    con.executemany("INSERT INTO vademecum (principio_activo, efecto_terapeutico) VALUES (?,?)", [
+        ("PARACETAMOL + CAFEINA", "Analgésico"), ("ácido fólico 5 mg", "Antianémico")])
+    con.executemany("INSERT INTO recetario_insumos VALUES (?,?,?)", [
+        ("ÁCIDO FÓLICO", "mg", 2.0), ("ACIDO FOLICO", "mg", 3.0)])
+    con.commit()
+    con.close()
+    r = subir(api, corand).get_json()
+    avisos = " | ".join(r["advertencias"])
+    assert "PARACETAMOL + CAFEINA" in avisos and "combina varios" in avisos
+    assert "ACIDO FOLICO aparecía dos veces" in avisos
+    nombres = [p["nombre"] for p in api.get("/api/principios")]
+    assert "PARACETAMOL + CAFEINA" not in nombres
+    folico = [p for p in api.get("/api/principios?q=folico")]
+    assert len(folico) == 1 and folico[0]["accion_terapeutica"] == "Antianémico"
+    assert folico[0]["precio_receta"] == 3.0
+
+
+@pytest.mark.parametrize("texto,esperado", [
+    ("Cápsulas", ("unidad", "cápsula")), ("Gramos", ("g", "gramo")), ("gr.", ("g", "gramo")),
+    ("Mililitros", ("ml", "ml")), ("cc", ("ml", "ml")), ("CM3", ("ml", "ml")),
+    ("Unidades", ("unidad", "unidad")), ("un.", ("unidad", "unidad")), ("U", ("unidad", "unidad")),
+    ("Papelillos", ("unidad", "papelillo")), ("", ("unidad", "unidad")),
+])
+def test_unidad_forma(texto, esperado):
+    from neji.servicios.importar_corand import unidad_forma
+
+    assert unidad_forma(texto) == esperado

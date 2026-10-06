@@ -4,7 +4,7 @@ import { api } from '../api.js';
 import { esFarmacia, estado, guardarTickets, leerTickets, nuevoTicket, opcion, puede } from '../estado.js';
 import { imprimir, ticketCotizacion, ticketVenta } from '../impresion.js';
 import {
-  aviso, avisoError, confirmar, formulario, h, importe, leerMonto, modal, numero, pesos, pitido,
+  aviso, avisoError, confirmar, formulario, h, importe, leerCantidad, leerMonto, modal, numero, pesos, pitido,
   redondeoEfectivo, vaciar,
 } from '../ui.js';
 import { elegirCliente } from './clientes.js';
@@ -47,8 +47,17 @@ export function itemsParaApi(t) {
 }
 
 function snapshot(p) {
-  const { id, codigo, descripcion, precio_venta, precio_mayoreo, cantidad_mayoreo, tipo_venta, existencia, usa_inventario, departamento, principios } = p;
-  return { id, codigo, descripcion, precio_venta, precio_mayoreo, cantidad_mayoreo, tipo_venta, existencia, usa_inventario, departamento, principios };
+  const { id, codigo, descripcion, precio_venta, precio_mayoreo, cantidad_mayoreo, tipo_venta, existencia, usa_inventario, departamento, principios, principios_detalle } = p;
+  return { id, codigo, descripcion, precio_venta, precio_mayoreo, cantidad_mayoreo, tipo_venta, existencia, usa_inventario, departamento, principios, principios_detalle };
+}
+
+// Qué tan parecida es la alternativa (ver servicios/farmacia.py: alternativas).
+function etiquetaCoincidencia(coincidencia) {
+  if (coincidencia === 'misma_dosis') return h('span.etiqueta.ok', 'misma dosis');
+  if (coincidencia === 'mismo_principio') {
+    return h('span.etiqueta.aviso', { title: 'Mismos principios activos, pero otra concentración o sin concentración registrada' }, 'mismo principio, revisar dosis');
+  }
+  return h('span.etiqueta', 'comparte principio');
 }
 
 export async function montar(contenedor, parametros = {}) {
@@ -159,6 +168,8 @@ export async function montar(contenedor, parametros = {}) {
     lblTotal.textContent = pesos(tot.total);
     lblArticulos.textContent = `${numero(tot.articulos)} artículo${tot.articulos === 1 ? '' : 's'}`;
     lblDescuento.textContent = tot.descuento ? `Subtotal ${pesos(tot.subtotal)} · Descuento -${pesos(tot.descuento)}` : '';
+    // El aviso del vademécum sigue a la línea seleccionada (se oculta en recetas, artículos comunes o ticket vacío).
+    mostrarVademecum(t.items[t.sel]?.producto || null);
     vaciar(lblCliente, t.cliente
       ? [h('span.etiqueta.ok', 'Cliente'), ` ${t.cliente.nombre}`, t.cliente.saldo ? h('span.suave', ` (debe ${pesos(t.cliente.saldo)})`) : null,
         h('button.btn.chico', { type: 'button', onclick: () => { t.cliente = null; guardar(); dibujar(); } }, 'Quitar')]
@@ -214,11 +225,13 @@ export async function montar(contenedor, parametros = {}) {
     const enTicket = t.items.filter((it) => it.producto?.id === p.id).reduce((s, it) => s + it.cantidad, 0);
     if (p.usa_inventario && !opcion('permitir_stock_negativo') && enTicket + cantidad > p.existencia) {
       pitido();
-      aviso(`No hay existencia suficiente de «${p.descripcion}» (hay ${numero(p.existencia)}).`, 'error', 5000);
-      if (esFarmacia() && p.principios) alternativas(p, true);
+      const conAlternativas = esFarmacia() && p.principios;
+      aviso(`No hay existencia suficiente de «${p.descripcion}» (hay ${numero(p.existencia)}).`
+        + (conAlternativas ? ' Ctrl+B para ver alternativas.' : ''), 'error', 6000);
+      // Muestra su ficha para que Ctrl+B ofrezca alternativas de este producto, sin abrir nada solo.
+      if (conAlternativas) mostrarVademecum(p);
       return;
     }
-    mostrarVademecum(producto);
     if (existente >= 0) {
       t.items[existente].cantidad = Math.round((t.items[existente].cantidad + cantidad) * 1000) / 1000;
       t.items[existente].producto = p;
@@ -247,7 +260,7 @@ export async function montar(contenedor, parametros = {}) {
     let cantidad = null;
     const m = texto.match(/^(\d+(?:[.,]\d+)?)\s*\*\s*(.+)$/);
     if (m) {
-      cantidad = parseFloat(m[1].replace(',', '.'));
+      cantidad = leerCantidad(m[1]); // '3*código', '0,755*código' (igual que en los formularios)
       texto = m[2].trim();
     }
     codigo.value = '';
@@ -393,7 +406,8 @@ export async function montar(contenedor, parametros = {}) {
 
   // --- Vademécum y alternativas -----------------------------------------------------
   function mostrarVademecum(producto) {
-    const detalle = esFarmacia() ? (producto.principios_detalle || []) : [];
+    if (producto && producto === productoVademecum) return;
+    const detalle = esFarmacia() ? (producto?.principios_detalle || []) : [];
     productoVademecum = detalle.length ? producto : null;
     avisoVademecum.classList.toggle('oculto', !detalle.length);
     if (!detalle.length) return;
@@ -408,7 +422,7 @@ export async function montar(contenedor, parametros = {}) {
   }
 
   /** Productos con el mismo principio activo (bioequivalentes u otras marcas). */
-  async function alternativas(producto, sinStock = false) {
+  async function alternativas(producto) {
     if (!producto?.id) {
       aviso('Selecciona un producto del ticket.', 'error');
       return;
@@ -420,12 +434,12 @@ export async function montar(contenedor, parametros = {}) {
       avisoError(e);
       return;
     }
-    if (sinStock) lista = lista.filter((a) => a.con_stock);
     if (!lista.length) {
-      if (!sinStock) aviso('No hay otros productos con el mismo principio activo.', '');
+      aviso('No hay otros productos con el mismo principio activo.', '');
       enfocar();
       return;
     }
+    const sinStock = producto.usa_inventario && producto.existencia <= 0;
     let sel = 0;
     const cuerpo = h('div.lista-busqueda');
     const pintar = () => {
@@ -435,7 +449,7 @@ export async function montar(contenedor, parametros = {}) {
       },
       h('td.mono', a.codigo),
       h('td', a.descripcion, h('div.ayuda.pa', a.principios || '')),
-      h('td', a.equivalente ? h('span.etiqueta.ok', 'misma composición') : h('span.etiqueta', 'comparte principio')),
+      h('td', etiquetaCoincidencia(a.coincidencia)),
       h('td.num', pesos(a.precio_venta)),
       h('td.num', { class: a.con_stock ? 'verde' : 'rojo' }, a.usa_inventario ? numero(a.existencia) : '—'))))));
       cuerpo.querySelector('tr.sel')?.scrollIntoView({ block: 'nearest' });
@@ -471,7 +485,8 @@ export async function montar(contenedor, parametros = {}) {
   function alternativasDeLinea() {
     const t = actual();
     const it = t.items[t.sel];
-    alternativas(it?.producto ? it.producto : productoVademecum);
+    // El aviso del vademécum muestra la línea seleccionada o el último producto sin stock.
+    alternativas(productoVademecum || it?.producto);
   }
 
   // --- Recetas magistrales ------------------------------------------------------------

@@ -7,9 +7,10 @@ import json
 from flask import Response, jsonify, request
 
 from ..auth import solo_admin, usuario_actual
+from ..chile import formatear_rut, validar_rut
 from ..db import fila, filas, get_db, sin_acentos, transaccion
 from ..servicios import recetario as svc
-from ..validar import ErrorNegocio, booleano, entero, texto
+from ..validar import ErrorNegocio, booleano, celda_csv, texto
 from . import bp, datos_json, rango_fechas
 
 NOMBRE_UNIDAD = {"unidad": "unidad", "g": "gramo", "ml": "ml"}
@@ -19,15 +20,19 @@ def _leer_forma(datos):
     unidad = datos.get("unidad") or "unidad"
     if unidad not in svc.UNIDADES_FORMA:
         raise ErrorNegocio("La medida debe ser unidad (cápsulas, papelillos...), g o ml.")
+    sugerida = svc.numero(datos.get("cantidad_sugerida") or 30, "cantidad sugerida", positivo=True,
+                          maximo=svc.MAX_CANTIDAD, decimales=3)
+    if unidad == "unidad" and sugerida != sugerida.to_integral_value():
+        raise ErrorNegocio("La cantidad sugerida debe ser entera cuando se mide en unidades.")
     return {
         "nombre": texto(datos, "nombre", requerido=True, nombre="el nombre", max_largo=60),
         "unidad": unidad,
         "nombre_unidad": (texto(datos, "nombre_unidad", max_largo=30) or NOMBRE_UNIDAD[unidad]).lower(),
-        "precio_base": float(svc.numero(datos.get("precio_base") or 0, "valor base", minimo=0, miles=True)),
+        "precio_base": float(svc.numero(datos.get("precio_base") or 0, "valor base", minimo=0,
+                                        maximo=svc.MAX_PRECIO)),
         "precio_unidad": float(svc.numero(datos.get("precio_unidad") or 0, "precio por unidad",
-                                          minimo=0, decimales=6)),
-        "cantidad_sugerida": float(svc.numero(datos.get("cantidad_sugerida") or 30, "cantidad sugerida",
-                                              positivo=True, decimales=3)),
+                                          minimo=0, maximo=svc.MAX_PRECIO, decimales=6)),
+        "cantidad_sugerida": float(sugerida),
         "activa": 1 if booleano(datos.get("activa", True)) else 0,
     }
 
@@ -84,9 +89,13 @@ def crear_receta():
 def _filtro_recetas():
     condiciones, params = [], []
     q = (request.args.get("q") or "").strip()
-    if q.isdigit():
-        condiciones.append("r.folio = ?")
-        params.append(int(q))
+    rut = formatear_rut(q) if validar_rut(q) else None
+    if q.isdecimal() and q.isascii() and len(q) <= 9:
+        condiciones.append("(r.folio = ? OR r.rut_paciente = ?)")
+        params += [int(q), rut]
+    elif rut:
+        condiciones.append("r.rut_paciente = ?")
+        params.append(rut)
     else:
         _, _, inicio, fin = rango_fechas()
         condiciones.append("r.fecha BETWEEN ? AND ?")
@@ -133,8 +142,7 @@ def anular_receta(receta_id):
 def _composicion(componentes):
     partes = []
     for c in componentes:
-        dosis = f"{c['dosis']:g}".replace(".", ",")
-        partes.append(f"{c['nombre']} {dosis} {c['unidad']}")
+        partes.append(f"{c['nombre']} {svc.numero_texto(c['dosis'])} {c['unidad']}")
     return " + ".join(partes)
 
 
@@ -153,10 +161,10 @@ def exportar_recetas():
                 FROM recetas_magistrales r JOIN usuarios u ON u.id = r.usuario_id
                 LEFT JOIN ventas v ON v.id = r.venta_id WHERE {where} ORDER BY r.folio""", params):
         escritor.writerow([
-            r["folio"], r["fecha"], r["paciente"] or "", r["rut_paciente"] or "", r["medico"] or "",
-            r["forma"], f"{r['cantidad']:g}".replace(".", ","), r["nombre_unidad"],
-            _composicion(json.loads(r["componentes"])), r["indicaciones"] or "", r["neto"], r["iva"],
-            r["total"], r["estado"], r["venta_folio"] or "", r["usuario"],
+            r["folio"], r["fecha"], celda_csv(r["paciente"]), r["rut_paciente"] or "", celda_csv(r["medico"]),
+            celda_csv(r["forma"]), svc.numero_texto(r["cantidad"]), celda_csv(r["nombre_unidad"]),
+            celda_csv(_composicion(json.loads(r["componentes"]))), celda_csv(r["indicaciones"]),
+            r["neto"], r["iva"], r["total"], r["estado"], r["venta_folio"] or "", celda_csv(r["usuario"]),
         ])
     return Response("﻿" + salida.getvalue(), mimetype="text/csv; charset=utf-8",
                     headers={"Content-Disposition": "attachment; filename=libro_recetario.csv"})

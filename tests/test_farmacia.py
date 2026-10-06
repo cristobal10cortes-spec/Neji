@@ -144,3 +144,57 @@ def test_busquedas_sin_importar_tildes(api):
     api.post("/api/principios", {"nombre": "acido folico"}, esperado=400)
     api.post("/api/clientes", {"nombre": "José Muñoz"}, esperado=201)
     assert len(api.get("/api/clientes?q=jose munoz")) == 1
+
+
+def test_concentracion_normalizada():
+    from neji.servicios.farmacia import concentracion_normalizada as n
+
+    assert n("500 mg") == n("500mg") == n("0,5 g") == n("0.5 gr") == n("500000 mcg") == "500mg"
+    assert n("5000 ug") == n("5 mg")
+    assert n("250 mg / 5 ml") == n("250mg/5ml")
+    assert n("0,050%") == n("0.05%")
+    assert n("") is None and n(None) is None
+
+
+def test_alternativas_distinguen_la_dosis(api, farmacia):
+    def prod(codigo, principios):
+        return api.post("/api/productos", {"codigo": codigo, "descripcion": f"PRODUCTO {codigo}",
+                                           "precio_venta": 500, "existencia": 3,
+                                           "principios": principios}, esperado=201)
+    prod("7800010", "PARACETAMOL 0,5 g")
+    prod("7800011", "PARACETAMOL 1 g")
+    prod("7800012", "PARACETAMOL")
+    alt = {a["codigo"]: a for a in api.get(f"/api/productos/{farmacia['marca']['id']}/alternativas")}
+    assert alt["7800001"]["coincidencia"] == "misma_dosis" and alt["7800001"]["equivalente"] is True
+    assert alt["7800010"]["coincidencia"] == "misma_dosis"
+    assert alt["7800011"]["coincidencia"] == "mismo_principio" and alt["7800011"]["equivalente"] is False
+    assert alt["7800012"]["coincidencia"] == "mismo_principio"
+    assert alt["7800003"]["coincidencia"] == "comparte"
+    orden = [a["coincidencia"] for a in api.get(f"/api/productos/{farmacia['marca']['id']}/alternativas")]
+    assert orden == sorted(orden, key=["misma_dosis", "mismo_principio", "comparte"].index)
+
+
+def test_producto_reactivado_parte_sin_principios(api, farmacia):
+    api.delete(f"/api/productos/{farmacia['otro']['id']}")
+    api.post("/api/productos", {"codigo": "7800004", "descripcion": "OTRO PRODUCTO", "precio_venta": 100},
+             esperado=201)
+    assert api.get("/api/productos/codigo/7800004")["principios"] is None
+
+
+def test_csv_exportado_no_ejecuta_formulas_y_se_reimporta(api):
+    api.post("/api/productos", {"codigo": "555", "descripcion": "=1+2 CREMA", "precio_venta": 100,
+                                "principios": "-ALFA"}, esperado=201)
+    exportado = api.http.get("/api/productos/exportar").get_data(as_text=True)
+    assert "'=1+2 CREMA" in exportado and "'-ALFA" in exportado
+    r = api.http.post("/api/productos/importar",
+                      data={"archivo": (io.BytesIO(exportado.encode("utf-8")), "p.csv")},
+                      content_type="multipart/form-data").get_json()
+    assert r["actualizados"] == 1 and not r["errores"]
+    assert api.get("/api/productos/codigo/555")["descripcion"] == "=1+2 CREMA"
+
+
+def test_fecha_flexible_con_hora():
+    from neji.validar import fecha_flexible
+
+    assert fecha_flexible("2027-01-31 00:00:00", "vencimiento") == "2027-01-31"
+    assert fecha_flexible("2027-01-31T10:00", "vencimiento") == "2027-01-31"

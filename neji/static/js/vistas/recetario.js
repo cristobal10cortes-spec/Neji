@@ -20,11 +20,22 @@ const MEDIDAS_FORMA = [
 const ESTADOS = { pendiente: ['aviso', 'Pendiente'], vendida: ['ok', 'Vendida'], anulada: ['mal', 'Anulada'] };
 const MAX_FILAS = 30;
 
-/** 'cápsula' -> 'cápsulas', 'unidad' -> 'unidades', 'ml' -> 'ml' (igual que el servidor). */
+const SIN_TILDE = { á: 'a', é: 'e', í: 'i', ó: 'o', ú: 'u' };
+
+/** Igual que el servidor (servicios/recetario.py: _plural_palabra). */
+function pluralPalabra(p) {
+  if (p.length <= 2 || !/[aeiouáéíóú]/.test(p) || /[sx]$/.test(p)) return p; // g, ml, de, ya en plural
+  if (/[lnrdzj]$/.test(p)) {
+    const base = p.endsWith('z') ? `${p.slice(0, -1)}c` : p;
+    return `${base.slice(0, -2)}${base.slice(-2).replace(/[áéíóú]/g, (c) => SIN_TILDE[c])}es`; // jabón -> jabones
+  }
+  return `${p}s`;
+}
+
+/** 'cápsula blanda' -> 'cápsulas blandas', 'unidad' -> 'unidades', 'ml' -> 'ml'. */
 function plural(forma) {
   const n = forma.nombre_unidad;
-  if (forma.unidad === 'ml' || n.endsWith('s')) return n;
-  return /[lnrd]$/.test(n) ? `${n}es` : `${n}s`;
+  return forma.unidad === 'ml' ? n : n.split(' ').map(pluralPalabra).join(' ');
 }
 
 const etiquetaEstado = (e) => h(`span.etiqueta.${ESTADOS[e][0]}`, ESTADOS[e][1]);
@@ -86,7 +97,7 @@ async function vistaCalculadora(zona) {
   let formas = [];
   let principios = [];
   try {
-    [formas, principios] = await Promise.all([api.get('/api/recetario/formas'), api.get('/api/principios?recetario=1')]);
+    [formas, principios] = await Promise.all([api.get('/api/recetario/formas'), api.get('/api/principios?recetario=1&limite=10000')]);
   } catch (e) {
     avisoError(e);
   }
@@ -109,7 +120,9 @@ async function vistaCalculadora(zona) {
   const indicaciones = h('textarea', { placeholder: 'Ej: 1 cápsula cada 8 horas por 10 días' });
   const filas = [];
   let resultado = null;
+  let filasResultado = []; // filas con las que se calculó `resultado`, en el mismo orden
   let consulta = 0;
+  let enviando = false;
 
   const formaActual = () => formas.find((f) => String(f.id) === selForma.value);
 
@@ -168,11 +181,19 @@ async function vistaCalculadora(zona) {
     return filas.filter((f) => f.pa.value && f.dosis.value.trim() && f.dosis.value.trim() !== '0');
   }
 
-  function datosReceta() {
+  /** Primera fila a medio llenar: principio activo sin dosis, o dosis sin principio activo. */
+  function filaIncompleta() {
+    return filas.find((f) => {
+      const dosis = f.dosis.value.trim();
+      return Boolean(f.pa.value) !== Boolean(dosis && dosis !== '0');
+    });
+  }
+
+  function datosReceta(completas = filasCompletas()) {
     return {
       forma_id: Number(selForma.value),
       cantidad: cantidad.value.trim(),
-      componentes: filasCompletas().map((f) => ({ principio_id: Number(f.pa.value), dosis: f.dosis.value.trim(), unidad: f.unidad.value })),
+      componentes: completas.map((f) => ({ principio_id: Number(f.pa.value), dosis: f.dosis.value.trim(), unidad: f.unidad.value })),
     };
   }
 
@@ -183,8 +204,9 @@ async function vistaCalculadora(zona) {
       vaciar(resumen, h('p.suave', 'Completa la cantidad y los principios activos.'));
       return;
     }
-    filasCompletas().forEach((fila, i) => {
+    filasResultado.forEach((fila, i) => {
       const c = resultado.componentes[i];
+      if (!filas.includes(fila)) return;
       if (!c) return;
       fila.subtotal.textContent = pesos(c.subtotal);
       fila.pesar.textContent = cantidadLegible(c.cantidad_total, c.unidad_precio);
@@ -208,10 +230,14 @@ async function vistaCalculadora(zona) {
       pintarResultado();
       return;
     }
+    // Las filas se fijan antes de esperar al servidor: si se escribe mientras tanto, cada
+    // subtotal igual queda en la fila con la que se calculó.
+    const completas = filasCompletas();
     try {
-      const r = await api.post('/api/recetario/calcular', datosReceta());
+      const r = await api.post('/api/recetario/calcular', datosReceta(completas));
       if (n !== consulta) return;
       resultado = r;
+      filasResultado = completas;
     } catch (e) {
       if (n !== consulta) return;
       resultado = null;
@@ -238,6 +264,12 @@ async function vistaCalculadora(zona) {
   }
 
   async function guardar() {
+    const incompleta = filaIncompleta();
+    if (incompleta) {
+      aviso(incompleta.pa.value ? 'Falta la dosis de un principio activo.' : 'Falta elegir el principio activo de una dosis.', 'error', 5000);
+      (incompleta.pa.value ? incompleta.dosis : incompleta.pa).focus();
+      return null;
+    }
     await calcularAhora();
     if (!resultado) {
       aviso(errorCalc.textContent || 'Completa la receta antes de guardarla.', 'error');
@@ -245,7 +277,7 @@ async function vistaCalculadora(zona) {
     }
     try {
       return await api.post('/api/recetario/recetas', {
-        ...datosReceta(), paciente: paciente.value, rut_paciente: rut.value, medico: medico.value, indicaciones: indicaciones.value,
+        ...datosReceta(filasResultado), paciente: paciente.value, rut_paciente: rut.value, medico: medico.value, indicaciones: indicaciones.value,
       });
     } catch (e) {
       avisoError(e);
@@ -253,21 +285,39 @@ async function vistaCalculadora(zona) {
     }
   }
 
-  async function enviarAVenta() {
+  /** Evita guardar la misma receta dos veces por un doble clic o un Enter repetido. */
+  async function sinRepetir(accion) {
+    if (enviando) return;
+    enviando = true;
+    botonesGuardar.forEach((b) => { b.disabled = true; });
+    try {
+      await accion();
+    } finally {
+      enviando = false;
+      botonesGuardar.forEach((b) => { b.disabled = false; });
+    }
+  }
+
+  const enviarAVenta = () => sinRepetir(async () => {
     const r = await guardar();
     if (!r) return;
     aviso(`Receta N° ${r.folio} enviada a la venta.`, 'ok');
     limpiar();
     ir('ventas', { recetaId: r.id });
-  }
+  });
 
-  async function guardarEImprimir() {
+  const guardarEImprimir = () => sinRepetir(async () => {
     const r = await guardar();
     if (!r) return;
     imprimir(ticketReceta(r));
     aviso(`Receta N° ${r.folio} guardada como pendiente. La encuentras en el libro de recetas.`, 'ok', 6000);
     limpiar();
-  }
+  });
+
+  const botonesGuardar = [
+    h('button.btn', { type: 'button', onclick: guardarEImprimir }, 'Guardar e imprimir presupuesto'),
+    h('button.btn.primario.grande', { type: 'button', onclick: enviarAVenta }, h('kbd', 'Enter'), 'Enviar a la venta'),
+  ];
 
   selForma.addEventListener('change', () => cambiarForma(true));
   cantidad.addEventListener('input', recalcular);
@@ -297,15 +347,16 @@ async function vistaCalculadora(zona) {
         h('label.campo.ancho', 'Indicaciones / posología', indicaciones))),
     h('div.fila.fin', { style: { marginTop: '1rem' } },
       h('button.btn', { type: 'button', onclick: limpiar }, 'Limpiar'),
-      h('button.btn', { type: 'button', onclick: guardarEImprimir }, 'Guardar e imprimir presupuesto'),
-      h('button.btn.primario.grande', { type: 'button', onclick: enviarAVenta }, h('kbd', 'Enter'), 'Enviar a la venta')));
+      ...botonesGuardar));
 
   limpiar();
   selForma.focus();
 
   return {
     alTeclear(e) {
-      if (e.key === 'Enter' && !e.target.matches('textarea, button')) {
+      // Solo desde un campo de texto (no desde una lista, un botón o las indicaciones), y sin
+      // repetir si se mantiene apretado Enter.
+      if (e.key === 'Enter' && !e.repeat && e.target.matches('input')) {
         e.preventDefault();
         enviarAVenta();
       }
@@ -361,7 +412,7 @@ function formForma(f = null) {
       { nombre: 'nombre', etiqueta: 'Nombre', valor: f?.nombre, requerido: true, autofocus: true, placeholder: 'Ej: Cápsulas, Cremas, Papelillos' },
       { nombre: 'unidad', etiqueta: 'Se mide en', tipo: 'select', valor: f?.unidad || 'unidad', opciones: MEDIDAS_FORMA },
       { nombre: 'nombre_unidad', etiqueta: 'Nombre de la unidad', valor: f?.nombre_unidad, placeholder: 'cápsula, gramo, ml' },
-      { nombre: 'precio_base', etiqueta: 'Valor base de la fórmula (neto)', tipo: 'monto', valor: f?.precio_base ?? 0 },
+      { nombre: 'precio_base', etiqueta: 'Valor base de la fórmula (neto)', valor: decimalTexto(f?.precio_base ?? 0), atributos: { inputmode: 'decimal' } },
       { nombre: 'precio_unidad', etiqueta: 'Precio por cada unidad (neto)', valor: decimalTexto(f?.precio_unidad ?? 0), atributos: { inputmode: 'decimal' }, ayuda: 'Ej: 40 por cápsula, 2,5 por gramo' },
       { nombre: 'cantidad_sugerida', etiqueta: 'Cantidad sugerida', valor: decimalTexto(f?.cantidad_sugerida ?? 30), atributos: { inputmode: 'decimal' } },
       { nombre: 'activa', etiqueta: 'Activa', tipo: 'check', valor: f ? Boolean(f.activa) : true },
@@ -371,7 +422,7 @@ function formForma(f = null) {
 }
 
 async function vistaConfiguracion(zona) {
-  const [formas, principios] = await Promise.all([api.get('/api/recetario/formas?todas=1'), api.get('/api/principios')]);
+  const [formas, principios] = await Promise.all([api.get('/api/recetario/formas?todas=1'), api.get('/api/principios?limite=10000')]);
   const redondeo = h('select', { style: { width: 'auto' } },
     [['1', 'Al peso ($1)'], ['10', 'A $10'], ['50', 'A $50'], ['100', 'A $100']].map(([v, t]) =>
       h('option', { value: v, selected: estado.config.receta_redondeo === v }, t)));

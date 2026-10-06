@@ -68,8 +68,9 @@ export function leerMonto(valor) {
 /** '0,755' / '1.5' -> número con hasta 3 decimales */
 export function leerCantidad(valor) {
   if (typeof valor === 'number') return valor;
-  let s = String(valor ?? '').trim().replace(/\s/g, '');
-  if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+  let s = String(valor ?? '').trim().replace(/[\s$]/g, '');
+  // Igual que el servidor (validar.texto_a_numero): '5.000' son cinco mil, '0,5' es medio, '1.5' es uno y medio.
+  if (s.includes(',') || /^[1-9]\d{0,2}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '').replace(',', '.');
   const n = parseFloat(s);
   return Number.isFinite(n) ? Math.round(n * 1000) / 1000 : NaN;
 }
