@@ -1,0 +1,220 @@
+-- Esquema de Neji POS (SQLite).
+-- Montos en pesos chilenos como INTEGER (sin decimales).
+-- Cantidades como REAL para permitir venta a granel (kg, m, l).
+-- Fechas como TEXT 'YYYY-MM-DD HH:MM:SS' en hora local.
+
+CREATE TABLE IF NOT EXISTS config (
+    clave TEXT PRIMARY KEY,
+    valor TEXT
+);
+
+CREATE TABLE IF NOT EXISTS usuarios (
+    id            INTEGER PRIMARY KEY,
+    usuario       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    nombre        TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    rol           TEXT NOT NULL CHECK (rol IN ('admin', 'cajero')),
+    activo        INTEGER NOT NULL DEFAULT 1,
+    creado        TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cajas (
+    id     INTEGER PRIMARY KEY,
+    nombre TEXT NOT NULL UNIQUE,
+    activa INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS departamentos (
+    id     INTEGER PRIMARY KEY,
+    nombre TEXT NOT NULL UNIQUE COLLATE NOCASE
+);
+
+CREATE TABLE IF NOT EXISTS productos (
+    id               INTEGER PRIMARY KEY,
+    codigo           TEXT NOT NULL UNIQUE,
+    descripcion      TEXT NOT NULL,
+    departamento_id  INTEGER REFERENCES departamentos(id) ON DELETE SET NULL,
+    tipo_venta       TEXT NOT NULL DEFAULT 'unidad' CHECK (tipo_venta IN ('unidad', 'granel')),
+    precio_costo     INTEGER NOT NULL DEFAULT 0,
+    precio_venta     INTEGER NOT NULL,
+    precio_mayoreo   INTEGER,          -- NULL = sin precio de mayoreo
+    cantidad_mayoreo REAL,             -- desde esta cantidad se aplica mayoreo solo; NULL = solo con F11
+    usa_inventario   INTEGER NOT NULL DEFAULT 1,
+    existencia       REAL NOT NULL DEFAULT 0,
+    minimo           REAL NOT NULL DEFAULT 0,
+    maximo           REAL,
+    exento           INTEGER NOT NULL DEFAULT 0,  -- exento de IVA
+    activo           INTEGER NOT NULL DEFAULT 1,
+    creado           TEXT NOT NULL,
+    actualizado      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_productos_descripcion ON productos(descripcion);
+CREATE INDEX IF NOT EXISTS idx_productos_departamento ON productos(departamento_id);
+
+-- Kardex: cada cambio de existencia queda registrado.
+CREATE TABLE IF NOT EXISTS movimientos_inventario (
+    id                  INTEGER PRIMARY KEY,
+    producto_id         INTEGER NOT NULL REFERENCES productos(id) ON DELETE CASCADE,
+    fecha               TEXT NOT NULL,
+    tipo                TEXT NOT NULL CHECK (tipo IN ('inicial', 'venta', 'devolucion', 'entrada', 'salida', 'ajuste')),
+    cantidad            REAL NOT NULL,   -- positiva entra, negativa sale
+    existencia_anterior REAL NOT NULL,
+    existencia_nueva    REAL NOT NULL,
+    costo_unitario      INTEGER,
+    referencia          TEXT,
+    usuario_id          INTEGER REFERENCES usuarios(id),
+    nota                TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mov_inv_producto ON movimientos_inventario(producto_id, fecha);
+CREATE INDEX IF NOT EXISTS idx_mov_inv_fecha ON movimientos_inventario(fecha);
+
+CREATE TABLE IF NOT EXISTS clientes (
+    id             INTEGER PRIMARY KEY,
+    rut            TEXT UNIQUE,
+    nombre         TEXT NOT NULL,
+    telefono       TEXT,
+    email          TEXT,
+    direccion      TEXT,
+    giro           TEXT,
+    limite_credito INTEGER,            -- NULL = sin límite
+    saldo          INTEGER NOT NULL DEFAULT 0,  -- lo que el cliente debe
+    notas          TEXT,
+    activo         INTEGER NOT NULL DEFAULT 1,
+    creado         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_clientes_nombre ON clientes(nombre);
+
+CREATE TABLE IF NOT EXISTS turnos (
+    id                INTEGER PRIMARY KEY,
+    caja_id           INTEGER NOT NULL REFERENCES cajas(id),
+    usuario_id        INTEGER NOT NULL REFERENCES usuarios(id),
+    abierto           TEXT NOT NULL,
+    cerrado           TEXT,
+    fondo_inicial     INTEGER NOT NULL DEFAULT 0,
+    efectivo_esperado INTEGER,
+    efectivo_contado  INTEGER,
+    diferencia        INTEGER,
+    estado            TEXT NOT NULL DEFAULT 'abierto' CHECK (estado IN ('abierto', 'cerrado')),
+    usuario_cierre_id INTEGER REFERENCES usuarios(id),
+    nota              TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_turno_abierto_por_caja ON turnos(caja_id) WHERE estado = 'abierto';
+CREATE INDEX IF NOT EXISTS idx_turnos_abierto ON turnos(abierto);
+
+CREATE TABLE IF NOT EXISTS movimientos_caja (
+    id         INTEGER PRIMARY KEY,
+    turno_id   INTEGER NOT NULL REFERENCES turnos(id),
+    fecha      TEXT NOT NULL,
+    tipo       TEXT NOT NULL CHECK (tipo IN ('entrada', 'salida')),
+    monto      INTEGER NOT NULL CHECK (monto > 0),
+    concepto   TEXT NOT NULL,
+    usuario_id INTEGER REFERENCES usuarios(id)
+);
+CREATE INDEX IF NOT EXISTS idx_mov_caja_turno ON movimientos_caja(turno_id);
+
+CREATE TABLE IF NOT EXISTS ventas (
+    id              INTEGER PRIMARY KEY,
+    folio           INTEGER NOT NULL UNIQUE,
+    fecha           TEXT NOT NULL,
+    caja_id         INTEGER NOT NULL REFERENCES cajas(id),
+    turno_id        INTEGER NOT NULL REFERENCES turnos(id),
+    usuario_id      INTEGER NOT NULL REFERENCES usuarios(id),
+    cliente_id      INTEGER REFERENCES clientes(id),
+    subtotal        INTEGER NOT NULL,   -- suma de líneas
+    descuento       INTEGER NOT NULL DEFAULT 0,
+    total           INTEGER NOT NULL,   -- subtotal - descuento (monto del documento)
+    exento          INTEGER NOT NULL DEFAULT 0,
+    neto            INTEGER NOT NULL DEFAULT 0,
+    iva             INTEGER NOT NULL DEFAULT 0,
+    redondeo        INTEGER NOT NULL DEFAULT 0,  -- ajuste Ley 20.956 sobre la parte en efectivo
+    efectivo_recibido INTEGER NOT NULL DEFAULT 0,
+    cambio          INTEGER NOT NULL DEFAULT 0,
+    devuelto        INTEGER NOT NULL DEFAULT 0,  -- monto devuelto acumulado
+    estado          TEXT NOT NULL DEFAULT 'completada' CHECK (estado IN ('completada', 'devuelta_parcial', 'devuelta')),
+    cotizacion_id   INTEGER REFERENCES cotizaciones(id),
+    nota            TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ventas_fecha ON ventas(fecha);
+CREATE INDEX IF NOT EXISTS idx_ventas_turno ON ventas(turno_id);
+CREATE INDEX IF NOT EXISTS idx_ventas_cliente ON ventas(cliente_id);
+
+CREATE TABLE IF NOT EXISTS venta_items (
+    id                INTEGER PRIMARY KEY,
+    venta_id          INTEGER NOT NULL REFERENCES ventas(id) ON DELETE CASCADE,
+    producto_id       INTEGER REFERENCES productos(id) ON DELETE SET NULL,  -- NULL = artículo común
+    codigo            TEXT,
+    descripcion       TEXT NOT NULL,
+    departamento_id   INTEGER,
+    cantidad          REAL NOT NULL,
+    precio_unitario   INTEGER NOT NULL,
+    precio_costo      INTEGER NOT NULL DEFAULT 0,
+    tipo_precio       TEXT NOT NULL CHECK (tipo_precio IN ('normal', 'mayoreo', 'manual', 'comun')),
+    importe           INTEGER NOT NULL,
+    exento            INTEGER NOT NULL DEFAULT 0,
+    cantidad_devuelta REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_venta_items_venta ON venta_items(venta_id);
+CREATE INDEX IF NOT EXISTS idx_venta_items_producto ON venta_items(producto_id);
+
+CREATE TABLE IF NOT EXISTS venta_pagos (
+    id       INTEGER PRIMARY KEY,
+    venta_id INTEGER NOT NULL REFERENCES ventas(id) ON DELETE CASCADE,
+    metodo   TEXT NOT NULL CHECK (metodo IN ('efectivo', 'debito', 'credito', 'transferencia', 'fiado')),
+    monto    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_venta_pagos_venta ON venta_pagos(venta_id);
+
+CREATE TABLE IF NOT EXISTS devoluciones (
+    id             INTEGER PRIMARY KEY,
+    venta_id       INTEGER NOT NULL REFERENCES ventas(id),
+    fecha          TEXT NOT NULL,
+    turno_id       INTEGER NOT NULL REFERENCES turnos(id),
+    usuario_id     INTEGER NOT NULL REFERENCES usuarios(id),
+    monto          INTEGER NOT NULL,
+    monto_efectivo INTEGER NOT NULL DEFAULT 0,  -- sale de la caja
+    monto_fiado    INTEGER NOT NULL DEFAULT 0,  -- se descuenta de la deuda del cliente
+    monto_otro     INTEGER NOT NULL DEFAULT 0,  -- reversa en tarjeta / transferencia, no afecta caja
+    motivo         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_devoluciones_turno ON devoluciones(turno_id);
+CREATE INDEX IF NOT EXISTS idx_devoluciones_venta ON devoluciones(venta_id);
+
+CREATE TABLE IF NOT EXISTS devolucion_items (
+    id            INTEGER PRIMARY KEY,
+    devolucion_id INTEGER NOT NULL REFERENCES devoluciones(id) ON DELETE CASCADE,
+    venta_item_id INTEGER NOT NULL REFERENCES venta_items(id),
+    cantidad      REAL NOT NULL,
+    monto         INTEGER NOT NULL
+);
+
+-- Cuenta corriente del cliente (fiado).
+CREATE TABLE IF NOT EXISTS movimientos_cliente (
+    id          INTEGER PRIMARY KEY,
+    cliente_id  INTEGER NOT NULL REFERENCES clientes(id),
+    fecha       TEXT NOT NULL,
+    tipo        TEXT NOT NULL CHECK (tipo IN ('cargo', 'abono', 'devolucion')),
+    monto       INTEGER NOT NULL CHECK (monto > 0),
+    saldo_nuevo INTEGER NOT NULL,
+    metodo      TEXT,
+    venta_id    INTEGER REFERENCES ventas(id),
+    turno_id    INTEGER REFERENCES turnos(id),
+    usuario_id  INTEGER REFERENCES usuarios(id),
+    nota        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mov_cliente ON movimientos_cliente(cliente_id, fecha);
+CREATE INDEX IF NOT EXISTS idx_mov_cliente_turno ON movimientos_cliente(turno_id);
+
+CREATE TABLE IF NOT EXISTS cotizaciones (
+    id             INTEGER PRIMARY KEY,
+    folio          INTEGER NOT NULL UNIQUE,
+    fecha          TEXT NOT NULL,
+    usuario_id     INTEGER NOT NULL REFERENCES usuarios(id),
+    cliente_id     INTEGER REFERENCES clientes(id),
+    cliente_nombre TEXT,
+    items          TEXT NOT NULL,   -- JSON con las líneas calculadas
+    subtotal       INTEGER NOT NULL,
+    descuento      INTEGER NOT NULL DEFAULT 0,
+    total          INTEGER NOT NULL,
+    estado         TEXT NOT NULL DEFAULT 'vigente' CHECK (estado IN ('vigente', 'vendida', 'cancelada')),
+    nota           TEXT
+);

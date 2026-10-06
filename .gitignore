@@ -1,0 +1,13 @@
+# Datos del negocio (base de datos, respaldos, clave de sesión): nunca al repositorio
+datos/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Sistema
+.DS_Store
+Thumbs.db
