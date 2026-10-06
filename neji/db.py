@@ -28,7 +28,18 @@ CONFIG_POR_DEFECTO = {
     "cajero_puede_cambiar_precio": "0",
     "respaldos_mantener": "10",
     "ultimo_respaldo": "",
+    "modulo_farmacia": "0",
+    "receta_redondeo": "1",
+    "recetario_semilla": "0",
 }
+
+# Formas farmacéuticas iniciales del recetario (mismos valores que CORAND.ERP).
+FORMAS_INICIALES = [
+    # nombre, unidad, nombre_unidad, precio_base, precio_unidad, cantidad_sugerida
+    ("Cápsulas", "unidad", "cápsula", 4000, 40, 30),
+    ("Cremas", "g", "gramo", 4500, 2.5, 50),
+    ("Lociones", "ml", "ml", 4000, 1, 100),
+]
 
 
 def ahora():
@@ -73,11 +84,43 @@ def inicializar(ruta):
     con = conectar(ruta)
     try:
         con.executescript(ESQUEMA.read_text(encoding="utf-8"))
+        migrar(con)
         for clave, valor in CONFIG_POR_DEFECTO.items():
             con.execute("INSERT OR IGNORE INTO config (clave, valor) VALUES (?, ?)", (clave, valor))
         con.execute("INSERT OR IGNORE INTO cajas (id, nombre) VALUES (1, 'Caja 1')")
+        sembrar_recetario(con)
     finally:
         con.close()
+
+
+def _columnas(con, tabla):
+    return {r["name"] for r in con.execute(f"PRAGMA table_info({tabla})")}
+
+
+def migrar(con):
+    """Agrega a bases creadas con versiones anteriores las columnas nuevas."""
+    if "receta_id" not in _columnas(con, "venta_items"):
+        con.execute("ALTER TABLE venta_items ADD COLUMN receta_id INTEGER "
+                    "REFERENCES recetas_magistrales(id)")
+    productos = _columnas(con, "productos")
+    for columna in ("proveedor", "vencimiento"):
+        if columna not in productos:
+            con.execute(f"ALTER TABLE productos ADD COLUMN {columna} TEXT")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_venta_items_receta ON venta_items(receta_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_productos_vencimiento ON productos(vencimiento)")
+
+
+def sembrar_recetario(con):
+    """Carga las formas farmacéuticas iniciales una sola vez (después se pueden editar o borrar)."""
+    with transaccion(con):
+        if con.execute("SELECT valor FROM config WHERE clave = 'recetario_semilla'").fetchone()[0] == "1":
+            return
+        for forma in FORMAS_INICIALES:
+            con.execute(
+                "INSERT OR IGNORE INTO formas_magistrales "
+                "(nombre, unidad, nombre_unidad, precio_base, precio_unidad, cantidad_sugerida) "
+                "VALUES (?, ?, ?, ?, ?, ?)", forma)
+        con.execute("UPDATE config SET valor = '1' WHERE clave = 'recetario_semilla'")
 
 
 def init_app(app):

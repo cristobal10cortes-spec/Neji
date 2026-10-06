@@ -25,6 +25,7 @@ export function fijarCaja(id) {
 export const esAdmin = () => estado.usuario?.rol === 'admin';
 export const opcion = (clave) => estado.config[clave] === '1';
 export const puede = (permiso) => esAdmin() || opcion(permiso);
+export const esFarmacia = () => opcion('modulo_farmacia');
 
 export function nombreCaja() {
   return estado.cajas.find((c) => c.id === estado.cajaId)?.nombre || `Caja ${estado.cajaId}`;

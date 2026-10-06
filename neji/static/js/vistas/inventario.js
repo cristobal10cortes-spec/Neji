@@ -56,8 +56,8 @@ export async function montar(contenedor) {
 
   function cambiar(p) {
     pestana = p;
-    vaciar(barra, pestanas([['ajustes', 'Entradas y ajustes'], ['sugeridas', 'Compras sugeridas'], ['movimientos', 'Movimientos (kardex)']], pestana, cambiar));
-    ({ ajustes: vistaAjustes, sugeridas: vistaSugeridas, movimientos: vistaMovimientos })[pestana]();
+    vaciar(barra, pestanas([['ajustes', 'Entradas y ajustes'], ['sugeridas', 'Compras sugeridas'], ['vencimientos', 'Vencimientos'], ['movimientos', 'Movimientos (kardex)']], pestana, cambiar));
+    ({ ajustes: vistaAjustes, sugeridas: vistaSugeridas, vencimientos: vistaVencimientos, movimientos: vistaMovimientos })[pestana]();
   }
 
   function vistaAjustes() {
@@ -127,6 +127,37 @@ export async function montar(contenedor) {
         { titulo: 'Comprar', valor: (p) => h('b', numero(p.sugerido)), clase: 'num' },
         { titulo: 'Costo est.', valor: (p) => pesos(p.costo_estimado), clase: 'num' },
       ], productos, { vacio: '¡Todo en orden! No hay productos bajo el mínimo.', pie: productos.length ? [{ valor: 'Total estimado', colspan: 7 }, { valor: pesos(total), clase: 'num' }] : null })));
+  }
+
+  async function vistaVencimientos() {
+    const dias = h('select', { style: { width: 'auto' } },
+      [['30', 'Próximos 30 días'], ['90', 'Próximos 90 días'], ['180', 'Próximos 6 meses'], ['3650', 'Todos']]
+        .map(([v, t]) => h('option', { value: v, selected: v === '90' }, t)));
+    const conStock = h('input', { type: 'checkbox', checked: true });
+    const lista = h('div');
+    const cargar = async () => {
+      let productos = [];
+      try {
+        productos = await api.get(`/api/inventario/vencimientos${qs({ dias: dias.value, con_stock: conStock.checked ? 1 : 0 })}`);
+      } catch (e) {
+        avisoError(e);
+      }
+      vaciar(lista, tabla([
+        { titulo: 'Vence', valor: (p) => fecha(p.vencimiento, false) },
+        { titulo: 'Días', valor: (p) => h('b', { class: p.dias_restantes < 30 ? 'rojo' : p.dias_restantes < 90 ? '' : 'verde' }, p.dias_restantes < 0 ? `vencido hace ${-p.dias_restantes}` : String(p.dias_restantes)), clase: 'num' },
+        { titulo: 'Código', valor: (p) => h('span.mono', p.codigo) },
+        { titulo: 'Producto', valor: (p) => p.descripcion },
+        { titulo: 'Proveedor', valor: (p) => p.proveedor || '' },
+        { titulo: 'Existencia', valor: (p) => (p.usa_inventario ? numero(p.existencia) : '—'), clase: 'num' },
+      ], productos, { vacio: 'No hay productos por vencer en este período.' }));
+    };
+    dias.addEventListener('change', cargar);
+    conStock.addEventListener('change', cargar);
+    vaciar(zona, h('div.panel',
+      h('div.fila', dias, h('label.check', conStock, 'Solo con existencia'),
+        h('span.ayuda', 'La fecha de vencimiento se ingresa en la ficha de cada producto.')),
+      h('div', { style: { height: '.75rem' } }), lista));
+    cargar();
   }
 
   async function vistaMovimientos() {

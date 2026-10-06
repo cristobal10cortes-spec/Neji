@@ -57,4 +57,5 @@ def rango_fechas():
     return desde, hasta, f"{desde} 00:00:00", f"{hasta} 23:59:59"
 
 
-from . import caja, clientes, inventario, productos, reportes, sistema, ventas  # noqa: E402,F401
+from . import (caja, clientes, farmacia, importar, inventario, productos, recetario,  # noqa: E402,F401
+               reportes, sistema, ventas)

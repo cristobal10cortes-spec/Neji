@@ -122,6 +122,48 @@ export function ticketCotizacion(q) {
     h('div', { style: { height: '8mm' } }));
 }
 
+/** Cantidad de principio activo en la unidad más legible: 15000 mg -> "15 g". */
+export function cantidadLegible(valor, unidad) {
+  let v = valor;
+  let u = unidad;
+  if (u === 'mcg' && Math.abs(v) >= 1000) { v /= 1000; u = 'mg'; }
+  if (u === 'mg' && Math.abs(v) >= 1000) { v /= 1000; u = 'g'; }
+  if (u === 'g' && Math.abs(v) > 0 && Math.abs(v) < 1) { v *= 1000; u = 'mg'; }
+  return `${numero(Math.round(v * 1000) / 1000)} ${u}`;
+}
+
+const ESTADO_RECETA = { pendiente: 'PENDIENTE DE PAGO', vendida: 'VENDIDA', anulada: 'ANULADA' };
+
+/** Orden de preparación / presupuesto de una receta magistral. */
+export function ticketReceta(r) {
+  const c = estado.config;
+  return h(claseTicket(),
+    encabezadoNegocio(),
+    h('hr'),
+    h('div.c.g', `RECETA MAGISTRAL N° ${r.folio}`),
+    ln(fecha(r.fecha), ESTADO_RECETA[r.estado] || ''),
+    r.paciente ? h('div', `Paciente: ${r.paciente}${r.rut_paciente ? ' · ' + r.rut_paciente : ''}`) : null,
+    r.medico ? h('div', `Médico: ${r.medico}`) : null,
+    h('hr'),
+    h('div.g', `${r.forma} × ${numero(r.cantidad)} ${r.nombre_unidad}${r.cantidad === 1 || r.unidad === 'ml' ? '' : '(s)'}`),
+    r.componentes.length ? [
+      h('div', 'Composición por unidad:'),
+      r.componentes.map((x) => ln(`  ${x.nombre}`, `${numero(x.dosis)} ${x.unidad}`)),
+      h('hr'),
+      h('div', 'Total a pesar:'),
+      r.componentes.map((x) => ln(`  ${x.nombre}`, cantidadLegible(x.cantidad_total, x.unidad_precio))),
+    ] : h('div', 'Sin principios activos (solo base).'),
+    r.indicaciones ? [h('hr'), h('div', `Indicaciones: ${r.indicaciones}`)] : null,
+    h('hr'),
+    ln('Neto', pesos(r.neto)),
+    ln(`IVA (${c.iva_porcentaje || 19}%)`, pesos(r.iva)),
+    ln('TOTAL', pesos(r.total), 'xl'),
+    r.venta_folio ? h('div', `Vendida en folio ${r.venta_folio}`) : null,
+    h('hr'),
+    h('div', `Preparó: ${r.usuario || ''}`),
+    h('div', { style: { height: '8mm' } }));
+}
+
 export function hojaComprasSugeridas(productos) {
   return h('div.hoja',
     h('h2', `Compras sugeridas — ${estado.config.negocio_nombre}`),

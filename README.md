@@ -1,7 +1,7 @@
 # Neji POS
 
 Punto de venta para negocios en Chile: almacenes, minimarkets, botillerías,
-ferreterías y tiendas en general.
+ferreterías, tiendas en general y **farmacias con recetario magistral**.
 
 Está inspirado en lo que los usuarios más valoran de **eleventa**, **SICAR**,
 **Bsale** y **Loyverse**. Por ejemplo:
@@ -28,7 +28,8 @@ en una base SQLite con respaldo automático diario.
 3. Haz doble clic en **`iniciar.bat`**.
    - La primera vez instala lo necesario; demora un minuto.
    - Después se abre el navegador en <http://localhost:5000>.
-4. Configura el nombre del negocio y el usuario administrador. ¡Listo para vender!
+4. Configura el nombre del negocio y el usuario administrador (si es farmacia, marca
+   «Es una farmacia»). ¡Listo para vender!
 
 Para cerrarlo, cierra la ventana negra.
 En Linux o macOS se usa `./iniciar.sh`.
@@ -86,6 +87,80 @@ Cada caja tiene su propio turno y su propio corte.
 - Ticket con desglose de **neto e IVA**, para impresoras de 58 u 80 mm.
 - **Cotizaciones** que no descuentan inventario y después se cargan en un ticket
   para venderlas.
+
+### Farmacia: vademécum y recetario magistral
+
+Se activa en **Configuración → Opciones → Farmacia**, o al configurar Neji por primera vez.
+
+**Vademécum**
+
+- Cada producto tiene sus **principios activos** con concentración, por ejemplo
+  `PARACETAMOL 500 mg + CAFEINA 65 mg`.
+- Cada principio activo tiene su ficha: acción terapéutica, efectos adversos,
+  contraindicaciones y notas.
+- Al vender, el **aviso del vademécum** muestra para qué sirve el producto y sus
+  efectos adversos, como en CORAND.ERP.
+- **Búsqueda por componente**: en `F10` escribe `%paracetamol` para ver todos los
+  productos que lo contienen.
+- **Alternativas** (`Ctrl+B`): productos con el mismo principio activo (bioequivalentes
+  u otras marcas), con stock primero y del más barato al más caro.
+  Si un producto no tiene stock, Neji las ofrece solo.
+- La pantalla **Vademécum** lista los principios activos con cuántos productos hay en
+  stock. Desde la ficha se puede vender directamente.
+
+**Recetario magistral**
+
+- **Calculadora** para cápsulas, cremas, lociones o cualquier forma que crees.
+  Usa la misma fórmula que CORAND.ERP:
+  - Cada principio activo suma: precio × dosis por unidad × cantidad.
+  - A eso se agrega el precio por cápsula/gramo/ml × cantidad, más el valor base.
+  - Al final se suma el IVA.
+- **Unidades**: convierte entre mg, mcg y g (500 mg = 0,5 g). En cremas y lociones
+  acepta **porcentajes** (2 % = 0,02 g por gramo).
+- Calcula **cuánto pesar** de cada principio activo, por ejemplo: 15 g de paracetamol
+  para 30 cápsulas de 500 mg.
+- **Libro de recetas**:
+  - Cada receta queda guardada con folio, paciente, RUT, médico, indicaciones,
+    composición y precio.
+  - Estado: pendiente, vendida o anulada.
+  - Se exporta a CSV.
+- **Enviar a la venta** (`Enter`):
+  - La receta entra al ticket con su precio, fijado por el servidor.
+  - Al cobrar queda "vendida". Si se devuelve, queda "anulada".
+  - En reportes y en el corte aparece como "Recetario magistral".
+- **Orden de preparación / presupuesto** impreso, con la composición y lo que hay que pesar.
+- **Configuración**: formas farmacéuticas, precios netos de cada principio activo y
+  redondeo del total ($1, $10, $50 o $100).
+
+**Vencimientos**
+
+- Cada producto puede tener **proveedor/distribuidor** y **fecha de vencimiento**.
+- **Inventario → Vencimientos** lista lo que vence pronto.
+
+**Importar desde CORAND.ERP / Easy Pharma**
+
+En **Configuración → Importar**, elige el archivo `corand_erp_pro.db` y Neji trae:
+
+- Productos con su principio activo, distribuidor y vencimiento.
+- El stock.
+- El vademécum.
+- Los precios de los principios activos del recetario y las fórmulas magistrales.
+- Los datos del ticket.
+
+Cómo funciona:
+
+- Antes de importar hace un respaldo.
+- No modifica el archivo original.
+- No duplica si importas dos veces.
+
+También se puede desde la línea de comandos:
+
+```
+python importar_corand.py ruta/a/corand_erp_pro.db
+```
+
+El detalle del análisis del programa anterior está en
+[`docs/analisis-corand.md`](docs/analisis-corand.md).
 
 ### Productos e inventario
 
@@ -148,7 +223,7 @@ Cada caja tiene su propio turno y su propio corte.
 |---|---|
 | `F1` `F2` `F3` `F4` | Ventas · Clientes · Productos · Inventario |
 | `Enter` | Agregar el código escrito (`3*código` = 3 unidades) |
-| `F10` | Buscar producto |
+| `F10` | Buscar producto (`%paracetamol` busca por principio activo) |
 | `INS` | Varios (cantidad + código) |
 | `Ctrl+P` | Artículo común |
 | `F11` o `Ctrl+M` | Precio de mayoreo en la línea |
@@ -157,6 +232,7 @@ Cada caja tiene su propio turno y su propio corte.
 | `Supr` | Borrar línea |
 | `Ctrl+D` | Descuento |
 | `F5` | Asignar cliente |
+| `Ctrl+B` | Alternativas con el mismo principio activo (farmacia) |
 | `F6` | Nuevo ticket (deja el actual pendiente) |
 | `RePág` `AvPág` | Cambiar de ticket |
 | `F7` `F8` | Entrada y salida de efectivo |
@@ -211,6 +287,7 @@ neji/
   api/                 rutas JSON bajo /api
   static/              interfaz (index.html, css/, js/, js/vistas/)
 tests/                 pruebas con pytest
+importar_corand.py     importación desde CORAND.ERP por línea de comandos
 docs/investigacion.md  lo mejor de cada POS y qué se tomó de cada uno
 ```
 
@@ -238,7 +315,7 @@ Para agregar una función nueva:
 - [ ] **Boleta y factura electrónica SII**, a través de un proveedor certificado
   (LibreDTE, OpenFactura, etc.) o con certificación propia.
 - [ ] Integración con máquinas de tarjeta (Transbank, Getnet, Mercado Pago, SumUp).
-- [ ] Lotes y fechas de vencimiento (SICAR).
+- [ ] Lotes con fecha de vencimiento propia (hoy hay una fecha por producto).
 - [ ] Kits, paquetes y promociones (2x1, 3x2).
 - [ ] Puntos de fidelización (Loyverse).
 - [ ] Varios niveles de precio (menudeo, medio mayoreo, mayoreo).

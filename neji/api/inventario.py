@@ -78,6 +78,25 @@ def compras_sugeridas():
     return jsonify(productos)
 
 
+@bp.get("/inventario/vencimientos")
+def vencimientos():
+    """Productos con fecha de vencimiento, del más próximo al más lejano."""
+    dias = entero(request.args.get("dias") or 3650, "días", minimo=0)
+    hoy = date.today()
+    limite = (hoy + timedelta(days=dias)).isoformat()
+    productos = filas(get_db().execute(
+        """SELECT p.id, p.codigo, p.descripcion, p.existencia, p.usa_inventario, p.vencimiento,
+                  p.proveedor, d.nombre AS departamento
+           FROM productos p LEFT JOIN departamentos d ON d.id = p.departamento_id
+           WHERE p.activo = 1 AND p.vencimiento IS NOT NULL AND p.vencimiento <= ?
+             AND (? = 0 OR p.usa_inventario = 0 OR p.existencia > 0)
+           ORDER BY p.vencimiento, p.descripcion LIMIT 2000""",
+        (limite, 1 if booleano(request.args.get("con_stock", "1")) else 0)))
+    for p in productos:
+        p["dias_restantes"] = (date.fromisoformat(p["vencimiento"]) - hoy).days
+    return jsonify(productos)
+
+
 @bp.get("/inventario/movimientos")
 @solo_admin
 def movimientos_inventario():

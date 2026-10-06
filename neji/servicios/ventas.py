@@ -9,6 +9,7 @@ from ..validar import ErrorNegocio, cantidad, entero, texto
 from .caja import exigir_caja, exigir_turno, resumen_turno
 from .clientes import exigir_cliente, mover_saldo
 from .inventario import formatear_cantidad, mover_existencia
+from .recetario import describir as describir_receta
 
 METODOS_NO_EFECTIVO = ("debito", "credito", "transferencia", "fiado")
 NOMBRE_METODO = {
@@ -40,13 +41,41 @@ def precio_para(producto, cant, tipo_precio):
     return producto["precio_venta"], "normal"
 
 
-def calcular_lineas(con, items, puede_cambiar_precio):
+def linea_receta(con, item, n, cant, recetas_vistas):
+    """Línea de una receta magistral: el precio sale del libro de recetas."""
+    receta_id = entero(item.get("receta_id"), f"receta de la línea {n}", minimo=1)
+    if receta_id in recetas_vistas:
+        raise ErrorNegocio("La misma receta magistral está dos veces en el ticket.")
+    recetas_vistas.add(receta_id)
+    receta = con.execute("SELECT * FROM recetas_magistrales WHERE id = ?", (receta_id,)).fetchone()
+    if receta is None:
+        raise ErrorNegocio(f"La receta magistral de la línea {n} no existe.")
+    if receta["estado"] != "pendiente":
+        raise ErrorNegocio(f"La receta magistral N° {receta['folio']} ya está {receta['estado']}.")
+    if cant != 1:
+        raise ErrorNegocio("Cada receta magistral se vende una vez (cantidad 1).")
+    return {
+        "producto": None,
+        "producto_id": None,
+        "codigo": None,
+        "descripcion": describir_receta(receta),
+        "departamento_id": None,
+        "cantidad": 1,
+        "precio_unitario": receta["total"],
+        "precio_costo": 0,
+        "tipo_precio": "comun",
+        "exento": 0,
+        "receta_id": receta_id,
+    }
+
+
+def calcular_lineas(con, items, puede_cambiar_precio, permitir_recetas=True):
     """Arma las líneas con precios tomados de la base de datos (no del navegador)."""
     if not isinstance(items, list) or not items:
         raise ErrorNegocio("El ticket está vacío.")
     if len(items) > 1000:
         raise ErrorNegocio("El ticket tiene demasiadas líneas.")
-    lineas = []
+    lineas, recetas_vistas = [], set()
     for n, item in enumerate(items, 1):
         if not isinstance(item, dict):
             raise ErrorNegocio(f"La línea {n} no es válida.")
@@ -55,7 +84,12 @@ def calcular_lineas(con, items, puede_cambiar_precio):
             raise ErrorNegocio(f"Tipo de precio inválido en la línea {n}.")
         cant = cantidad(item.get("cantidad"), f"cantidad de la línea {n}", positiva=True)
 
-        if item.get("producto_id") in (None, "") or tipo == "comun":
+        if item.get("receta_id") not in (None, ""):
+            if not permitir_recetas:
+                raise ErrorNegocio("Las recetas magistrales se presupuestan desde el Recetario "
+                                   "(ahí puedes imprimir la receta con su precio).")
+            linea = linea_receta(con, item, n, cant, recetas_vistas)
+        elif item.get("producto_id") in (None, "") or tipo == "comun":
             linea = {
                 "producto": None,
                 "producto_id": None,
@@ -95,6 +129,7 @@ def calcular_lineas(con, items, puede_cambiar_precio):
                 "tipo_precio": tipo,
                 "exento": producto["exento"],
             }
+        linea.setdefault("receta_id", None)
         linea["importe"] = redondear(Decimal(str(linea["cantidad"])) * linea["precio_unitario"])
         lineas.append(linea)
     return lineas
@@ -196,12 +231,18 @@ def registrar_venta(con, datos, usuario):
             con.execute(
                 """INSERT INTO venta_items (venta_id, producto_id, codigo, descripcion,
                        departamento_id, cantidad, precio_unitario, precio_costo, tipo_precio,
-                       importe, exento)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       importe, exento, receta_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (venta_id, l["producto_id"], l["codigo"], l["descripcion"], l["departamento_id"],
                  l["cantidad"], l["precio_unitario"], l["precio_costo"], l["tipo_precio"],
-                 l["importe"], l["exento"]),
+                 l["importe"], l["exento"], l["receta_id"]),
             )
+            if l["receta_id"] is not None:
+                vendida = con.execute(
+                    "UPDATE recetas_magistrales SET estado = 'vendida', venta_id = ? "
+                    "WHERE id = ? AND estado = 'pendiente'", (venta_id, l["receta_id"])).rowcount
+                if vendida != 1:
+                    raise ErrorNegocio("La receta magistral ya fue vendida o anulada.")
             if l["producto"] is not None:
                 mover_existencia(con, l["producto"], -l["cantidad"], "venta", usuario["id"],
                                  referencia=f"Venta {folio}", permitir_negativo=permitir_negativo)
@@ -330,6 +371,9 @@ def devolver(con, venta_id, datos, usuario):
                 "VALUES (?, ?, ?, ?)", (devolucion_id, item["id"], cant, monto))
             con.execute("UPDATE venta_items SET cantidad_devuelta = cantidad_devuelta + ? WHERE id = ?",
                         (cant, item["id"]))
+            if item["receta_id"] is not None and round(item["cantidad"] - item["cantidad_devuelta"] - cant, 3) <= 0:
+                con.execute("UPDATE recetas_magistrales SET estado = 'anulada' WHERE id = ?",
+                            (item["receta_id"],))
             if item["producto_id"] is not None:
                 producto = con.execute("SELECT * FROM productos WHERE id = ?",
                                        (item["producto_id"],)).fetchone()
@@ -352,7 +396,8 @@ def devolver(con, venta_id, datos, usuario):
 def crear_cotizacion(con, datos, usuario):
     with transaccion(con):
         lineas = calcular_lineas(con, datos.get("items"),
-                                 puede(usuario, con, "cajero_puede_cambiar_precio"))
+                                 puede(usuario, con, "cajero_puede_cambiar_precio"),
+                                 permitir_recetas=False)
         config = leer_config(con)
         t = calcular_totales(lineas, leer_descuento(con, datos, usuario),
                              int(config["iva_porcentaje"]))

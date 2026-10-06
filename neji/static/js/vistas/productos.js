@@ -1,7 +1,7 @@
 // Catálogo de productos: alta, edición, departamentos, CSV, kardex y etiquetas.
 
 import { api, descargar, qs } from '../api.js';
-import { esAdmin } from '../estado.js';
+import { esAdmin, esFarmacia } from '../estado.js';
 import { hojaEtiquetas, imprimir } from '../impresion.js';
 import {
   aviso, avisoError, confirmar, debounce, fecha, formulario, h, leerCantidad, leerMonto, modal, numero, pesos, tabla, vaciar,
@@ -11,8 +11,14 @@ const POR_PAGINA = 50;
 
 /** Alta o edición de producto. Devuelve el producto guardado o null. */
 export async function formProducto(producto = null) {
-  const departamentos = await api.get('/api/departamentos').catch(() => []);
-  const listaDeps = h('datalist', { id: 'lista-departamentos' }, departamentos.map((d) => h('option', { value: d.nombre })));
+  const farmacia = esFarmacia();
+  const [departamentos, principios] = await Promise.all([
+    api.get('/api/departamentos').catch(() => []),
+    farmacia ? api.get('/api/principios?limite=5000').catch(() => []) : [],
+  ]);
+  const listaDeps = h('div',
+    h('datalist', { id: 'lista-departamentos' }, departamentos.map((d) => h('option', { value: d.nombre }))),
+    h('datalist', { id: 'lista-principios' }, principios.map((p) => h('option', { value: p.nombre }))));
   const margen = producto && producto.precio_costo
     ? Math.round(((producto.precio_venta / producto.precio_costo) - 1) * 1000) / 10 : '';
 
@@ -21,6 +27,7 @@ export async function formProducto(producto = null) {
     { nombre: 'descripcion', etiqueta: 'Descripción', valor: producto?.descripcion, requerido: true },
     { nombre: 'departamento', etiqueta: 'Departamento', valor: producto?.departamento, atributos: { list: 'lista-departamentos' }, placeholder: 'Ej: Bebidas' },
     { nombre: 'tipo_venta', etiqueta: 'Se vende por', tipo: 'select', valor: producto?.tipo_venta || 'unidad', opciones: [['unidad', 'Unidad / pieza'], ['granel', 'Granel (kg, litro, metro)']] },
+    farmacia ? { nombre: 'principios', etiqueta: 'Principio(s) activo(s)', valor: producto?.principios, ancho: true, placeholder: 'Ej: PARACETAMOL 500 mg + CAFEINA 65 mg', atributos: { list: 'lista-principios' }, ayuda: 'Separa con + si tiene varios. Quedan unidos al vademécum y permiten buscar con %.' } : null,
     { nombre: 'precio_costo', etiqueta: 'Precio de costo', tipo: 'monto', valor: producto?.precio_costo ?? '' },
     { nombre: 'margen', etiqueta: '% de ganancia', tipo: 'cantidad', valor: margen, ayuda: 'Calcula el precio de venta desde el costo' },
     { nombre: 'precio_venta', etiqueta: 'Precio de venta (con IVA)', tipo: 'monto', valor: producto?.precio_venta ?? '', requerido: true },
@@ -32,13 +39,15 @@ export async function formProducto(producto = null) {
   campos.push(
     { nombre: 'minimo', etiqueta: 'Inventario mínimo', tipo: 'cantidad', valor: producto?.minimo ?? '0' },
     { nombre: 'maximo', etiqueta: 'Inventario máximo', tipo: 'cantidad', valor: producto?.maximo ?? '' },
+    { nombre: 'proveedor', etiqueta: farmacia ? 'Distribuidor / laboratorio' : 'Proveedor', valor: producto?.proveedor },
+    { nombre: 'vencimiento', etiqueta: 'Vencimiento', tipo: 'fecha', valor: producto?.vencimiento },
     { nombre: 'exento', etiqueta: 'Exento de IVA', tipo: 'check', valor: producto ? Boolean(producto.exento) : false },
   );
 
   return formulario({
     titulo: producto ? 'Editar producto' : 'Nuevo producto',
     ancho: 'ancho',
-    campos,
+    campos: campos.filter(Boolean),
     extra: listaDeps,
     alMostrar: (e) => {
       const generar = h('button.btn.chico', { type: 'button' }, 'Generar código interno');
@@ -99,7 +108,7 @@ async function importarCsv() {
     ancho: 'ancho',
     cuerpo: [
       h('p', 'Sirve para traer tu catálogo desde Excel, eleventa u otro sistema. Guarda la planilla como CSV (separado por punto y coma o coma).'),
-      h('p.ayuda', 'Columnas reconocidas: codigo, descripcion, precio_venta, precio_costo, precio_mayoreo, cantidad_mayoreo, departamento, tipo_venta (unidad/granel), existencia, minimo, maximo, usa_inventario (si/no), exento (si/no). También entiende nombres como "Código", "Precio Venta", "Costo", "Stock" o "Categoría".'),
+      h('p.ayuda', 'Columnas reconocidas: codigo, descripcion, precio_venta, precio_costo, precio_mayoreo, cantidad_mayoreo, departamento, tipo_venta (unidad/granel), existencia, minimo, maximo, usa_inventario (si/no), exento (si/no), principio_activo, proveedor y vencimiento. También entiende nombres como "Código", "Precio Venta", "Costo", "Stock", "Categoría", "Distribuidor" o "Principio Activo".'),
       h('p.ayuda', 'Si el código ya existe, el producto se actualiza con las columnas que traigan datos.'),
       archivo, resultado,
     ],
@@ -201,7 +210,7 @@ function imprimirEtiquetas(productos) {
 
 export async function montar(contenedor) {
   const admin = esAdmin();
-  const buscar = h('input', { type: 'search', placeholder: 'Buscar por descripción o código', autofocus: true, style: { maxWidth: '380px' } });
+  const buscar = h('input', { type: 'search', placeholder: esFarmacia() ? 'Descripción, código o %principio activo' : 'Buscar por descripción o código', autofocus: true, style: { maxWidth: '380px' } });
   const departamento = h('select', { style: { width: 'auto' } });
   const bajoMinimo = h('input', { type: 'checkbox' });
   const lista = h('div');
@@ -259,7 +268,7 @@ export async function montar(contenedor) {
         }),
       },
       { titulo: 'Código', valor: (p) => h('span.mono', p.codigo) },
-      { titulo: 'Descripción', valor: (p) => [p.descripcion, p.tipo_venta === 'granel' ? h('span.etiqueta', ' granel') : null, p.exento ? h('span.etiqueta', ' exento') : null] },
+      { titulo: 'Descripción', valor: (p) => [p.descripcion, p.tipo_venta === 'granel' ? h('span.etiqueta', ' granel') : null, p.exento ? h('span.etiqueta', ' exento') : null, esFarmacia() && p.principios ? h('div.ayuda.pa', p.principios) : null] },
       { titulo: 'Departamento', valor: (p) => p.departamento || '' },
       admin ? { titulo: 'Costo', valor: (p) => pesos(p.precio_costo), clase: 'num' } : null,
       { titulo: 'Precio', valor: (p) => h('b', pesos(p.precio_venta)), clase: 'num' },

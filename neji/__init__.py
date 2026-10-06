@@ -34,6 +34,7 @@ def create_app(config=None):
         PERMANENT_SESSION_LIFETIME=timedelta(hours=14),
         SESSION_COOKIE_SAMESITE="Lax",
         JSON_SORT_KEYS=False,
+        MAX_CONTENT_LENGTH=200 * 1024 * 1024,  # archivos a importar
     )
     if config:
         app.config.update(config)

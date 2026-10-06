@@ -1,7 +1,7 @@
 // Arranque, navegación entre pantallas y atajos de teclado globales.
 
 import { api, cuandoSeCierreSesion } from './api.js';
-import { cargarSesion, esAdmin, estado, nombreCaja } from './estado.js';
+import { cargarSesion, esAdmin, esFarmacia, estado, nombreCaja } from './estado.js';
 import { aviso, avisoError, h, teclaEnModal, vaciar } from './ui.js';
 import * as caja from './vistas/caja.js';
 import * as clientes from './vistas/clientes.js';
@@ -10,7 +10,9 @@ import * as cotizaciones from './vistas/cotizaciones.js';
 import * as historial from './vistas/historial.js';
 import * as inventario from './vistas/inventario.js';
 import * as productos from './vistas/productos.js';
+import * as recetario from './vistas/recetario.js';
 import * as reportes from './vistas/reportes.js';
+import * as vademecum from './vistas/vademecum.js';
 import * as ventas from './vistas/ventas.js';
 
 const VISTAS = [
@@ -18,7 +20,9 @@ const VISTAS = [
   { clave: 'clientes', titulo: 'Clientes', tecla: 'F2', modulo: clientes },
   { clave: 'productos', titulo: 'Productos', tecla: 'F3', modulo: productos },
   { clave: 'inventario', titulo: 'Inventario', tecla: 'F4', modulo: inventario, admin: true },
-  { clave: 'caja', titulo: 'Caja y corte', modulo: caja },
+  { clave: 'vademecum', titulo: 'Vademécum', modulo: vademecum, farmacia: true },
+  { clave: 'recetario', titulo: 'Recetario', modulo: recetario, farmacia: true },
+  { clave: 'caja', titulo: 'Caja', modulo: caja },
   { clave: 'historial', titulo: 'Historial', modulo: historial },
   { clave: 'cotizaciones', titulo: 'Cotizaciones', modulo: cotizaciones },
   { clave: 'reportes', titulo: 'Reportes', modulo: reportes, admin: true },
@@ -43,7 +47,7 @@ function tomarParametros() {
 }
 
 function vistasPermitidas() {
-  return VISTAS.filter((v) => !v.admin || esAdmin());
+  return VISTAS.filter((v) => (!v.admin || esAdmin()) && (!v.farmacia || esFarmacia()));
 }
 
 async function mostrarVista() {
@@ -73,8 +77,8 @@ function dibujarAplicacion() {
       nav,
       h('div.sesion',
         h('span.caja', { title: 'Caja de esta terminal (se cambia en Configuración)' }, nombreCaja()),
-        h('span.ocultar-movil', `${estado.usuario.nombre} (${estado.usuario.rol})`),
-        h('button.btn.chico', { type: 'button', onclick: salir }, 'Salir'))),
+        h('span.ocultar-movil.nombre-usuario', `${estado.usuario.nombre} (${estado.usuario.rol})`),
+        h('button.btn.chico', { type: 'button', onclick: salir, title: `Cerrar la sesión de ${estado.usuario.nombre}` }, 'Salir'))),
     principal);
   mostrarVista();
 }
@@ -97,6 +101,7 @@ function pantallaAcceso(configurado, negocio) {
       nombre: h('input', { placeholder: 'Tu nombre' }),
       usuario: h('input', { required: true, value: 'admin', autocomplete: 'username' }),
       password: h('input', { type: 'password', required: true, autocomplete: 'new-password' }),
+      modulo_farmacia: h('input', { type: 'checkbox' }),
     };
     const form = h('form.tarjeta-login',
       h('div.marca', 'Neji', h('span', ' POS')),
@@ -107,10 +112,11 @@ function pantallaAcceso(configurado, negocio) {
       h('label.campo', 'Tu nombre', campos.nombre),
       h('label.campo', 'Usuario administrador', campos.usuario),
       h('label.campo', 'Contraseña (mínimo 4 caracteres)', campos.password),
+      h('label.check', campos.modulo_farmacia, 'Es una farmacia (activar vademécum y recetario magistral)'),
       h('button.btn.primario.grande', { type: 'submit' }, 'Comenzar'));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const datos = Object.fromEntries(Object.entries(campos).map(([k, el]) => [k, el.value.trim()]));
+      const datos = Object.fromEntries(Object.entries(campos).map(([k, el]) => [k, el.type === 'checkbox' ? el.checked : el.value.trim()]));
       try {
         await api.post('/api/setup', datos);
         iniciar();

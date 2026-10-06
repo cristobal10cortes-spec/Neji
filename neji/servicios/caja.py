@@ -3,6 +3,13 @@
 from ..db import ahora, fila, filas
 from ..validar import ErrorNegocio
 
+# Nombre del departamento de una línea de venta (alias vi y d = departamentos).
+SQL_DEPARTAMENTO_ITEM = """
+    COALESCE(d.nombre, CASE WHEN vi.receta_id IS NOT NULL THEN 'Recetario magistral'
+                            WHEN vi.producto_id IS NULL THEN 'Artículos comunes'
+                            ELSE 'Sin departamento' END)
+"""
+
 # Ganancia de una línea de venta descontando lo devuelto y repartiendo el
 # descuento general del ticket en proporción. Requiere alias vi (venta_items) y v (ventas).
 SQL_GANANCIA_ITEM = """
@@ -113,8 +120,7 @@ def resumen_turno(con, turno_id):
                 + entradas - salidas - dev["efectivo"])
 
     departamentos = filas(con.execute(
-        """SELECT COALESCE(d.nombre, CASE WHEN vi.producto_id IS NULL THEN 'Artículos comunes'
-                                          ELSE 'Sin departamento' END) AS departamento,
+        f"""SELECT {SQL_DEPARTAMENTO_ITEM} AS departamento,
                   SUM(vi.importe) AS total
            FROM venta_items vi JOIN ventas v ON v.id = vi.venta_id
            LEFT JOIN departamentos d ON d.id = vi.departamento_id

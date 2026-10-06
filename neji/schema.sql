@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS productos (
     minimo           REAL NOT NULL DEFAULT 0,
     maximo           REAL,
     exento           INTEGER NOT NULL DEFAULT 0,  -- exento de IVA
+    proveedor        TEXT,             -- distribuidor / laboratorio
+    vencimiento      TEXT,             -- AAAA-MM-DD del lote en venta
     activo           INTEGER NOT NULL DEFAULT 1,
     creado           TEXT NOT NULL,
     actualizado      TEXT NOT NULL
@@ -151,7 +153,8 @@ CREATE TABLE IF NOT EXISTS venta_items (
     tipo_precio       TEXT NOT NULL CHECK (tipo_precio IN ('normal', 'mayoreo', 'manual', 'comun')),
     importe           INTEGER NOT NULL,
     exento            INTEGER NOT NULL DEFAULT 0,
-    cantidad_devuelta REAL NOT NULL DEFAULT 0
+    cantidad_devuelta REAL NOT NULL DEFAULT 0,
+    receta_id         INTEGER REFERENCES recetas_magistrales(id)  -- línea de receta magistral
 );
 CREATE INDEX IF NOT EXISTS idx_venta_items_venta ON venta_items(venta_id);
 CREATE INDEX IF NOT EXISTS idx_venta_items_producto ON venta_items(producto_id);
@@ -218,3 +221,73 @@ CREATE TABLE IF NOT EXISTS cotizaciones (
     estado         TEXT NOT NULL DEFAULT 'vigente' CHECK (estado IN ('vigente', 'vendida', 'cancelada')),
     nota           TEXT
 );
+
+-- ---------------------------------------------------------------------------
+-- Farmacia: vademécum, principios activos y recetario magistral
+-- ---------------------------------------------------------------------------
+
+-- Un principio activo reúne su ficha de vademécum y, si se usa en fórmulas
+-- magistrales, su precio neto por unidad (mg, mcg, g, ml o UI).
+CREATE TABLE IF NOT EXISTS principios_activos (
+    id                 INTEGER PRIMARY KEY,
+    nombre             TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    accion_terapeutica TEXT,
+    efectos_adversos   TEXT,
+    contraindicaciones TEXT,
+    notas              TEXT,
+    unidad_receta      TEXT CHECK (unidad_receta IN ('mcg', 'mg', 'g', 'ml', 'UI')),
+    precio_receta      REAL CHECK (precio_receta >= 0),  -- NULL = no se usa en el recetario
+    creado             TEXT NOT NULL,
+    actualizado        TEXT NOT NULL
+);
+
+-- Qué principios activos contiene cada producto (con su concentración).
+CREATE TABLE IF NOT EXISTS producto_principios (
+    producto_id   INTEGER NOT NULL REFERENCES productos(id) ON DELETE CASCADE,
+    principio_id  INTEGER NOT NULL REFERENCES principios_activos(id),
+    concentracion TEXT,
+    orden         INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (producto_id, principio_id)
+);
+CREATE INDEX IF NOT EXISTS idx_producto_principios_pa ON producto_principios(principio_id);
+
+-- Formas farmacéuticas del recetario: cápsulas, cremas, lociones...
+-- unidad: 'unidad' (cápsula, papelillo, óvulo), 'g' o 'ml'.
+CREATE TABLE IF NOT EXISTS formas_magistrales (
+    id                INTEGER PRIMARY KEY,
+    nombre            TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    unidad            TEXT NOT NULL CHECK (unidad IN ('unidad', 'g', 'ml')),
+    nombre_unidad     TEXT NOT NULL,
+    precio_base       REAL NOT NULL DEFAULT 0 CHECK (precio_base >= 0),    -- neto, por preparado
+    precio_unidad     REAL NOT NULL DEFAULT 0 CHECK (precio_unidad >= 0),  -- neto, por cápsula/gramo/ml
+    cantidad_sugerida REAL NOT NULL DEFAULT 30,
+    activa            INTEGER NOT NULL DEFAULT 1
+);
+
+-- Libro de recetas magistrales: cada preparado calculado queda registrado.
+CREATE TABLE IF NOT EXISTS recetas_magistrales (
+    id              INTEGER PRIMARY KEY,
+    folio           INTEGER NOT NULL UNIQUE,
+    fecha           TEXT NOT NULL,
+    usuario_id      INTEGER NOT NULL REFERENCES usuarios(id),
+    forma_id        INTEGER REFERENCES formas_magistrales(id) ON DELETE SET NULL,
+    forma           TEXT NOT NULL,
+    unidad          TEXT NOT NULL,
+    nombre_unidad   TEXT NOT NULL,
+    cantidad        REAL NOT NULL,
+    componentes     TEXT NOT NULL,      -- JSON con cada principio activo calculado
+    precio_base     REAL NOT NULL,
+    precio_unidad   REAL NOT NULL,
+    suma_principios REAL NOT NULL,
+    costo_unidades  REAL NOT NULL,
+    neto            INTEGER NOT NULL,
+    iva             INTEGER NOT NULL,
+    total           INTEGER NOT NULL,
+    paciente        TEXT,
+    rut_paciente    TEXT,
+    medico          TEXT,
+    indicaciones    TEXT,
+    estado          TEXT NOT NULL DEFAULT 'pendiente' CHECK (estado IN ('pendiente', 'vendida', 'anulada')),
+    venta_id        INTEGER REFERENCES ventas(id)
+);
+CREATE INDEX IF NOT EXISTS idx_recetas_fecha ON recetas_magistrales(fecha);

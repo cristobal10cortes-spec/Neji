@@ -88,7 +88,7 @@ export async function verVenta(id, alCambiar = () => {}) {
       h('div.fila', etiquetaEstado(v.estado), h('span.suave', `${fecha(v.fecha)} · ${v.caja} · ${v.usuario}`), v.cliente ? h('span', `Cliente: ${v.cliente}`) : null),
       tabla([
         { titulo: 'Código', valor: (i) => h('span.mono', i.codigo || '—') },
-        { titulo: 'Descripción', valor: (i) => [i.descripcion, ' ', i.tipo_precio !== 'normal' ? h('span.etiqueta', { mayoreo: 'mayoreo', manual: 'precio manual', comun: 'común' }[i.tipo_precio]) : null] },
+        { titulo: 'Descripción', valor: (i) => [i.descripcion, ' ', i.receta_id ? h('span.etiqueta.ok', 'receta magistral') : i.tipo_precio !== 'normal' ? h('span.etiqueta', { mayoreo: 'mayoreo', manual: 'precio manual', comun: 'común' }[i.tipo_precio]) : null] },
         { titulo: 'Cant.', valor: (i) => numero(i.cantidad), clase: 'num' },
         { titulo: 'Precio', valor: (i) => pesos(i.precio_unitario), clase: 'num' },
         { titulo: 'Importe', valor: (i) => pesos(i.importe), clase: 'num' },

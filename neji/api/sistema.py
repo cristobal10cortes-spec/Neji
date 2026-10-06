@@ -14,9 +14,9 @@ from . import bp, datos_json
 
 OPCIONES_SI_NO = {
     "imprimir_automatico", "redondeo_efectivo", "permitir_stock_negativo",
-    "cajero_puede_devolver", "cajero_puede_cambiar_precio",
+    "cajero_puede_devolver", "cajero_puede_cambiar_precio", "modulo_farmacia",
 }
-CONFIG_EDITABLE = set(CONFIG_POR_DEFECTO) - {"ultimo_respaldo"}
+CONFIG_EDITABLE = set(CONFIG_POR_DEFECTO) - {"ultimo_respaldo", "recetario_semilla"}
 
 
 def _iniciar_sesion(usuario_id):
@@ -54,6 +54,8 @@ def setup():
         nombre_negocio = texto(datos, "negocio_nombre", requerido=True, nombre="el nombre del negocio")
         con.execute("UPDATE config SET valor = ? WHERE clave = 'negocio_nombre'", (nombre_negocio,))
         con.execute("UPDATE config SET valor = ? WHERE clave = 'negocio_rut'", (rut or "",))
+        con.execute("UPDATE config SET valor = ? WHERE clave = 'modulo_farmacia'",
+                    ("1" if booleano(datos.get("modulo_farmacia", False)) else "0",))
         usuario_id = con.execute(
             "INSERT INTO usuarios (usuario, nombre, password_hash, rol, creado) "
             "VALUES (?, ?, ?, 'admin', ?)",
@@ -105,6 +107,10 @@ def guardar_config():
             valor = str(min(entero(valor, "cantidad de respaldos", minimo=1), 100))
         elif clave == "ticket_ancho":
             valor = "58" if str(valor) == "58" else "80"
+        elif clave == "receta_redondeo":
+            valor = str(valor).strip()
+            if valor not in ("1", "10", "50", "100"):
+                raise ErrorNegocio("El redondeo de recetas debe ser 1, 10, 50 o 100 pesos.")
         elif clave == "negocio_rut":
             valor = str(valor or "").strip()
             if valor:

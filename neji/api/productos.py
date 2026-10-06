@@ -7,18 +7,28 @@ from flask import Response, jsonify, request
 
 from ..auth import solo_admin, usuario_actual
 from ..db import ahora, fila, filas, get_db, transaccion
+from ..servicios.farmacia import (SQL_PRINCIPIOS_TEXTO, alternativas, guardar_principios_producto,
+                                  principios_de_producto)
 from ..servicios.inventario import mover_existencia
-from ..validar import ErrorNegocio, booleano, cantidad, entero, texto
+from ..validar import ErrorNegocio, booleano, cantidad, entero, fecha_flexible, texto
 from . import bp, datos_json, sin_costos
 
 COLUMNAS_CSV = ["codigo", "descripcion", "departamento", "tipo_venta", "precio_costo",
                 "precio_venta", "precio_mayoreo", "cantidad_mayoreo", "usa_inventario",
-                "existencia", "minimo", "maximo", "exento"]
+                "existencia", "minimo", "maximo", "exento", "principio_activo", "proveedor",
+                "vencimiento"]
 
-SELECT_PRODUCTO = """
-    SELECT p.*, d.nombre AS departamento
+SELECT_PRODUCTO = f"""
+    SELECT p.*, d.nombre AS departamento, {SQL_PRINCIPIOS_TEXTO} AS principios
     FROM productos p LEFT JOIN departamentos d ON d.id = p.departamento_id
 """
+
+
+def _con_principios(con, producto):
+    """Agrega la ficha de cada principio activo (para el aviso del vademécum en la venta)."""
+    if producto is not None:
+        producto["principios_detalle"] = principios_de_producto(con, producto["id"])
+    return producto
 
 
 def _departamento_id(con, datos):
@@ -57,6 +67,8 @@ def leer_producto(con, datos):
         "minimo": cantidad(datos.get("minimo") or 0, "mínimo", minimo=0),
         "maximo": cantidad(datos.get("maximo"), "máximo", minimo=0, requerido=False),
         "exento": 1 if booleano(datos.get("exento", False)) else 0,
+        "proveedor": texto(datos, "proveedor", max_largo=80),
+        "vencimiento": fecha_flexible(datos.get("vencimiento"), "vencimiento"),
     }
     if " " in p["codigo"]:
         raise ErrorNegocio("El código no puede tener espacios.")
@@ -98,9 +110,21 @@ def _guardar_nuevo(con, p, existencia, usuario_id):
 def listar_productos():
     con = get_db()
     condiciones, params = ["p.activo = 1"], []
-    for palabra in (request.args.get("q") or "").split()[:6]:
-        condiciones.append("(p.descripcion LIKE ? OR p.codigo LIKE ?)")
-        params += [f"%{palabra}%", f"{palabra}%"]
+    q = (request.args.get("q") or "").strip()
+    if q.startswith("%"):
+        # Búsqueda por componente (como en CORAND.ERP): %paracetamol
+        for palabra in q[1:].split()[:6]:
+            condiciones.append(
+                "(p.descripcion LIKE ? OR p.id IN (SELECT pp.producto_id FROM producto_principios pp "
+                "JOIN principios_activos pa ON pa.id = pp.principio_id WHERE pa.nombre LIKE ?))")
+            params += [f"%{palabra}%", f"%{palabra}%"]
+    else:
+        for palabra in q.split()[:6]:
+            condiciones.append("(p.descripcion LIKE ? OR p.codigo LIKE ?)")
+            params += [f"%{palabra}%", f"{palabra}%"]
+    if request.args.get("principio_id"):
+        condiciones.append("p.id IN (SELECT producto_id FROM producto_principios WHERE principio_id = ?)")
+        params.append(entero(request.args["principio_id"], "principio activo"))
     if request.args.get("departamento_id"):
         condiciones.append("p.departamento_id = ?")
         params.append(entero(request.args["departamento_id"], "departamento"))
@@ -118,19 +142,27 @@ def listar_productos():
 
 @bp.get("/productos/codigo/<path:codigo>")
 def producto_por_codigo(codigo):
-    producto = fila(get_db().execute(
+    con = get_db()
+    producto = fila(con.execute(
         f"{SELECT_PRODUCTO} WHERE p.codigo = ? AND p.activo = 1", (codigo.strip(),)).fetchone())
     if producto is None:
         raise ErrorNegocio(f"No existe un producto con el código {codigo}.", status=404)
-    return jsonify(sin_costos(producto))
+    return jsonify(sin_costos(_con_principios(con, producto)))
 
 
 @bp.get("/productos/<int:producto_id>")
 def ver_producto(producto_id):
-    producto = fila(get_db().execute(f"{SELECT_PRODUCTO} WHERE p.id = ?", (producto_id,)).fetchone())
+    con = get_db()
+    producto = fila(con.execute(f"{SELECT_PRODUCTO} WHERE p.id = ?", (producto_id,)).fetchone())
     if producto is None:
         raise ErrorNegocio("Producto no encontrado.", status=404)
-    return jsonify(sin_costos(producto))
+    return jsonify(sin_costos(_con_principios(con, producto)))
+
+
+@bp.get("/productos/<int:producto_id>/alternativas")
+def alternativas_producto(producto_id):
+    """Productos con el mismo principio activo (bioequivalentes, otras marcas)."""
+    return jsonify(alternativas(get_db(), producto_id))
 
 
 @bp.get("/productos/siguiente-codigo")
@@ -160,7 +192,10 @@ def crear_producto():
         p = leer_producto(con, datos)
         existencia = cantidad(datos.get("existencia") or 0, "existencia")
         producto_id = _guardar_nuevo(con, p, existencia, usuario_actual()["id"])
-    return jsonify(fila(con.execute(f"{SELECT_PRODUCTO} WHERE p.id = ?", (producto_id,)).fetchone())), 201
+        if "principios" in datos:
+            guardar_principios_producto(con, producto_id, datos["principios"])
+    producto = fila(con.execute(f"{SELECT_PRODUCTO} WHERE p.id = ?", (producto_id,)).fetchone())
+    return jsonify(_con_principios(con, producto)), 201
 
 
 @bp.put("/productos/<int:producto_id>")
@@ -179,7 +214,10 @@ def editar_producto(producto_id):
         con.execute(
             f"UPDATE productos SET {', '.join(f'{c} = ?' for c in p)}, actualizado = ? WHERE id = ?",
             list(p.values()) + [ahora(), producto_id])
-    return jsonify(fila(con.execute(f"{SELECT_PRODUCTO} WHERE p.id = ?", (producto_id,)).fetchone()))
+        if "principios" in datos:
+            guardar_principios_producto(con, producto_id, datos["principios"])
+    producto = fila(con.execute(f"{SELECT_PRODUCTO} WHERE p.id = ?", (producto_id,)).fetchone())
+    return jsonify(_con_principios(con, producto))
 
 
 @bp.delete("/productos/<int:producto_id>")
@@ -227,7 +265,8 @@ def exportar_productos():
             p["precio_costo"], p["precio_venta"], _numero_csv(p["precio_mayoreo"]),
             _numero_csv(p["cantidad_mayoreo"]), "si" if p["usa_inventario"] else "no",
             _numero_csv(p["existencia"]), _numero_csv(p["minimo"]), _numero_csv(p["maximo"]),
-            "si" if p["exento"] else "no",
+            "si" if p["exento"] else "no", p["principios"] or "", p["proveedor"] or "",
+            p["vencimiento"] or "",
         ])
     return Response("﻿" + salida.getvalue(), mimetype="text/csv; charset=utf-8",
                     headers={"Content-Disposition": "attachment; filename=productos.csv"})
@@ -242,6 +281,11 @@ ALIAS_COLUMNAS = {
     "departamento": "departamento", "categoria": "departamento", "categoría": "departamento",
     "inventario": "existencia", "stock": "existencia", "existencias": "existencia",
     "inv. minimo": "minimo", "mínimo": "minimo", "inv. maximo": "maximo", "máximo": "maximo",
+    "principio activo": "principio_activo", "principios activos": "principio_activo",
+    "principio_activo": "principio_activo", "p. activo": "principio_activo",
+    "componente": "principio_activo", "principios": "principio_activo",
+    "distribuidor": "proveedor", "laboratorio": "proveedor", "proveedor": "proveedor",
+    "fecha vencimiento": "vencimiento", "vence": "vencimiento", "caducidad": "vencimiento",
 }
 
 
@@ -303,13 +347,17 @@ def importar_productos():
                         if nueva != existente["existencia"]:
                             mover_existencia(con, existente, nueva - existente["existencia"], "ajuste",
                                              usuario_id, nota="Importación CSV")
+                    if registro.get("principio_activo"):
+                        guardar_principios_producto(con, existente["id"], registro["principio_activo"])
                     actualizados += 1
                 else:
                     if not registro.get("precio_venta"):
                         raise ErrorNegocio("Falta precio de venta.")
                     p = leer_producto(con, registro)
-                    _guardar_nuevo(con, p, cantidad(registro.get("existencia") or 0, "existencia"),
-                                   usuario_id)
+                    producto_id = _guardar_nuevo(
+                        con, p, cantidad(registro.get("existencia") or 0, "existencia"), usuario_id)
+                    if registro.get("principio_activo"):
+                        guardar_principios_producto(con, producto_id, registro["principio_activo"])
                     creados += 1
         except ErrorNegocio as e:
             errores.append({"fila": n, "error": e.mensaje})

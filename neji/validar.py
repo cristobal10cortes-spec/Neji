@@ -85,6 +85,27 @@ def booleano(valor):
     return bool(valor)
 
 
+def fecha_flexible(valor, nombre):
+    """Acepta AAAA-MM-DD, DD-MM-AAAA o DD/MM/AAAA. Devuelve AAAA-MM-DD o None."""
+    from datetime import date
+
+    if valor is None or not str(valor).strip():
+        return None
+    s = str(valor).strip()[:10]
+    m = re.fullmatch(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", s)
+    if m:
+        a, mes, d = (int(x) for x in m.groups())
+    else:
+        m = re.fullmatch(r"(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})", s)
+        if not m:
+            raise ErrorNegocio(f"{nombre.capitalize()} debe ser una fecha (AAAA-MM-DD o DD-MM-AAAA).")
+        d, mes, a = (int(x) for x in m.groups())
+    try:
+        return date(a, mes, d).isoformat()
+    except ValueError:
+        raise ErrorNegocio(f"{nombre.capitalize()} no es una fecha válida.") from None
+
+
 def fecha(valor, nombre):
     if valor is None or valor == "":
         return None

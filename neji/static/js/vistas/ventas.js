@@ -1,7 +1,7 @@
 // Pantalla de ventas, pensada para usarse solo con teclado (al estilo eleventa).
 
 import { api } from '../api.js';
-import { estado, guardarTickets, leerTickets, nuevoTicket, opcion, puede } from '../estado.js';
+import { esFarmacia, estado, guardarTickets, leerTickets, nuevoTicket, opcion, puede } from '../estado.js';
 import { imprimir, ticketCotizacion, ticketVenta } from '../impresion.js';
 import {
   aviso, avisoError, confirmar, formulario, h, importe, leerMonto, modal, numero, pesos, pitido,
@@ -9,6 +9,7 @@ import {
 } from '../ui.js';
 import { elegirCliente } from './clientes.js';
 import { abrirTurno, movimientoCaja } from './caja.js';
+import { fichaPrincipio } from './vademecum.js';
 
 const METODOS = [
   ['efectivo', 'Efectivo', 'F1'],
@@ -20,6 +21,7 @@ const METODOS = [
 ];
 
 export function precioLinea(item) {
+  if (item.tipo_precio === 'receta') return { precio: item.receta.total, tipo: 'receta' };
   if (item.tipo_precio === 'comun' || item.tipo_precio === 'manual') return { precio: item.precio, tipo: item.tipo_precio };
   const p = item.producto;
   if (item.tipo_precio === 'mayoreo' && p.precio_mayoreo != null) return { precio: p.precio_mayoreo, tipo: 'mayoreo' };
@@ -36,6 +38,7 @@ export function totalesTicket(t) {
 /** Líneas como las espera la API (el servidor recalcula los precios). */
 export function itemsParaApi(t) {
   return t.items.map((it) => {
+    if (it.tipo_precio === 'receta') return { receta_id: it.receta.id, cantidad: 1 };
     if (it.tipo_precio === 'comun') return { descripcion: it.descripcion, cantidad: it.cantidad, precio: it.precio, tipo_precio: 'comun' };
     const linea = { producto_id: it.producto.id, cantidad: it.cantidad, tipo_precio: it.tipo_precio };
     if (it.tipo_precio === 'manual') linea.precio = it.precio;
@@ -44,8 +47,8 @@ export function itemsParaApi(t) {
 }
 
 function snapshot(p) {
-  const { id, codigo, descripcion, precio_venta, precio_mayoreo, cantidad_mayoreo, tipo_venta, existencia, usa_inventario, departamento } = p;
-  return { id, codigo, descripcion, precio_venta, precio_mayoreo, cantidad_mayoreo, tipo_venta, existencia, usa_inventario, departamento };
+  const { id, codigo, descripcion, precio_venta, precio_mayoreo, cantidad_mayoreo, tipo_venta, existencia, usa_inventario, departamento, principios } = p;
+  return { id, codigo, descripcion, precio_venta, precio_mayoreo, cantidad_mayoreo, tipo_venta, existencia, usa_inventario, departamento, principios };
 }
 
 export async function montar(contenedor, parametros = {}) {
@@ -56,6 +59,8 @@ export async function montar(contenedor, parametros = {}) {
   // --- Elementos ---------------------------------------------------------------
   const codigo = h('input', { placeholder: 'Código de barras (o 3*código) + Enter', autocomplete: 'off', 'aria-label': 'Código del producto' });
   const avisoTurno = h('div.panel.oculto', { style: { background: '#fff7e0', borderColor: '#f3d27a' } });
+  const avisoVademecum = h('div.vademecum.oculto', { role: 'status' });
+  let productoVademecum = null;
   const pestanasTickets = h('div.tickets');
   const cuerpoTabla = h('tbody');
   const lblCliente = h('span');
@@ -80,6 +85,7 @@ export async function montar(contenedor, parametros = {}) {
         boton('F8', 'Salida', () => movimiento('salida')))),
     h('div.fila.entre', pestanasTickets,
       h('div.fila', boton('F6', 'Nuevo ticket', nuevo), boton('', 'Cancelar ticket', cancelarTicket, { class: 'peligro' }))),
+    avisoVademecum,
     h('div.tabla-caja.ticket-tabla', h('table',
       h('thead', h('tr',
         h('th', '#'), h('th', 'Código'), h('th', 'Descripción'), h('th.num', 'Precio'), h('th.num', 'Cant.'),
@@ -134,11 +140,13 @@ export async function montar(contenedor, parametros = {}) {
           ondblclick: () => { t.sel = i; editarCantidad(); },
         },
         h('td.suave', i + 1),
-        h('td.mono', p?.codigo || '—'),
+        h('td.mono', p?.codigo || (it.receta ? `RM-${it.receta.folio}` : '—')),
         h('td.desc', it.descripcion || p.descripcion, ' ',
           tipo === 'mayoreo' ? h('span.etiqueta.aviso', 'mayoreo') : null,
           tipo === 'manual' ? h('span.etiqueta.aviso', 'precio manual') : null,
-          tipo === 'comun' ? h('span.etiqueta', 'común') : null),
+          tipo === 'comun' ? h('span.etiqueta', 'común') : null,
+          tipo === 'receta' ? h('span.etiqueta.ok', 'receta magistral') : null,
+          p?.principios && esFarmacia() ? h('div.ayuda', p.principios) : null),
         h('td.num', pesos(precio)),
         h('td.num.cant', numero(it.cantidad), p?.tipo_venta === 'granel' ? ' kg' : ''),
         h('td.num.negrita', pesos(importe(it.cantidad, precio))),
@@ -207,8 +215,10 @@ export async function montar(contenedor, parametros = {}) {
     if (p.usa_inventario && !opcion('permitir_stock_negativo') && enTicket + cantidad > p.existencia) {
       pitido();
       aviso(`No hay existencia suficiente de «${p.descripcion}» (hay ${numero(p.existencia)}).`, 'error', 5000);
+      if (esFarmacia() && p.principios) alternativas(p, true);
       return;
     }
+    mostrarVademecum(producto);
     if (existente >= 0) {
       t.items[existente].cantidad = Math.round((t.items[existente].cantidad + cantidad) * 1000) / 1000;
       t.items[existente].producto = p;
@@ -297,7 +307,10 @@ export async function montar(contenedor, parametros = {}) {
 
   function buscarProducto() {
     return new Promise((resolver) => {
-      const entrada = h('input', { placeholder: 'Escribe parte de la descripción o del código', autocomplete: 'off', autofocus: true });
+      const entrada = h('input', {
+        placeholder: esFarmacia() ? 'Descripción o código. Empieza con % para buscar por principio activo (ej: %paracetamol)' : 'Escribe parte de la descripción o del código',
+        autocomplete: 'off', autofocus: true,
+      });
       const lista = h('div.lista-busqueda');
       let resultados = [];
       let sel = 0;
@@ -310,7 +323,8 @@ export async function montar(contenedor, parametros = {}) {
             class: i === sel ? 'sel' : null,
             onclick: () => { sel = i; elegir(); },
           },
-          h('td.mono', p.codigo), h('td', p.descripcion, p.departamento ? h('span.suave', ` · ${p.departamento}`) : null),
+          h('td.mono', p.codigo), h('td', p.descripcion, p.departamento ? h('span.suave', ` · ${p.departamento}`) : null,
+            esFarmacia() && p.principios ? h('div.ayuda.pa', p.principios) : null),
           h('td.num', pesos(p.precio_venta)),
           h('td.num', { class: p.usa_inventario && p.existencia <= 0 ? 'rojo' : 'suave' }, p.usa_inventario ? numero(p.existencia) : '—')))))
           : h('p.vacio', entrada.value ? 'Sin resultados.' : 'Escribe para buscar.'));
@@ -345,7 +359,9 @@ export async function montar(contenedor, parametros = {}) {
         m.cerrar();
       }
       pintar();
-    }).then(async (producto) => {
+    }).then(async (elegido) => {
+      // La ficha completa trae el vademécum del producto
+      const producto = elegido && await api.get(`/api/productos/codigo/${encodeURIComponent(elegido.codigo)}`).catch(() => elegido);
       if (producto) {
         let cantidad = 1;
         if (producto.tipo_venta === 'granel') cantidad = await pedirCantidad(producto);
@@ -375,7 +391,129 @@ export async function montar(contenedor, parametros = {}) {
     enfocar();
   }
 
+  // --- Vademécum y alternativas -----------------------------------------------------
+  function mostrarVademecum(producto) {
+    const detalle = esFarmacia() ? (producto.principios_detalle || []) : [];
+    productoVademecum = detalle.length ? producto : null;
+    avisoVademecum.classList.toggle('oculto', !detalle.length);
+    if (!detalle.length) return;
+    vaciar(avisoVademecum,
+      h('div.vademecum-textos', detalle.map((pa) => h('div',
+        h('b', `${pa.nombre}${pa.concentracion ? ' ' + pa.concentracion : ''}: `),
+        pa.accion_terapeutica || h('span.suave', 'sin ficha en el vademécum'),
+        pa.efectos_adversos ? h('span.suave', ` · Efectos adversos: ${pa.efectos_adversos}`) : null))),
+      h('div.fila',
+        detalle.map((pa) => h('button.btn.chico', { type: 'button', onclick: () => fichaPrincipio(pa.id) }, `Ficha ${pa.nombre.toLowerCase()}`)),
+        h('button.btn.chico', { type: 'button', onclick: () => alternativas(producto) }, h('kbd', 'Ctrl+B'), 'Alternativas')));
+  }
+
+  /** Productos con el mismo principio activo (bioequivalentes u otras marcas). */
+  async function alternativas(producto, sinStock = false) {
+    if (!producto?.id) {
+      aviso('Selecciona un producto del ticket.', 'error');
+      return;
+    }
+    let lista = [];
+    try {
+      lista = await api.get(`/api/productos/${producto.id}/alternativas`);
+    } catch (e) {
+      avisoError(e);
+      return;
+    }
+    if (sinStock) lista = lista.filter((a) => a.con_stock);
+    if (!lista.length) {
+      if (!sinStock) aviso('No hay otros productos con el mismo principio activo.', '');
+      enfocar();
+      return;
+    }
+    let sel = 0;
+    const cuerpo = h('div.lista-busqueda');
+    const pintar = () => {
+      vaciar(cuerpo, h('table', h('tbody', lista.map((a, i) => h('tr.clic', {
+        class: i === sel ? 'sel' : null,
+        onclick: () => { sel = i; elegir(); },
+      },
+      h('td.mono', a.codigo),
+      h('td', a.descripcion, h('div.ayuda.pa', a.principios || '')),
+      h('td', a.equivalente ? h('span.etiqueta.ok', 'misma composición') : h('span.etiqueta', 'comparte principio')),
+      h('td.num', pesos(a.precio_venta)),
+      h('td.num', { class: a.con_stock ? 'verde' : 'rojo' }, a.usa_inventario ? numero(a.existencia) : '—'))))));
+      cuerpo.querySelector('tr.sel')?.scrollIntoView({ block: 'nearest' });
+    };
+    const m = modal({
+      titulo: sinStock ? `Sin stock: alternativas a ${producto.descripcion}` : `Alternativas a ${producto.descripcion}`,
+      ancho: 'ancho',
+      cuerpo: [h('p.ayuda', `Mismo principio activo: ${producto.principios || ''}. ↑ ↓ y Enter para agregar.`), cuerpo],
+      alTeclear: (e) => {
+        if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(sel + 1, lista.length - 1); pintar(); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(sel - 1, 0); pintar(); }
+        else if (e.key === 'Enter') { e.preventDefault(); elegir(); }
+      },
+      alCerrar: () => enfocar(),
+    });
+    async function elegir() {
+      const a = lista[sel];
+      if (!a) return;
+      m.cerrar();
+      try {
+        const p = await api.get(`/api/productos/codigo/${encodeURIComponent(a.codigo)}`);
+        let cantidad = 1;
+        if (p.tipo_venta === 'granel') cantidad = await pedirCantidad(p);
+        if (cantidad !== null) agregarProducto(p, cantidad);
+      } catch (e) {
+        avisoError(e);
+      }
+      enfocar();
+    }
+    pintar();
+  }
+
+  function alternativasDeLinea() {
+    const t = actual();
+    const it = t.items[t.sel];
+    alternativas(it?.producto ? it.producto : productoVademecum);
+  }
+
+  // --- Recetas magistrales ------------------------------------------------------------
+  async function cargarReceta(id) {
+    let r;
+    try {
+      r = await api.get(`/api/recetario/recetas/${id}`);
+    } catch (e) {
+      avisoError(e);
+      return;
+    }
+    if (r.estado !== 'pendiente') {
+      aviso(`La receta N° ${r.folio} ya está ${r.estado}.`, 'error');
+      return;
+    }
+    const enTicket = tickets.lista.findIndex((tk) => tk.items.some((it) => it.receta?.id === r.id));
+    if (enTicket >= 0) {
+      cambiarA(enTicket);
+      aviso(`La receta N° ${r.folio} ya está en el Ticket ${tickets.lista[enTicket].numero}.`, '');
+      return;
+    }
+    const t = actual();
+    t.items.push({
+      producto: null, cantidad: 1, tipo_precio: 'receta', descripcion: r.descripcion,
+      receta: { id: r.id, folio: r.folio, total: r.total, descripcion: r.descripcion },
+    });
+    t.sel = t.items.length - 1;
+    dibujar();
+    aviso(`Receta N° ${r.folio} agregada: ${pesos(r.total)}.`, 'ok');
+  }
+
   // --- Editar líneas ---------------------------------------------------------------
+  /** Línea seleccionada si se puede modificar (las recetas tienen precio y cantidad fijos). */
+  function lineaEditable() {
+    const it = lineaSeleccionada();
+    if (it?.tipo_precio === 'receta') {
+      aviso('La receta magistral tiene precio y cantidad fijos. Para cambiarla, bórrala y recalcúlala en el Recetario.', 'error', 5000);
+      return null;
+    }
+    return it;
+  }
+
   function lineaSeleccionada() {
     const t = actual();
     if (t.sel < 0 || t.sel >= t.items.length) {
@@ -395,7 +533,7 @@ export async function montar(contenedor, parametros = {}) {
   }
 
   function sumarCantidad(delta) {
-    const it = lineaSeleccionada();
+    const it = lineaEditable();
     if (!it) return;
     const nueva = Math.round((it.cantidad + delta) * 1000) / 1000;
     if (nueva <= 0) return borrarLinea();
@@ -410,7 +548,7 @@ export async function montar(contenedor, parametros = {}) {
   }
 
   async function editarCantidad() {
-    const it = lineaSeleccionada();
+    const it = lineaEditable();
     if (!it) return;
     const r = await formulario({
       titulo: `Cantidad: ${it.descripcion || it.producto.descripcion}`,
@@ -432,7 +570,7 @@ export async function montar(contenedor, parametros = {}) {
   }
 
   function alternarMayoreo() {
-    const it = lineaSeleccionada();
+    const it = lineaEditable();
     if (!it) return;
     if (!it.producto || it.producto.precio_mayoreo == null) {
       aviso('Este producto no tiene precio de mayoreo.', 'error');
@@ -447,7 +585,7 @@ export async function montar(contenedor, parametros = {}) {
   }
 
   async function cambiarPrecio() {
-    const it = lineaSeleccionada();
+    const it = lineaEditable();
     if (!it) return;
     if (!puede('cajero_puede_cambiar_precio')) {
       aviso('No tienes permiso para cambiar precios.', 'error');
@@ -778,6 +916,11 @@ export async function montar(contenedor, parametros = {}) {
   dibujar();
   await revisarTurno();
   if (parametros.cotizacionId) await cargarCotizacion(parametros.cotizacionId);
+  if (parametros.recetaId) await cargarReceta(parametros.recetaId);
+  if (parametros.codigo) {
+    codigo.value = parametros.codigo;
+    await procesarCodigo();
+  }
   enfocar();
 
   return {
@@ -797,6 +940,7 @@ export async function montar(contenedor, parametros = {}) {
       else if (e.key === 'Insert') { e.preventDefault(); varios(); }
       else if (ctrl && e.key.toLowerCase() === 'p') { e.preventDefault(); articuloComun(); }
       else if (ctrl && e.key.toLowerCase() === 'd') { e.preventDefault(); descuento(); }
+      else if (ctrl && e.key.toLowerCase() === 'b' && esFarmacia()) { e.preventDefault(); alternativasDeLinea(); }
       else if (e.key === 'PageDown') { e.preventDefault(); cambiarA(tickets.activo + 1); }
       else if (e.key === 'PageUp') { e.preventDefault(); cambiarA(tickets.activo - 1); }
       else if (e.key === 'ArrowDown' && t.items.length) { e.preventDefault(); t.sel = Math.min(t.sel + 1, t.items.length - 1); dibujar(); }

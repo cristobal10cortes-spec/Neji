@@ -52,7 +52,7 @@ h3 { font-size: 1.05rem; }
 .nav { display: flex; gap: .25rem; overflow-x: auto; flex: 1; scrollbar-width: thin; }
 .nav button {
   background: transparent; border: 1px solid transparent; color: #d7e4e6;
-  padding: .4rem .65rem; border-radius: 6px; cursor: pointer; white-space: nowrap;
+  padding: .4rem .5rem; border-radius: 6px; cursor: pointer; white-space: nowrap; font-size: .93rem;
 }
 .nav button:hover { background: rgba(255,255,255,.08); }
 .nav button.activo { background: #fff; color: var(--barra); font-weight: 600; }
@@ -172,6 +172,13 @@ tfoot td { font-weight: 700; background: #f7f9fa; }
 .total-grande .monto { font-size: 2.6rem; font-weight: 800; color: var(--primario); line-height: 1; font-variant-numeric: tabular-nums; }
 .cliente-ticket { display: flex; align-items: center; gap: .4rem; }
 
+.vademecum {
+  display: flex; gap: .75rem; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  background: #fff8e1; border: 1px solid #f3d27a; color: #5c4400; border-radius: 10px; padding: .55rem .8rem;
+}
+.vademecum-textos { flex: 1 1 360px; font-size: .92rem; }
+.ayuda.pa { color: #0b5953; }
+
 /* --- Modales y avisos ---------------------------------------------------- */
 .fondo-modal {
   position: fixed; inset: 0; background: rgba(15, 23, 32, .45); z-index: 50;
@@ -190,7 +197,7 @@ tfoot td { font-weight: 700; background: #f7f9fa; }
 .cerrar { border: 0; background: none; font-size: 1.4rem; cursor: pointer; color: var(--suave); line-height: 1; }
 .error-modal { background: var(--peligro-claro); color: var(--peligro); padding: .55rem .75rem; border-radius: 8px; }
 
-#avisos { position: fixed; right: 16px; bottom: 16px; z-index: 80; display: flex; flex-direction: column; gap: .5rem; max-width: min(420px, calc(100vw - 32px)); }
+#avisos { position: fixed; right: 16px; top: 64px; z-index: 80; display: flex; flex-direction: column; gap: .5rem; max-width: min(420px, calc(100vw - 32px)); pointer-events: none; }
 .toast { background: var(--barra); color: #fff; padding: .7rem 1rem; border-radius: 10px; box-shadow: var(--sombra); animation: entra .2s ease-out; }
 .toast.error { background: var(--peligro); }
 .toast.ok { background: var(--ok); }
@@ -252,6 +259,9 @@ tfoot td { font-weight: 700; background: #f7f9fa; }
 .etiqueta-prod .cod { font: 8px var(--mono); }
 
 /* --- Pantallas angostas ------------------------------------------------- */
+@media (max-width: 1500px) {
+  .sesion .nombre-usuario { display: none; }
+}
 @media (max-width: 760px) {
   main { padding: .6rem; }
   .barra { flex-wrap: wrap; }

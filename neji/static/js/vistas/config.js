@@ -1,7 +1,7 @@
 // Configuración: negocio, ticket, opciones, usuarios, cajas, esta terminal y respaldos.
 
 import { api, descargar } from '../api.js';
-import { recargarConfiguracion } from '../app.js';
+import { ir, recargarConfiguracion } from '../app.js';
 import { esAdmin, estado, fijarCaja } from '../estado.js';
 import { aviso, avisoError, fecha, formulario, h, numero, pestanas, tabla, vaciar } from '../ui.js';
 
@@ -67,8 +67,12 @@ function vistaNegocio() {
 function vistaOpciones() {
   return formularioConfig({
     redondeo_efectivo: 'check', permitir_stock_negativo: 'check', cajero_puede_cambiar_precio: 'check', cajero_puede_devolver: 'check',
-    iva_porcentaje: 'texto', respaldos_mantener: 'texto',
+    iva_porcentaje: 'texto', respaldos_mantener: 'texto', modulo_farmacia: 'check',
   }, (c) => [
+    h('h3', 'Tipo de negocio'),
+    check('Farmacia: activar vademécum, principios activos y recetario magistral', c.modulo_farmacia,
+      'Agrega las pantallas Vademécum y Recetario, el aviso clínico al vender y la búsqueda por componente con %.'),
+    h('div', { style: { height: '.6rem' } }),
     h('h3', 'Ventas'),
     check('Redondear pagos en efectivo (Ley 20.956)', c.redondeo_efectivo, 'Si el total termina en 1 a 5 baja a la decena; si termina en 6 a 9 sube. La boleta se emite por el monto exacto.'),
     check('Permitir vender sin existencia (inventario negativo)', c.permitir_stock_negativo, 'Útil si todavía no cargas todo tu inventario.'),
@@ -169,6 +173,67 @@ function vistaTerminal() {
     ]));
 }
 
+const OPCIONES_IMPORTAR = [
+  ['productos', 'Productos (código, nombre, costo, precio, departamento, distribuidor, vencimiento y principio activo)'],
+  ['existencias', 'Existencias (stock) de los productos'],
+  ['vademecum', 'Vademécum (uso terapéutico y efectos adversos)'],
+  ['recetario', 'Recetario: precios de principios activos y fórmulas magistrales'],
+  ['negocio', 'Datos del negocio para el ticket (nombre, dirección, teléfono, correo)'],
+];
+
+function vistaImportar() {
+  const archivo = h('input', { type: 'file', accept: '.db,.sqlite,.sqlite3' });
+  const opciones = Object.fromEntries(OPCIONES_IMPORTAR.map(([k]) => [k, h('input', { type: 'checkbox', checked: true })]));
+  const resultado = h('div');
+  const error = h('div.error-modal.oculto', { role: 'alert' });
+  const boton = h('button.btn.primario', { type: 'button' }, 'Importar');
+  boton.addEventListener('click', async () => {
+    error.classList.add('oculto');
+    if (!archivo.files[0]) {
+      error.textContent = 'Elige el archivo corand_erp_pro.db.';
+      error.classList.remove('oculto');
+      return;
+    }
+    const datos = new FormData();
+    datos.append('archivo', archivo.files[0]);
+    for (const [k, el] of Object.entries(opciones)) datos.append(k, el.checked ? '1' : '0');
+    boton.disabled = true;
+    boton.textContent = 'Importando...';
+    try {
+      const r = await api.subir('/api/importar/corand', datos);
+      vaciar(resultado, h('div.panel', { style: { marginTop: '1rem' } },
+        h('h3', 'Importación terminada'),
+        h('ul',
+          h('li', `Productos nuevos: ${r.productos_creados} · actualizados: ${r.productos_actualizados} · con principio activo: ${r.productos_con_principio}`),
+          h('li', `Fichas de vademécum: ${r.fichas_vademecum}`),
+          h('li', `Principios activos con precio de recetario: ${r.precios_recetario} · fórmulas magistrales: ${r.formas}`),
+          h('li', `Datos del negocio actualizados: ${r.datos_negocio}`)),
+        r.advertencias.length ? [h('p.rojo', `${r.advertencias.length} advertencias:`), h('ul', r.advertencias.map((a) => h('li', a)))] : null,
+        h('button.btn', { type: 'button', onclick: async () => { await recargarConfiguracion(); ir('vademecum'); } }, 'Ir al vademécum')));
+      aviso('Importación terminada. Se hizo un respaldo antes de empezar.', 'ok', 6000);
+    } catch (e) {
+      error.textContent = e.message;
+      error.classList.remove('oculto');
+    } finally {
+      boton.disabled = false;
+      boton.textContent = 'Importar';
+    }
+  });
+  return h('div.panel',
+    h('h3', 'Importar desde CORAND.ERP / Easy Pharma'),
+    h('p', 'Trae tus datos del programa anterior: elige el archivo ', h('b', 'corand_erp_pro.db'), ' (está en la misma carpeta que el programa).'),
+    h('ol.ayuda',
+      h('li', 'Cierra CORAND.ERP antes de copiar el archivo.'),
+      h('li', 'Neji hace un respaldo de su base antes de importar y no modifica tu archivo original.'),
+      h('li', 'Si un producto o principio activo ya existe, se actualiza (no se duplica). Puedes importar de nuevo cuando quieras.'),
+      h('li', 'Los usuarios no se importan: en CORAND las contraseñas están sin cifrar. Créalos en la pestaña Usuarios.')),
+    error,
+    h('div.fila', archivo),
+    h('div', { style: { margin: '.75rem 0' } }, OPCIONES_IMPORTAR.map(([k, t]) => h('label.check', opciones[k], t))),
+    boton,
+    resultado);
+}
+
 async function vistaRespaldos(zona) {
   const cargar = async () => {
     const respaldos = await api.get('/api/respaldos');
@@ -190,7 +255,7 @@ async function vistaRespaldos(zona) {
 export async function montar(contenedor, parametros = {}) {
   const admin = esAdmin();
   const opciones = admin
-    ? [['negocio', 'Negocio y ticket'], ['opciones', 'Opciones'], ['usuarios', 'Usuarios'], ['cajas', 'Cajas'], ['terminal', 'Esta terminal'], ['respaldos', 'Respaldos']]
+    ? [['negocio', 'Negocio y ticket'], ['opciones', 'Opciones'], ['usuarios', 'Usuarios'], ['cajas', 'Cajas'], ['terminal', 'Esta terminal'], ['respaldos', 'Respaldos'], ['importar', 'Importar']]
     : [['terminal', 'Esta terminal']];
   let actual = opciones.some(([k]) => k === parametros.pestana) ? parametros.pestana : opciones[0][0];
   const barra = h('div');
@@ -207,6 +272,7 @@ export async function montar(contenedor, parametros = {}) {
       else if (p === 'usuarios') await vistaUsuarios(zona);
       else if (p === 'cajas') await vistaCajas(zona);
       else if (p === 'respaldos') await vistaRespaldos(zona);
+      else if (p === 'importar') vaciar(zona, vistaImportar());
       else vaciar(zona, vistaTerminal());
     } catch (e) {
       avisoError(e);

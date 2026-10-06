@@ -7,7 +7,7 @@ from flask import Response, jsonify
 
 from ..auth import solo_admin
 from ..db import filas, get_db
-from ..servicios.caja import SQL_GANANCIA_ITEM
+from ..servicios.caja import SQL_DEPARTAMENTO_ITEM, SQL_GANANCIA_ITEM
 from . import bp, rango_fechas
 
 # Importe neto de devoluciones y con el descuento del ticket repartido.
@@ -50,8 +50,7 @@ def reporte_ventas():
                   SUM(total - devuelto) AS total
            FROM ventas WHERE fecha BETWEEN ? AND ? GROUP BY 1 ORDER BY 1""", rango))
     por_departamento = filas(con.execute(
-        f"""SELECT COALESCE(d.nombre, CASE WHEN vi.producto_id IS NULL THEN 'Artículos comunes'
-                                           ELSE 'Sin departamento' END) AS departamento,
+        f"""SELECT {SQL_DEPARTAMENTO_ITEM} AS departamento,
                    ROUND(SUM({SQL_IMPORTE_ITEM})) AS total, ROUND(SUM({SQL_GANANCIA_ITEM})) AS ganancia
             FROM venta_items vi JOIN ventas v ON v.id = vi.venta_id
             LEFT JOIN departamentos d ON d.id = vi.departamento_id
@@ -61,10 +60,16 @@ def reporte_ventas():
            FROM ventas v JOIN usuarios u ON u.id = v.usuario_id
            WHERE v.fecha BETWEEN ? AND ? GROUP BY u.id ORDER BY 3 DESC""", rango))
     top_productos = filas(con.execute(
-        f"""SELECT vi.codigo, vi.descripcion, SUM(vi.cantidad - vi.cantidad_devuelta) AS cantidad,
+        f"""SELECT vi.codigo,
+                   CASE WHEN vi.receta_id IS NOT NULL THEN 'Recetas magistrales' ELSE vi.descripcion END
+                     AS descripcion,
+                   SUM(vi.cantidad - vi.cantidad_devuelta) AS cantidad,
                    ROUND(SUM({SQL_IMPORTE_ITEM})) AS total, ROUND(SUM({SQL_GANANCIA_ITEM})) AS ganancia
             FROM venta_items vi JOIN ventas v ON v.id = vi.venta_id
-            WHERE v.fecha BETWEEN ? AND ? GROUP BY COALESCE(vi.producto_id, vi.descripcion)
+            WHERE v.fecha BETWEEN ? AND ?
+            GROUP BY CASE WHEN vi.receta_id IS NOT NULL THEN 'receta'
+                          WHEN vi.producto_id IS NOT NULL THEN 'p' || vi.producto_id
+                          ELSE 'c' || vi.descripcion END
             HAVING cantidad > 0 ORDER BY total DESC LIMIT 30""", rango))
 
     return jsonify(desde=desde, hasta=hasta, resumen=r, por_metodo=por_metodo, por_dia=por_dia,
