@@ -7,7 +7,7 @@ import json
 from flask import Response, jsonify, request
 
 from ..auth import solo_admin, usuario_actual
-from ..db import fila, filas, get_db, transaccion
+from ..db import fila, filas, get_db, sin_acentos, transaccion
 from ..servicios import recetario as svc
 from ..validar import ErrorNegocio, booleano, entero, texto
 from . import bp, datos_json, rango_fechas
@@ -92,8 +92,9 @@ def _filtro_recetas():
         condiciones.append("r.fecha BETWEEN ? AND ?")
         params += [inicio, fin]
         for palabra in q.split()[:6]:
-            condiciones.append("(r.paciente LIKE ? OR r.medico LIKE ? OR r.rut_paciente LIKE ?)")
-            params += [f"%{palabra}%"] * 3
+            condiciones.append("(sin_acentos(r.paciente) LIKE ? OR sin_acentos(r.medico) LIKE ? "
+                               "OR r.rut_paciente LIKE ?)")
+            params += [f"%{sin_acentos(palabra)}%"] * 2 + [f"%{palabra}%"]
     estado = request.args.get("estado")
     if estado:
         if estado not in ("pendiente", "vendida", "anulada"):

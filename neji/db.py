@@ -1,6 +1,7 @@
 """Conexión a SQLite y utilidades de transacción."""
 
 import sqlite3
+import unicodedata
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -46,9 +47,18 @@ def ahora():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def sin_acentos(texto):
+    """'Ácido Fólico' -> 'acido folico'. Para buscar sin importar tildes ni mayúsculas."""
+    if texto is None:
+        return None
+    descompuesto = unicodedata.normalize("NFKD", str(texto))
+    return "".join(c for c in descompuesto if not unicodedata.combining(c)).casefold()
+
+
 def conectar(ruta):
     con = sqlite3.connect(ruta, isolation_level=None, timeout=10, check_same_thread=False)
     con.row_factory = sqlite3.Row
+    con.create_function("sin_acentos", 1, sin_acentos, deterministic=True)
     con.execute("PRAGMA foreign_keys = ON")
     con.execute("PRAGMA busy_timeout = 10000")
     con.execute("PRAGMA journal_mode = WAL")

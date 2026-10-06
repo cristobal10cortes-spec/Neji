@@ -6,7 +6,7 @@ import io
 from flask import Response, jsonify, request
 
 from ..auth import solo_admin, usuario_actual
-from ..db import ahora, fila, filas, get_db, transaccion
+from ..db import ahora, fila, filas, get_db, sin_acentos, transaccion
 from ..servicios.farmacia import (SQL_PRINCIPIOS_TEXTO, alternativas, guardar_principios_producto,
                                   principios_de_producto)
 from ..servicios.inventario import mover_existencia
@@ -115,13 +115,14 @@ def listar_productos():
         # Búsqueda por componente (como en CORAND.ERP): %paracetamol
         for palabra in q[1:].split()[:6]:
             condiciones.append(
-                "(p.descripcion LIKE ? OR p.id IN (SELECT pp.producto_id FROM producto_principios pp "
-                "JOIN principios_activos pa ON pa.id = pp.principio_id WHERE pa.nombre LIKE ?))")
-            params += [f"%{palabra}%", f"%{palabra}%"]
+                "(sin_acentos(p.descripcion) LIKE ? OR p.id IN (SELECT pp.producto_id "
+                "FROM producto_principios pp JOIN principios_activos pa ON pa.id = pp.principio_id "
+                "WHERE sin_acentos(pa.nombre) LIKE ?))")
+            params += [f"%{sin_acentos(palabra)}%"] * 2
     else:
         for palabra in q.split()[:6]:
-            condiciones.append("(p.descripcion LIKE ? OR p.codigo LIKE ?)")
-            params += [f"%{palabra}%", f"{palabra}%"]
+            condiciones.append("(sin_acentos(p.descripcion) LIKE ? OR p.codigo LIKE ?)")
+            params += [f"%{sin_acentos(palabra)}%", f"{palabra}%"]
     if request.args.get("principio_id"):
         condiciones.append("p.id IN (SELECT producto_id FROM producto_principios WHERE principio_id = ?)")
         params.append(entero(request.args["principio_id"], "principio activo"))

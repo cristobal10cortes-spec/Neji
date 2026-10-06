@@ -3,7 +3,7 @@
 from flask import jsonify, request
 
 from ..auth import solo_admin
-from ..db import ahora, fila, filas, get_db, transaccion
+from ..db import ahora, fila, filas, get_db, sin_acentos, transaccion
 from ..servicios.farmacia import SQL_PRINCIPIOS_TEXTO, normalizar_nombre
 from ..servicios.recetario import UNIDADES_PRINCIPIO, numero
 from ..validar import ErrorNegocio, booleano, entero, texto
@@ -47,8 +47,8 @@ def _leer_principio(datos):
 def listar_principios():
     condiciones, params = [], []
     for palabra in (request.args.get("q") or "").split()[:6]:
-        condiciones.append("(pa.nombre LIKE ? OR pa.accion_terapeutica LIKE ?)")
-        params += [f"%{palabra}%", f"%{palabra}%"]
+        condiciones.append("(sin_acentos(pa.nombre) LIKE ? OR sin_acentos(pa.accion_terapeutica) LIKE ?)")
+        params += [f"%{sin_acentos(palabra)}%"] * 2
     if booleano(request.args.get("recetario", "")):
         condiciones.append("pa.precio_receta IS NOT NULL")
     where = f"WHERE {' AND '.join(condiciones)}" if condiciones else ""
@@ -86,8 +86,10 @@ def crear_principio():
     datos = _leer_principio(datos_json())
     con = get_db()
     with transaccion(con):
-        if con.execute("SELECT 1 FROM principios_activos WHERE nombre = ?", (datos["nombre"],)).fetchone():
-            raise ErrorNegocio(f"Ya existe el principio activo {datos['nombre']}.")
+        previo = con.execute("SELECT nombre FROM principios_activos WHERE sin_acentos(nombre) = sin_acentos(?)",
+                             (datos["nombre"],)).fetchone()
+        if previo:
+            raise ErrorNegocio(f"Ya existe el principio activo {previo['nombre']}.")
         fecha = ahora()
         datos.update(creado=fecha, actualizado=fecha)
         nuevo = con.execute(
@@ -104,9 +106,11 @@ def editar_principio(principio_id):
     with transaccion(con):
         if not con.execute("SELECT 1 FROM principios_activos WHERE id = ?", (principio_id,)).fetchone():
             raise ErrorNegocio("Principio activo no encontrado.", status=404)
-        if con.execute("SELECT 1 FROM principios_activos WHERE nombre = ? AND id <> ?",
-                       (datos["nombre"], principio_id)).fetchone():
-            raise ErrorNegocio(f"Ya existe otro principio activo llamado {datos['nombre']}.")
+        previo = con.execute("SELECT nombre FROM principios_activos "
+                             "WHERE sin_acentos(nombre) = sin_acentos(?) AND id <> ?",
+                             (datos["nombre"], principio_id)).fetchone()
+        if previo:
+            raise ErrorNegocio(f"Ya existe otro principio activo llamado {previo['nombre']}.")
         datos["actualizado"] = ahora()
         con.execute(f"UPDATE principios_activos SET {', '.join(f'{k} = ?' for k in datos)} WHERE id = ?",
                     list(datos.values()) + [principio_id])

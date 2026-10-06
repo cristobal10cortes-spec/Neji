@@ -18,6 +18,8 @@ def test_separar_principios():
     assert separar_principios("") == []
     with pytest.raises(ErrorNegocio):
         separar_principios("IBUPROFENO + ibuprofeno 400 mg")
+    with pytest.raises(ErrorNegocio):
+        separar_principios("ÁCIDO FÓLICO + acido folico")
 
 
 @pytest.fixture
@@ -127,3 +129,18 @@ def test_modulo_farmacia_en_setup(app):
     assert http.post("/api/setup", json={"negocio_nombre": "Farmacia", "usuario": "a", "password": "1234",
                                          "modulo_farmacia": True}).status_code == 200
     assert http.get("/api/config").get_json()["modulo_farmacia"] == "1"
+
+
+def test_busquedas_sin_importar_tildes(api):
+    api.post("/api/productos", {"codigo": "AF1", "descripcion": "ÁCIDO FÓLICO 1MG X 30", "precio_venta": 990,
+                                "principios": "ácido fólico 1 mg"}, esperado=201)
+    assert api.get("/api/productos?q=acido folico")["total"] == 1
+    assert api.get("/api/productos?q=%25acido")["total"] == 1
+    assert {p["nombre"] for p in api.get("/api/principios?q=folico")} == {"ÁCIDO FÓLICO"}
+    # Mismo principio aunque se escriba sin tildes: no se duplica
+    api.post("/api/productos", {"codigo": "AF2", "descripcion": "FOLIFER", "precio_venta": 1990,
+                                "principios": "ACIDO FOLICO"}, esperado=201)
+    assert len(api.get("/api/principios")) == 1
+    api.post("/api/principios", {"nombre": "acido folico"}, esperado=400)
+    api.post("/api/clientes", {"nombre": "José Muñoz"}, esperado=201)
+    assert len(api.get("/api/clientes?q=jose munoz")) == 1

@@ -2,7 +2,7 @@
 
 import re
 
-from ..db import ahora, filas
+from ..db import ahora, filas, sin_acentos
 from ..validar import ErrorNegocio
 
 # "PARACETAMOL 500 mg", "AMOXICILINA 250mg/5ml", "BETAMETASONA 0,05%", "VITAMINA D3 1000 UI"
@@ -54,9 +54,9 @@ def separar_principios(entrada):
             continue
         if len(nombre) > 120 or (conc and len(conc) > 40):
             raise ErrorNegocio("El nombre o la concentración del principio activo es demasiado largo.")
-        if nombre in vistos:
+        if sin_acentos(nombre) in vistos:
             raise ErrorNegocio(f"El principio activo {nombre} está repetido.")
-        vistos.add(nombre)
+        vistos.add(sin_acentos(nombre))
         resultado.append((nombre, conc))
     if len(resultado) > 20:
         raise ErrorNegocio("Un producto puede tener como máximo 20 principios activos.")
@@ -68,7 +68,9 @@ def obtener_o_crear(con, nombre):
     nombre = normalizar_nombre(nombre)
     if not nombre:
         raise ErrorNegocio("Falta el nombre del principio activo.")
-    row = con.execute("SELECT id FROM principios_activos WHERE nombre = ?", (nombre,)).fetchone()
+    # Sin importar tildes: "ÁCIDO FÓLICO" y "ACIDO FOLICO" son el mismo principio activo.
+    row = con.execute("SELECT id FROM principios_activos WHERE sin_acentos(nombre) = sin_acentos(?) "
+                      "ORDER BY id LIMIT 1", (nombre,)).fetchone()
     if row:
         return row["id"]
     fecha = ahora()

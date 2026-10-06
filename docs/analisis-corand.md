@@ -81,34 +81,82 @@ inventario.
 
 ## Problemas encontrados en CORAND.ERP
 
-Verificados contra el código y, cuando se pudo, ejecutándolo. Neji evita cada uno.
+Ocho agentes revisaron el código de forma independiente: cuatro lo analizaron y
+otros cuatro intentaron refutar cada hallazgo, ejecutando el programa cuando se
+pudo. Aquí van los confirmados más importantes. Neji evita todos los de esta lista.
 
-1. **Contraseña maestra escrita en el código.**
-   - Qué pasa: `validar_login` acepta el usuario `master` con una clave fija, que entra como
-     administrador en cualquier instalación.
-   - Además: las contraseñas de los usuarios se guardan sin cifrar.
-   - Cómo lo evita Neji: claves cifradas con hash y sin accesos fijos.
-2. **El total de la receta se trunca al pasarlo a la venta.**
-   - Qué pasa: `agregar_item_especial` usa `int(precio_total)`. La calculadora muestra
-     $8.821, pero la venta cobra $8.820 (y $9.003 en vez de $9.004).
-   - Cómo lo evita Neji: redondea siempre igual en la calculadora, el ticket y la venta.
-3. **La venta no guarda sus líneas.**
-   - Qué pasa: la reimpresión reconstruye el ticket desde el kardex con los precios
-     **actuales**, y la receta magistral (que no pasa por el kardex) aparece como
-     «ART. ESPECIAL».
-   - Cómo lo evita Neji: guarda cada línea con su precio, y la receta queda en el libro
-     de recetas.
-4. **La «Ganancia» del corte diario no es ganancia.**
-   - Qué pasa: se calcula como `total / 1,19`, que es el monto neto sin IVA, no la
-     utilidad.
-   - Cómo lo evita Neji: calcula la ganancia con el costo de cada producto.
-5. **Efectos adversos invisibles.** Se guardan en el vademécum pero no se muestran en
-   ninguna pantalla.
-6. **El aviso del vademécum exige el texto exacto** del principio activo.
-   - Qué pasa: «Paracetamol» y «PARACETAMOL» se tratan como distintos, y la semilla del
-     recetario usa minúsculas, mientras los formularios guardan en mayúsculas.
-   - Cómo lo evita Neji: unifica los nombres y no deja duplicarlos.
-7. **Python 3.12 obligatorio**, aunque esto no es evidente al instalarlo.
+### Seguridad
+
+1. **Clave maestra escrita en el código.**
+   - El usuario `master` con una clave fija entra como administrador en cualquier
+     instalación.
+   - Además se crea `admin`/`admin` por defecto, y las contraseñas se guardan sin cifrar.
+2. **Los roles no se aplican.**
+   - El rol se guarda al iniciar sesión, pero ninguna pantalla lo revisa.
+   - Un cajero puede crear administradores, cambiar precios o ver reportes.
+3. **SQL armado con texto** en Reportes y Corte diario. Hoy el riesgo es bajo, porque
+   el valor viene de una lista fija.
+
+### Ventas y caja
+
+4. **La venta no guarda sus líneas** (solo el total).
+   - La reimpresión reconstruye el ticket con los precios **actuales**.
+   - Mezcla ventas hechas en el mismo segundo.
+   - La receta magistral y el envío aparecen como «ART. ESPECIAL».
+5. **El stock solo se revisa al agregar al carrito.**
+   - Al cobrar se descuenta sin validar y puede quedar negativo.
+   - El modo «Devolución» se salta la revisión.
+6. **Devoluciones sin venta original**: sin autorización y siempre en efectivo, aunque se
+   haya pagado con tarjeta.
+7. **Pago mixto sin desglose.**
+   - Se pierde cuánto fue en efectivo y cuánto con tarjeta.
+   - El efectivo del corte no cuadra.
+8. **La «Ganancia» del corte diario es `total / 1,19`**: es la venta neta sin IVA, no la
+   utilidad.
+9. **Los tickets nunca se imprimen.** La impresora de cada caja no se configura en
+   ninguna pantalla, así que la función termina sin imprimir.
+10. **Un error de base de datos al cobrar puede cerrar el programa** con el cliente ya
+    pagado (no hay manejo de errores).
+
+### Inventario
+
+11. **«Ingresar / Sumar» pisa los datos de un producto existente** (precio, costo,
+    distribuidor, departamento y principio activo) si no se buscó el código con Enter.
+    Además cambia el vencimiento por la fecha de **hoy**.
+12. **«Modificar producto» guarda sobre el código escrito en ese momento.** Si se cambia
+    el código después de cargar otro producto, se modifica el equivocado.
+13. **Importar Excel:**
+    - Reimportar el mismo archivo **duplica el stock**.
+    - No deja kardex.
+    - Lee mal los montos con punto de miles.
+    - Si la columna no se llama exactamente `Principio_Activo`, **borra** el principio
+      activo de todos los productos.
+
+### Recetario magistral
+
+14. **El total se trunca al pasarlo a la venta** (`int()`): la calculadora muestra $8.821
+    y se cobran $8.820.
+15. **Duplicados entre mayúsculas y minúsculas.**
+    - La semilla trae «Paracetamol» y «Cápsulas»; lo que se guarda desde la pantalla queda
+      en MAYÚSCULAS («PARACETAMOL», «CÁPSULAS»).
+    - Quedan dos registros, y los de la semilla no se pueden editar ni borrar.
+16. **No hay conversión de unidades.** Vitamina C se cobra por gramo: si se escribe 500
+    pensando en mg, cobra mil veces más.
+17. **Enter envía la receta de inmediato** desde la dosis. Si la caja está cerrada, la
+    receta se pierde sin aviso.
+18. **Precio inicial de biotina: $1 por mcg** ($1.000.000 por gramo). Con 5.000 mcg × 30
+    cápsulas da $184.688. Conviene revisar ese precio al importar.
+
+### Vademécum
+
+19. **El vínculo producto ↔ ficha es por texto exacto.**
+    - Mayúsculas, tildes o un espacio de más lo rompen sin avisar.
+    - Un producto con dos principios activos («PARACETAMOL + CAFEINA») nunca muestra
+      aviso.
+20. **Efectos adversos invisibles.** Se guardan pero no se muestran en ninguna pantalla.
+21. **Las fichas no se pueden editar.** Hay que reescribir la clave exacta y todo el texto.
+22. **La búsqueda no reconoce tildes.** `%acido` no encuentra «ÁCIDO FÓLICO».
+23. **Python 3.12 obligatorio.** En 3.11 el programa no arranca.
 
 ## Funciones de CORAND que todavía no están en Neji
 

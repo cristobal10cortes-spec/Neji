@@ -4,7 +4,7 @@ from flask import jsonify, request
 
 from ..auth import usuario_actual
 from ..chile import formatear_rut, validar_rut
-from ..db import ahora, filas, get_db, transaccion
+from ..db import ahora, filas, get_db, sin_acentos, transaccion
 from ..servicios.caja import exigir_turno
 from ..servicios.clientes import credito_disponible, exigir_cliente, mover_saldo
 from ..servicios.ventas import pesos
@@ -54,8 +54,8 @@ def _con_credito(cliente):
 def listar_clientes():
     condiciones, params = ["activo = 1"], []
     for palabra in (request.args.get("q") or "").split()[:6]:
-        condiciones.append("(nombre LIKE ? OR rut LIKE ? OR telefono LIKE ?)")
-        params += [f"%{palabra}%", f"%{palabra}%", f"%{palabra}%"]
+        condiciones.append("(sin_acentos(nombre) LIKE ? OR rut LIKE ? OR telefono LIKE ?)")
+        params += [f"%{sin_acentos(palabra)}%", f"%{palabra}%", f"%{palabra}%"]
     if booleano(request.args.get("con_deuda", "")):
         condiciones.append("saldo > 0")
     clientes = get_db().execute(
