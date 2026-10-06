@@ -167,27 +167,154 @@ def puerto_libre(host, puerto):
 
 # --- Ventana ----------------------------------------------------------------------------------------
 
-def webview2_disponible():
-    """En Windows, True si la ventana usará WebView2 (Edge). Sin él pywebview caería a Internet
-    Explorer, que no ejecuta la interfaz de Neji."""
+CLAVE_WEBVIEW2 = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"  # Microsoft Edge WebView2 Runtime
+
+
+def desbloquear_archivos(carpeta):
+    """Quita la «marca de la web» (Zone.Identifier) a los archivos del programa.
+
+    Windows se la pone a todo lo que se descomprime de un .zip descargado, y .NET Framework se
+    niega a cargar esas DLL: la ventana no abre aunque WebView2 esté instalado.
+    """
+    if os.environ.get("NEJI_SIN_DESBLOQUEO"):  # solo para comprobar el problema en la compilación
+        return 0
+    quitados = 0
+    for raiz, _, archivos in os.walk(carpeta):
+        for nombre in archivos:
+            try:
+                os.remove(os.path.join(raiz, nombre) + ":Zone.Identifier")
+                quitados += 1
+            except OSError:
+                pass
+    return quitados
+
+
+def version_webview2():
+    """Versión de WebView2 registrada en Windows ("" si no aparece)."""
+    import winreg
+    for raiz, ruta in ((winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients"),
+                       (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\EdgeUpdate\Clients"),
+                       (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\EdgeUpdate\Clients")):
+        try:
+            with winreg.OpenKey(raiz, rf"{ruta}\{CLAVE_WEBVIEW2}") as clave:
+                version = str(winreg.QueryValueEx(clave, "pv")[0])
+        except OSError:
+            continue
+        if version and version != "0.0.0.0":
+            return version
+    return ""
+
+
+def carpeta_webview2():
+    """Carpeta de la versión más nueva de WebView2 instalada (con msedgewebview2.exe), o None."""
+    candidatas = []
+    for variable in ("ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"):
+        base = os.environ.get(variable)
+        if base:
+            candidatas += [exe.parent for exe in
+                           (Path(base) / "Microsoft" / "EdgeWebView" / "Application").glob("*/msedgewebview2.exe")]
+
+    def numero_version(carpeta):
+        return tuple(int(n) if n.isdigit() else 0 for n in carpeta.name.split("."))
+
+    return max(candidatas, key=numero_version) if candidatas else None
+
+
+def version_dotnet():
+    """Número «Release» de .NET Framework 4.x (0 si no está). 4.6.2 = 394802."""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full") as clave:
+            return int(winreg.QueryValueEx(clave, "Release")[0])
+    except (OSError, ValueError):
+        return 0
+
+
+def preparar_motor():
+    """Deja lista la ventana WebView2 (Edge). Devuelve (estado, detalle, datos):
+
+    - "ok": se puede abrir la ventana propia;
+    - "falta": WebView2 no está instalado (se puede instalar);
+    - "error": está, pero no se pudo cargar; el detalle dice por qué.
+
+    Sin WebView2 pywebview caería a Internet Explorer, que no ejecuta la interfaz de Neji.
+    """
     if sys.platform != "win32":
-        return True
+        return "ok", "", {}
+    datos = {"programa": str(Path(sys.executable).resolve().parent)}
+    if congelado():
+        datos["archivos_desbloqueados"] = desbloquear_archivos(datos["programa"])
+    datos["webview2_registro"] = version_webview2()
+    carpeta = carpeta_webview2()
+    datos["webview2_carpeta"] = str(carpeta or "")
+    datos["dotnet"] = version_dotnet()
+    if carpeta and not datos["webview2_registro"]:
+        # Instalado pero no registrado donde lo busca pywebview: se le indica la carpeta.
+        import webview
+        webview.settings["WEBVIEW2_RUNTIME_PATH"] = str(carpeta)
+    registro.info("Motor de la ventana: %s", datos)
+
+    if not datos["webview2_registro"] and not carpeta:
+        return "falta", "Microsoft Edge WebView2 no está instalado.", datos
+    if datos["dotnet"] < 394802:
+        return "error", "Falta .NET Framework 4.6.2 o superior (viene con Windows 10 y 11).", datos
+    try:
+        import clr  # noqa: F401 - el puente con .NET; se prueba aparte para conocer el error real
+    except Exception as e:  # noqa: BLE001
+        registro.exception("No se pudo cargar .NET Framework")
+        return "error", f"No se pudo cargar .NET: {type(e).__name__}: {e}", datos
     try:
         from webview.platforms import winforms
-        return winforms.renderer == "edgechromium"
-    except Exception:  # noqa: BLE001 - p. ej. falta .NET Framework 4.6.2
-        registro.exception("No se pudo iniciar el motor de la ventana")
+    except Exception as e:  # noqa: BLE001
+        registro.exception("No se pudo cargar el motor de la ventana")
+        return "error", f"{type(e).__name__}: {e}", datos
+    datos["motor"] = winforms.renderer
+    if winforms.renderer != "edgechromium":
+        return "error", (f"No se pudo usar WebView2 {datos['webview2_registro'] or carpeta} "
+                         f"(motor: {winforms.renderer})."), datos
+    return "ok", "", datos
+
+
+def instalar_webview2():
+    """Descarga y ejecuta el instalador oficial de Microsoft. True si terminó bien."""
+    import subprocess
+    destino = Path(tempfile.gettempdir()) / "MicrosoftEdgeWebview2Setup.exe"
+    try:
+        urllib.request.urlretrieve(WEBVIEW2_URL, destino)
+        resultado = subprocess.run([str(destino), "/install"], timeout=1200, check=False)
+    except (OSError, subprocess.SubprocessError):
+        registro.exception("No se pudo instalar WebView2")
         return False
+    registro.info("El instalador de WebView2 terminó con el código %s", resultado.returncode)
+    return resultado.returncode == 0
 
 
-def sin_webview2(url):
+def relanzar():
+    """Vuelve a abrir Neji POS (después de instalar WebView2)."""
+    import subprocess
+    programa = [sys.executable] if congelado() else [sys.executable, str(Path(__file__).resolve())]
+    subprocess.Popen(programa + sys.argv[1:], close_fds=True)
+
+
+def sin_ventana(url, estado, detalle, datos):
+    """La ventana propia no se pudo abrir: ofrece instalar WebView2 o abre el navegador.
+    Devuelve True si hay que volver a abrir Neji POS (se acaba de instalar WebView2)."""
     import webbrowser
-    registro.warning("Sin WebView2: se abre el navegador")
-    if mensaje("Este computador no tiene «Microsoft Edge WebView2», que Neji POS necesita para "
-               "abrirse en su propia ventana.\n\n¿Abrir la página para instalarlo? (es gratis y "
-               "tarda un minuto)\n\nMientras tanto Neji POS se abrirá en el navegador.", pregunta=True):
-        webbrowser.open(WEBVIEW2_URL)
+    registro.warning("Sin ventana propia (%s): %s", estado, detalle)
+    if estado == "falta":
+        if mensaje("Falta «Microsoft Edge WebView2», que Neji POS usa para abrirse en su propia "
+                   "ventana.\n\n¿Instalarlo ahora? Es gratis, de Microsoft, y tarda un par de "
+                   "minutos (necesita internet).", pregunta=True):
+            if instalar_webview2():
+                return True
+            mensaje("No se pudo instalar WebView2. Neji POS se abrirá en el navegador.", error=True)
+    else:
+        mensaje("No se pudo abrir la ventana propia de Neji POS, así que se abrirá en el navegador."
+                f"\n\nDetalle: {detalle}\n\nEl registro completo está en {datos / 'neji.log'}.",
+                error=True)
     webbrowser.open(url)
+    return False
 
 
 def textos(red):
@@ -227,16 +354,17 @@ def crear_ventana(webview, url, confirmar_cierre=True):
 
 
 def abrir_ventana(url, red=False):
-    """Abre la ventana y espera a que la cierren. Devuelve False si no hay WebView2."""
-    if not webview2_disponible():
-        return False
+    """Abre la ventana y espera a que la cierren. Si no se puede, devuelve (estado, detalle)."""
+    estado, detalle, _ = preparar_motor()
+    if estado != "ok":
+        return estado, detalle
     webview = configurar_webview()
     crear_ventana(webview, url)
     carpeta_webview().mkdir(parents=True, exist_ok=True)
     # private_mode=False: si no, se borran al cerrar la caja elegida y los tickets en espera.
     # storage_path propio y fuera de datos/ (con modo privado pywebview borraría esa carpeta).
     webview.start(private_mode=False, storage_path=str(carpeta_webview()), localization=textos(red))
-    return True
+    return None
 
 
 # --- Pruebas para la compilación ------------------------------------------------------------------
@@ -317,8 +445,9 @@ def prueba_ventana(carpeta, salida=None):
     datos = carpeta / "datos"
     datos.mkdir(parents=True, exist_ok=True)
     os.environ["NEJI_DATOS"] = str(datos)
-    resultado = {"ok": False, "webview2": webview2_disponible()}
-    if not resultado["webview2"]:
+    estado, detalle, motor = preparar_motor()
+    resultado = {"ok": False, "motor": estado, "detalle": detalle, **motor}
+    if estado != "ok":
         return informar(salida, resultado)
     servidor = iniciar_servidor(crear_app(), HOST_VENTANA, PUERTO)
     base = f"http://{HOST_VENTANA}:{PUERTO}"
@@ -365,7 +494,7 @@ def informar(salida, resultado):
 
 # --- Inicio -----------------------------------------------------------------------------------------
 
-def conectar(destino):
+def conectar(destino, datos):
     """Caja secundaria: abre la ventana apuntando al equipo principal."""
     base = "http://" + destino.removeprefix("http://").rstrip("/")
     if ":" not in base.removeprefix("http://"):
@@ -375,8 +504,9 @@ def conectar(destino):
                 "encendido, con Neji POS abierto y con «Permitir otras cajas» activado en "
                 "Configuración → Cajas.", error=True)
         return 1
-    if not abrir_ventana(base + "/"):
-        sin_webview2(base + "/")
+    fallo = abrir_ventana(base + "/")
+    if fallo and sin_ventana(base + "/", *fallo, datos):
+        relanzar()
     return 0
 
 
@@ -407,7 +537,7 @@ def main(argv=None):
     if args.impresion_directa:
         imprimir_directo()
     if args.conectar:
-        return conectar(args.conectar)
+        return conectar(args.conectar, datos)
 
     base = f"http://{HOST_VENTANA}:{args.puerto}"
     if responde_neji(base):
@@ -425,18 +555,23 @@ def main(argv=None):
         return 1
     equipo.anunciar(red, args.puerto, escritorio=True)
     servidor = iniciar_servidor(app, host, args.puerto)
+    volver_a_abrir = False
     try:
         if not esperar(base):
             mensaje(f"El servidor de Neji POS no respondió. Revisa {datos / 'neji.log'}.", error=True)
             return 1
-        if not abrir_ventana(base + "/", red):
-            sin_webview2(base + "/")
-            # En el navegador el programa sigue funcionando hasta que se responda este mensaje.
-            mensaje("Neji POS está funcionando en el navegador.\n\nPresiona Aceptar solo cuando "
-                    "termines de usarlo: al hacerlo, Neji POS se cerrará.")
+        fallo = abrir_ventana(base + "/", red)
+        if fallo:
+            volver_a_abrir = sin_ventana(base + "/", *fallo, datos)
+            if not volver_a_abrir:
+                # En el navegador el programa sigue funcionando hasta que se responda este mensaje.
+                mensaje("Neji POS está funcionando en el navegador.\n\nPresiona Aceptar solo cuando "
+                        "termines de usarlo: al hacerlo, Neji POS se cerrará.")
     finally:
         detener_servidor(servidor)
         registro.info("Neji POS cerrado")
+    if volver_a_abrir:
+        relanzar()
     return 0
 
 

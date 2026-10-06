@@ -64,3 +64,10 @@ exe = EXE(
     upx=False,
 )
 coll = COLLECT(exe, a.binaries, a.datas, name="NejiPOS", upx=False)
+
+# Junto al .exe: configuración de .NET que permite cargar las DLL aunque Windows las marque como
+# descargadas de internet (ver NejiPOS.exe.config).
+import shutil  # noqa: E402
+
+shutil.copy(os.path.join(RAIZ, "empaquetado", "NejiPOS.exe.config"),
+            os.path.join(DISTPATH, "NejiPOS", "NejiPOS.exe.config"))

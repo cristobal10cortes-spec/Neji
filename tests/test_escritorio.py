@@ -79,3 +79,32 @@ def test_datos_del_equipo_y_modo_red(api, monkeypatch):
     assert equipo.modo_red_configurado(ruta) is False
     api.put("/api/config", {"modo_red": True})
     assert equipo.modo_red_configurado(ruta) is True
+
+
+def test_desbloquear_quita_la_marca_de_descarga(tmp_path, monkeypatch):
+    # En Windows «archivo:Zone.Identifier» es un flujo alterno del archivo; aquí basta un archivo
+    # con ese nombre para probar que se quita solo la marca y nada más.
+    monkeypatch.delenv("NEJI_SIN_DESBLOQUEO", raising=False)
+    (tmp_path / "_internal").mkdir()
+    for nombre in ("NejiPOS.exe", "_internal/Python.Runtime.dll"):
+        (tmp_path / nombre).write_bytes(b"x")
+        (tmp_path / (nombre + ":Zone.Identifier")).write_text("[ZoneTransfer]\nZoneId=3")
+    assert escritorio.desbloquear_archivos(str(tmp_path)) == 2
+    restantes = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file())
+    assert restantes == ["NejiPOS.exe", "_internal/Python.Runtime.dll"]
+
+
+def test_busca_webview2_en_el_disco(tmp_path, monkeypatch):
+    for variable in ("ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"):
+        monkeypatch.setenv(variable, str(tmp_path / variable))
+    assert escritorio.carpeta_webview2() is None
+    for version in ("98.0.1108.56", "153.0.4234.48", "120.0.2210.91"):
+        carpeta = tmp_path / "ProgramFiles(x86)" / "Microsoft" / "EdgeWebView" / "Application" / version
+        carpeta.mkdir(parents=True)
+        (carpeta / "msedgewebview2.exe").write_bytes(b"")
+    assert escritorio.carpeta_webview2().name == "153.0.4234.48"
+
+
+def test_fuera_de_windows_el_motor_no_necesita_preparacion():
+    if sys.platform != "win32":
+        assert escritorio.preparar_motor() == ("ok", "", {})

@@ -86,19 +86,72 @@ jobs:
           $segunda = Get-Content (Join-Path $env:RUNNER_TEMP 'ventana-2.json') -Raw | ConvertFrom-Json
           if ($segunda.anterior -ne 'guardado') { throw 'La ventana no conservó lo guardado entre aperturas' }
 
+      - name: Prueba como descarga de internet (archivos marcados por Windows, ruta con tildes)
+        timeout-minutes: 8
+        run: |
+          # Al descomprimir un .zip descargado, Windows marca cada archivo (Zone.Identifier) y .NET
+          # se niega a cargar esas DLL. Se imita eso en una carpeta con espacios, tildes y eñe.
+          function Copia-Marcada($destino) {
+            New-Item -ItemType Directory -Force -Path $destino | Out-Null
+            Copy-Item -Recurse -Force 'dist\NejiPOS' $destino
+            $archivos = Get-ChildItem (Join-Path $destino 'NejiPOS') -Recurse -File
+            $archivos | ForEach-Object { Set-Content -LiteralPath $_.FullName -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3" }
+            Write-Host "$($archivos.Count) archivos marcados en $destino"
+            return (Join-Path $destino 'NejiPOS\NejiPOS.exe')
+          }
+          function Prueba-Ventana($exe, $nombre) {
+            $informe = Join-Path $env:RUNNER_TEMP "$nombre.json"
+            $carpeta = Join-Path $env:RUNNER_TEMP "datos-$nombre"
+            $p = Start-Process -FilePath $exe -ArgumentList '--prueba-ventana', "`"$carpeta`"", '--salida', "`"$informe`"" -Wait -PassThru
+            if (Test-Path $informe) { Write-Host (Get-Content $informe -Raw) } else { Write-Host 'No se generó el informe' }
+            return $p.ExitCode
+          }
+
+          # 1. Sin las protecciones nuevas (sin desbloquear y sin NejiPOS.exe.config): ¿falla como en el PC del usuario?
+          $exe = Copia-Marcada (Join-Path $env:RUNNER_TEMP 'Sin protección Ñandú')
+          Remove-Item (Join-Path (Split-Path $exe) 'NejiPOS.exe.config') -ErrorAction SilentlyContinue
+          $env:NEJI_SIN_DESBLOQUEO = '1'
+          $codigo = Prueba-Ventana $exe 'sin-proteccion'
+          Remove-Item Env:NEJI_SIN_DESBLOQUEO
+          Write-Host "Sin protecciones: código $codigo (distinto de 0 = se reproduce el problema)"
+
+          # 2. Con las protecciones: tiene que abrir.
+          $exe = Copia-Marcada (Join-Path $env:RUNNER_TEMP 'Descargas de Cristóbal Ñúñez')
+          $codigo = Prueba-Ventana $exe 'descargado'
+          if ($codigo -ne 0) { throw "La ventana no abrió con archivos marcados como descargados (código $codigo)" }
+
       - name: Revisar el paquete
         run: |
           if (Test-Path 'dist\NejiPOS\datos') { throw 'El paquete no debe llevar datos' }
+          if (-not (Test-Path 'dist\NejiPOS\NejiPOS.exe.config')) { throw 'Falta NejiPOS.exe.config junto al .exe' }
           "{0:N1} MB" -f ((Get-ChildItem dist\NejiPOS -Recurse | Measure-Object Length -Sum).Sum / 1MB)
 
       - name: Instalador (Inno Setup)
         run: |
+          # Instalador oficial de WebView2: el de Neji lo ejecuta solo si el equipo no lo tiene.
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile build\MicrosoftEdgeWebview2Setup.exe
           if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
             choco install innosetup -y --no-progress
             $env:Path += ";${env:ProgramFiles(x86)}\Inno Setup 6"
           }
           iscc empaquetado\NejiPOS.iss
           Get-Item dist\NejiPOS-Instalador.exe | Format-List Name, Length
+
+      - name: Probar el instalador (instalación silenciosa en una ruta con tildes)
+        timeout-minutes: 8
+        run: |
+          $destino = Join-Path $env:RUNNER_TEMP 'Programas de José Ñúñez\Neji POS'
+          $p = Start-Process -FilePath 'dist\NejiPOS-Instalador.exe' -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$destino`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "El instalador terminó con el código $($p.ExitCode)" }
+          foreach ($archivo in 'NejiPOS.exe', 'NejiPOS.exe.config', '_internal\python312.dll') {
+            if (-not (Test-Path (Join-Path $destino $archivo))) { throw "El instalador no dejó $archivo" }
+          }
+          $informe = Join-Path $env:RUNNER_TEMP 'instalado.json'
+          $carpeta = Join-Path $env:RUNNER_TEMP 'datos-instalado'
+          $p = Start-Process -FilePath (Join-Path $destino 'NejiPOS.exe') -ArgumentList '--prueba-ventana', "`"$carpeta`"", '--salida', "`"$informe`"" -Wait -PassThru
+          if (Test-Path $informe) { Get-Content $informe -Raw } else { Write-Host 'No se generó el informe' }
+          if ($p.ExitCode -ne 0) { throw "El programa instalado no abrió la ventana (código $($p.ExitCode))" }
 
       - name: Versión portátil
         run: Compress-Archive -Path dist\NejiPOS -DestinationPath dist\NejiPOS-portable.zip

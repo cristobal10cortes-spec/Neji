@@ -37,6 +37,8 @@ Neji POS se abre en **su propia ventana**, sin navegador ni ventana negra:
 
 - Funciona con **Microsoft Edge WebView2**, que ya viene en Windows 10 y 11. Si falta,
   el programa lo avisa y ofrece instalarlo.
+- Si en vez de su ventana se abre el navegador, el mensaje explica por qué. Si falta
+  WebView2, ofrece instalarlo, y el detalle queda en `neji.log`, dentro de la carpeta de datos.
 - **Tus datos no están en la carpeta del programa**, sino en
   `%LOCALAPPDATA%\NejiPOS\datos`; la ruta exacta aparece en
   **Configuración → Respaldos**. Por eso actualizar o desinstalar el programa no los toca.
@@ -356,6 +358,7 @@ py -3.12 -m pip install -r requirements-exe.txt pytest
 py -3.12 -m PyInstaller --noconfirm --clean empaquetado\NejiPOS.spec
 dist\NejiPOS\NejiPOS.exe --prueba          # prueba sin ventana: sale con 0 si todo responde
 iscc empaquetado\NejiPOS.iss                # instalador (Inno Setup 6) -> dist\NejiPOS-Instalador.exe
+                                            # (antes, deja build\MicrosoftEdgeWebview2Setup.exe)
 ```
 
 Para agregar una función nueva:
