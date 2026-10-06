@@ -210,6 +210,11 @@ def test_numeros_con_punto_de_miles_y_coma_decimal():
 def test_numeros_gigantes_se_rechazan(api, recetario):
     calcular(api, recetario, "Cápsulas", "1e20", [], esperado=400)
     calcular(api, recetario, "Cápsulas", 30, [("PARACETAMOL", "9" * 30)], esperado=400)
+    # cada valor dentro de su límite, pero el producto no cabe: error claro, no un 500
+    api.put(f"/api/principios/{recetario['pa']['BIOTINA']}", {"nombre": "BIOTINA", "unidad_receta": "mcg",
+                                                              "precio_receta": "1.000.000"})
+    r = calcular(api, recetario, "Cremas", "100.000", [("BIOTINA", "1.000.000.000", "g")], esperado=400)
+    assert "demasiado grande" in r["error"]
     forma = recetario["formas"]["Cápsulas"]
     api.put(f"/api/recetario/formas/{forma['id']}", {"nombre": "Cápsulas", "unidad": "unidad",
                                                     "precio_base": "1e30"}, esperado=400)
@@ -229,6 +234,8 @@ def test_plural_de_la_forma():
     assert unidad_plural(100, "ml", "ml") == "ml"
     assert unidad_plural(1, "unidad", "cápsula") == "cápsula"
     assert unidad_plural(20, "unidad", "óvulos") == "óvulos"
+    assert unidad_plural(30, "unidad", "cápsula de gelatina") == "cápsulas de gelatina"
+    assert unidad_plural(3, "unidad", "óvulo vaginal") == "óvulos vaginales"
 
 
 def test_libro_busca_por_rut_y_csv_sin_formulas(api, recetario):

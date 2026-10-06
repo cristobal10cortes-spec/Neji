@@ -1,6 +1,7 @@
 """Errores de negocio y lectura segura de datos de entrada."""
 
 import re
+from decimal import ROUND_HALF_UP, Decimal
 
 
 class ErrorNegocio(Exception):
@@ -24,7 +25,11 @@ def texto(datos, campo, requerido=False, nombre=None, max_largo=500):
 
 
 def entero(valor, nombre, minimo=None, requerido=True):
-    """Lee un monto en pesos. Acepta '1.990', '$1990', 1990 o '1990,00'."""
+    """Lee un monto en pesos. Acepta '1.990', '$1990', 1990, '1990,00' o '1.990,50'.
+
+    Solo una coma (o un punto) seguida de 1 o 2 cifras al final se lee como decimales, que se
+    redondean al peso; cualquier otro punto o coma separa miles ('20.000', '20,000').
+    """
     if valor is None or (isinstance(valor, str) and not valor.strip()):
         if requerido:
             raise ErrorNegocio(f"Falta {nombre}.")
@@ -35,8 +40,10 @@ def entero(valor, nombre, minimo=None, requerido=True):
         numero = valor
     else:
         limpio = re.sub(r"[$\s]", "", str(valor))
-        if re.fullmatch(r"-?\d+([.,]\d{1,2})", limpio):
-            numero = float(limpio.replace(",", "."))
+        if re.fullmatch(r"-?\d+\.\d{1,2}", limpio):
+            numero = _al_peso(limpio)
+        elif re.fullmatch(r"-?(\d{1,3}(\.\d{3})+|\d+),\d{1,2}", limpio):
+            numero = _al_peso(limpio.replace(".", "").replace(",", "."))
         else:
             limpio = limpio.replace(".", "").replace(",", "")
             if not re.fullmatch(r"-?\d+", limpio):
@@ -51,8 +58,12 @@ def entero(valor, nombre, minimo=None, requerido=True):
     return numero
 
 
+def _al_peso(texto):
+    return int(Decimal(texto).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+
+
 # "5.000" o "1.234.567" (con o sin ",5"): en Chile el punto separa miles y la coma es decimal.
-PATRON_MILES = re.compile(r"[1-9]\d{0,2}(\.\d{3})+(,\d+)?")
+PATRON_MILES = re.compile(r"-?[1-9]\d{0,2}(\.\d{3})+(,\d+)?")
 
 
 def texto_a_numero(texto):
@@ -62,6 +73,11 @@ def texto_a_numero(texto):
     if PATRON_MILES.fullmatch(s) or "," in s:
         s = s.replace(".", "").replace(",", ".")
     return s
+
+
+def numero_texto(valor):
+    """Número sin perder decimales ni pasar a notación científica: 1234.5678 -> '1234,5678'."""
+    return format(Decimal(str(valor)).normalize(), "f").replace(".", ",")
 
 
 def celda_csv(valor):

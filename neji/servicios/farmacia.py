@@ -4,11 +4,12 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from ..db import ahora, filas, sin_acentos
-from ..validar import ErrorNegocio
+from ..validar import ErrorNegocio, texto_a_numero
 
-# "PARACETAMOL 500 mg", "AMOXICILINA 250mg/5ml", "BETAMETASONA 0,05%", "VITAMINA D3 1000 UI"
+# "PARACETAMOL 500 mg", "AMOXICILINA 250mg/5ml", "BETAMETASONA 0,05%", "VITAMINA D3 1000 UI",
+# "PENICILINA BENZATINA 1.200.000 UI"
 _CONCENTRACION = re.compile(
-    r"^(?P<nombre>.+?)\s+(?P<conc>\d+(?:[.,]\d+)?\s*(?:mcg|ug|µg|mg|gr|g|ml|ui|%)"
+    r"^(?P<nombre>.+?)\s+(?P<conc>(?:\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?)\s*(?:mcg|ug|µg|mg|gr|g|ml|ui|%)"
     r"(?:\s*/\s*\d*(?:[.,]\d+)?\s*(?:ml|g|dosis|comp|tab|caps|gotas))?)$",
     re.IGNORECASE,
 )
@@ -120,10 +121,14 @@ def _numero_limpio(m):
 
 
 def concentracion_normalizada(texto):
-    """'500 mg', '500mg' y '0,5 g' -> '500mg'; '250 mg/5 ml' -> '250mg/5ml'. None si no hay dato."""
-    s = sin_acentos(texto or "").replace(" ", "").replace(",", ".")
+    """'500 mg', '500mg', '0,5 g' y '1.000 mcg'... -> en mg; '250 mg/5 ml' -> '250mg/5ml'.
+
+    Los números se leen a la chilena, igual que en el resto del sistema: '1.000 mg' son mil mg.
+    None si no hay dato."""
+    s = sin_acentos(texto or "").replace(" ", "")
     if not s:
         return None
+    s = re.sub(r"\d+(?:[.,]\d+)*", lambda m: texto_a_numero(m.group()), s)
     s = re.sub(r"(?<![a-z])(ug|µg|μg)", "mcg", s)
     s = re.sub(r"(?<=\d)grs?(?![a-z])", "g", s)
     m = re.fullmatch(r"(\d+(?:\.\d+)?)(mcg|mg|g)", s)

@@ -5,8 +5,8 @@ import { ir } from '../app.js';
 import { esAdmin, estado } from '../estado.js';
 import { cantidadLegible, imprimir, ticketReceta } from '../impresion.js';
 import {
-  aviso, avisoError, confirmar, debounce, fecha, formulario, h, hoy, kpi, modal, numero, pesos, pestanas,
-  selectorFechas, tabla, vaciar,
+  aviso, avisoError, confirmar, debounce, decimalTexto, fecha, formulario, h, hoy, kpi, modal, numero, pesos, pestanas,
+  selectorFechas, tabla, unidadPlural, vaciar,
 } from '../ui.js';
 import { formPrincipio, textoPrecioReceta } from './vademecum.js';
 
@@ -20,26 +20,10 @@ const MEDIDAS_FORMA = [
 const ESTADOS = { pendiente: ['aviso', 'Pendiente'], vendida: ['ok', 'Vendida'], anulada: ['mal', 'Anulada'] };
 const MAX_FILAS = 30;
 
-const SIN_TILDE = { á: 'a', é: 'e', í: 'i', ó: 'o', ú: 'u' };
-
-/** Igual que el servidor (servicios/recetario.py: _plural_palabra). */
-function pluralPalabra(p) {
-  if (p.length <= 2 || !/[aeiouáéíóú]/.test(p) || /[sx]$/.test(p)) return p; // g, ml, de, ya en plural
-  if (/[lnrdzj]$/.test(p)) {
-    const base = p.endsWith('z') ? `${p.slice(0, -1)}c` : p;
-    return `${base.slice(0, -2)}${base.slice(-2).replace(/[áéíóú]/g, (c) => SIN_TILDE[c])}es`; // jabón -> jabones
-  }
-  return `${p}s`;
-}
-
 /** 'cápsula blanda' -> 'cápsulas blandas', 'unidad' -> 'unidades', 'ml' -> 'ml'. */
-function plural(forma) {
-  const n = forma.nombre_unidad;
-  return forma.unidad === 'ml' ? n : n.split(' ').map(pluralPalabra).join(' ');
-}
+const plural = (forma) => unidadPlural(2, forma.unidad, forma.nombre_unidad);
 
 const etiquetaEstado = (e) => h(`span.etiqueta.${ESTADOS[e][0]}`, ESTADOS[e][1]);
-const decimalTexto = (n) => (n == null ? '' : String(n).replace('.', ','));
 
 /** Unidades en que se puede escribir la dosis de un principio activo en esta forma. */
 function unidadesDosis(pa, forma) {
@@ -270,14 +254,31 @@ async function vistaCalculadora(zona) {
       (incompleta.pa.value ? incompleta.dosis : incompleta.pa).focus();
       return null;
     }
-    await calcularAhora();
-    if (!resultado) {
-      aviso(errorCalc.textContent || 'Completa la receta antes de guardarla.', 'error');
+    // Se guarda exactamente lo que está en pantalla ahora: un cálculo automático que todavía no
+    // termina (o que termine después) no puede cambiar las filas que se envían.
+    const completas = filasCompletas();
+    const n = ++consulta;
+    errorCalc.classList.add('oculto');
+    try {
+      const r = await api.post('/api/recetario/calcular', datosReceta(completas));
+      if (n === consulta) {
+        resultado = r;
+        filasResultado = completas;
+        pintarResultado();
+      }
+    } catch (e) {
+      if (n === consulta) {
+        resultado = null;
+        errorCalc.textContent = e.message;
+        errorCalc.classList.remove('oculto');
+        pintarResultado();
+      }
+      aviso(e.message || 'Completa la receta antes de guardarla.', 'error');
       return null;
     }
     try {
       return await api.post('/api/recetario/recetas', {
-        ...datosReceta(filasResultado), paciente: paciente.value, rut_paciente: rut.value, medico: medico.value, indicaciones: indicaciones.value,
+        ...datosReceta(completas), paciente: paciente.value, rut_paciente: rut.value, medico: medico.value, indicaciones: indicaciones.value,
       });
     } catch (e) {
       avisoError(e);

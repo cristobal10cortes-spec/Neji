@@ -15,7 +15,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from ..chile import desglosar_iva, formatear_rut, validar_rut
 from ..db import ahora, fila, leer_config, transaccion
-from ..validar import ErrorNegocio, entero, texto, texto_a_numero
+from ..validar import ErrorNegocio, entero, numero_texto, texto, texto_a_numero
 
 UNIDADES_PRINCIPIO = ("mcg", "mg", "g", "ml", "UI")
 UNIDADES_DOSIS = UNIDADES_PRINCIPIO + ("%",)
@@ -122,6 +122,8 @@ def calcular(con, datos):
         por_unidad = convertir(dosis, unidad, pa["unidad_receta"], forma["unidad"], pa["nombre"])
         precio = Decimal(str(pa["precio_receta"]))
         subtotal = precio * por_unidad * cantidad
+        if subtotal > MAX_TOTAL:
+            raise ErrorNegocio(f"El subtotal de {pa['nombre']} es demasiado grande. Revisa la dosis y la cantidad.")
         suma += subtotal
         componentes.append({
             "principio_id": pa["id"],
@@ -139,6 +141,8 @@ def calcular(con, datos):
     precio_unidad = Decimal(str(forma["precio_unidad"]))
     costo_unidades = precio_unidad * cantidad
     neto_exacto = suma + costo_unidades + precio_base
+    if neto_exacto > MAX_TOTAL:
+        raise ErrorNegocio("El total de la receta es demasiado grande. Revisa dosis y cantidades.")
 
     config = leer_config(con)
     iva_porcentaje = int(config.get("iva_porcentaje") or 19)
@@ -179,17 +183,19 @@ def _plural_palabra(p):
     return p + "s"
 
 
+PREPOSICIONES = {"a", "al", "con", "de", "del", "en", "para", "por", "sin"}
+
+
 def unidad_plural(cantidad, unidad, nombre_unidad):
-    """'cápsula blanda' -> 'cápsulas blandas', 'jabón' -> 'jabones', 'g' -> 'g'."""
+    """'cápsula blanda' -> 'cápsulas blandas', 'jabón' -> 'jabones', 'g' -> 'g'.
+
+    Solo cambia lo que va antes de una preposición: 'cápsula de gelatina' -> 'cápsulas de gelatina'.
+    """
     if unidad == "ml" or cantidad == 1:
         return nombre_unidad
-    return " ".join(_plural_palabra(p) for p in nombre_unidad.split(" "))
-
-
-def numero_texto(valor):
-    """Número sin perder decimales ni pasar a notación científica: 1234.5678 -> '1234,5678'."""
-    d = Decimal(str(valor)).normalize()
-    return format(d, "f").replace(".", ",")
+    palabras = nombre_unidad.split(" ")
+    corte = next((i for i, p in enumerate(palabras) if p.lower() in PREPOSICIONES), len(palabras))
+    return " ".join([_plural_palabra(p) for p in palabras[:corte]] + palabras[corte:])
 
 
 def describir(receta):

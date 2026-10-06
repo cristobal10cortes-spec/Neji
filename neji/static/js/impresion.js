@@ -1,7 +1,7 @@
 // Impresión: ticket de venta, corte de caja, cotización y etiquetas con código de barras.
 
 import { estado } from './estado.js';
-import { fecha, h, numero, pesos } from './ui.js';
+import { fecha, h, numero, pesos, unidadPlural } from './ui.js';
 
 const NOMBRE_METODO = {
   efectivo: 'Efectivo', debito: 'Débito', credito: 'Crédito', transferencia: 'Transferencia', fiado: 'Fiado (crédito cliente)',
@@ -146,7 +146,7 @@ export function ticketReceta(r) {
     r.paciente ? h('div', `Paciente: ${r.paciente}${r.rut_paciente ? ' · ' + r.rut_paciente : ''}`) : null,
     r.medico ? h('div', `Médico: ${r.medico}`) : null,
     h('hr'),
-    h('div.g', `${r.forma} × ${numero(r.cantidad)} ${r.nombre_unidad}${r.cantidad === 1 || r.unidad === 'ml' ? '' : '(s)'}`),
+    h('div.g', `${r.forma} × ${numero(r.cantidad)} ${unidadPlural(r.cantidad, r.unidad, r.nombre_unidad)}`),
     r.componentes.length ? [
       h('div', 'Composición por unidad:'),
       r.componentes.map((x) => ln(`  ${x.nombre}`, `${numero(x.dosis)} ${x.unidad}`)),

@@ -76,6 +76,8 @@ Cada caja tiene su propio turno y su propio corte.
 - Búsqueda por descripción.
 - Artículo común (un producto sin registrar).
 - Venta **por unidad o a granel**: kilos con decimales, por ejemplo `0,755`.
+- **Números a la chilena** en todas las pantallas y en los CSV: la coma es decimal y el
+  punto separa miles (`5.000` son cinco mil; `1,25` es uno coma veinticinco).
 - **Precio de mayoreo**: con `F11`, o automático desde cierta cantidad.
 - **Varios tickets abiertos** a la vez (`F6`), para atender a otro cliente
   mientras el primero busca algo.

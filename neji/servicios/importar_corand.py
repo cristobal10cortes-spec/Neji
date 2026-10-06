@@ -16,6 +16,7 @@ from ..db import ahora, sin_acentos, transaccion
 from ..validar import ErrorNegocio, fecha_flexible
 from .farmacia import guardar_principios_producto, normalizar_nombre, obtener_o_crear, separar_principios
 from .inventario import mover_existencia
+from .recetario import PREPOSICIONES
 
 UNIDADES_PRINCIPIO = {"mg": "mg", "mcg": "mcg", "ug": "mcg", "µg": "mcg", "g": "g", "gr": "g",
                       "grs": "g", "gramo": "g", "gramos": "g", "ml": "ml", "ui": "UI"}
@@ -31,20 +32,30 @@ CONFIG_NEGOCIO = {
 OPCIONES = ("productos", "existencias", "vademecum", "recetario", "negocio")
 
 
+def _singular_palabra(p):
+    """Inverso de recetario._plural_palabra para las medidas habituales."""
+    for plural, singular in (("ones", "ón"), ("ales", "al"), ("ades", "ad"), ("ces", "z")):
+        if p.endswith(plural) and len(p) > len(plural) + 1:
+            return p[:-len(plural)] + singular
+    return p[:-1] if p.endswith("s") and len(p) > 3 else p
+
+
 def unidad_forma(texto):
     """'Cápsulas' -> ('unidad', 'cápsula'), 'Gramos' -> ('g', 'gramo'), 'Mililitros' -> ('ml', 'ml')."""
-    t = " ".join((texto or "").split()).lower().rstrip(".")
+    t = " ".join((texto or "").split()).lower().replace(".", "")
     if t in ("g", "gr", "grs") or t.startswith("gram"):
         return "g", "gramo"
-    if t in ("ml", "cc", "cm3", "cm³") or t.startswith(("mili", "ml")):
+    if t in ("ml", "cc", "cm3", "cm³") or t.startswith(("mililit", "ml")):
         return "ml", "ml"
     if t in ("u", "un", "und", "uds", "unid", "unidad", "unidades"):
         return "unidad", "unidad"
-    if t.startswith(("cáps", "caps", "cap")):
+    if t in ("cap", "caps", "cáps", "capsula", "capsulas", "cápsula", "cápsulas"):
         return "unidad", "cápsula"
     if not t:
         return "unidad", "unidad"
-    return "unidad", (t[:-1] if t.endswith("s") and len(t) > 3 else t)[:30]
+    palabras = t.split(" ")
+    corte = next((i for i, p in enumerate(palabras) if p in PREPOSICIONES), len(palabras))
+    return "unidad", " ".join([_singular_palabra(p) for p in palabras[:corte]] + palabras[corte:])[:30]
 
 
 def nombre_forma(texto):
@@ -107,7 +118,7 @@ def importar(con, ruta, usuario_id, opciones=None):
             if opciones["recetario"] and "recetario_insumos" in tablas:
                 _precios_recetario(con, origen, r, avisar, cache)
             if opciones["recetario"] and "recetario_formulas" in tablas:
-                _formas(con, origen, r)
+                _formas(con, origen, r, avisar)
             if opciones["productos"] and "inventario" in tablas:
                 _productos(con, origen, r, avisar, usuario_id, opciones["existencias"], cache)
             if opciones["negocio"] and "configuracion" in tablas:
@@ -173,13 +184,16 @@ def _precios_recetario(con, origen, r, avisar, cache):
     r["precios_recetario"] = len(vistos)
 
 
-def _formas(con, origen, r):
+def _formas(con, origen, r, avisar):
     existentes = {f["nombre"].casefold(): f["id"] for f in con.execute("SELECT id, nombre FROM formas_magistrales")}
     for fila in origen.execute("SELECT nombre, precio_base, unidad, precio_unidad FROM recetario_formulas"):
         nombre = nombre_forma(fila["nombre"])
         if not nombre:
             continue
         unidad, nombre_unidad = unidad_forma(fila["unidad"])
+        if nombre_unidad.startswith(("miligram", "mg")):
+            avisar(f"{nombre}: la medida «{fila['unidad']}» no es gramos ni ml; quedó por unidad. "
+                   "Revísala en Recetario → Configuración.")
         valores = (unidad, nombre_unidad, max(_numero(fila["precio_base"]), 0),
                    max(_numero(fila["precio_unidad"]), 0))
         if nombre.casefold() in existentes:
@@ -238,6 +252,10 @@ def _productos(con, origen, r, avisar, usuario_id, actualizar_existencias, cache
         }
         existente = con.execute("SELECT * FROM productos WHERE codigo = ?", (codigo,)).fetchone()
         if existente:
+            if not existente["activo"]:
+                # Producto borrado en Neji que vuelve con la importación: parte sin sus principios
+                # activos anteriores (si CORAND trae alguno, se asigna más abajo).
+                con.execute("DELETE FROM producto_principios WHERE producto_id = ?", (existente["id"],))
             con.execute(f"UPDATE productos SET {', '.join(f'{k} = ?' for k in valores)}, activo = 1, "
                         "actualizado = ? WHERE id = ?", list(valores.values()) + [fecha, existente["id"]])
             producto_id = existente["id"]

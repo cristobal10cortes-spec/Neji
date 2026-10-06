@@ -11,7 +11,7 @@ from ..servicios.farmacia import (SQL_PRINCIPIOS_TEXTO, alternativas, guardar_pr
                                   principios_de_producto)
 from ..servicios.inventario import mover_existencia
 from ..validar import (ErrorNegocio, booleano, cantidad, celda_csv, entero, fecha_flexible,
-                       leer_celda_csv, texto)
+                       leer_celda_csv, numero_texto, texto)
 from . import bp, datos_json, sin_costos
 
 COLUMNAS_CSV = ["codigo", "descripcion", "departamento", "tipo_venta", "precio_costo",
@@ -253,7 +253,7 @@ def _numero_csv(valor):
     if valor is None:
         return ""
     if isinstance(valor, float):
-        return f"{valor:g}".replace(".", ",")
+        return numero_texto(valor)  # sin redondear a 6 cifras: el CSV se puede reimportar tal cual
     return str(valor)
 
 

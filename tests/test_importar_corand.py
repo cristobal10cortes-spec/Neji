@@ -189,8 +189,22 @@ def test_vademecum_combinado_y_duplicados_con_tilde(api, tmp_path, corand):
     ("Mililitros", ("ml", "ml")), ("cc", ("ml", "ml")), ("CM3", ("ml", "ml")),
     ("Unidades", ("unidad", "unidad")), ("un.", ("unidad", "unidad")), ("U", ("unidad", "unidad")),
     ("Papelillos", ("unidad", "papelillo")), ("", ("unidad", "unidad")),
+    ("c.c.", ("ml", "ml")), ("Miligramos", ("unidad", "miligramo")), ("Jabones", ("unidad", "jabón")),
+    ("Óvulos vaginales", ("unidad", "óvulo vaginal")), ("Sobres", ("unidad", "sobre")),
+    ("Cápsulas de gelatina", ("unidad", "cápsula de gelatina")),
 ])
 def test_unidad_forma(texto, esperado):
     from neji.servicios.importar_corand import unidad_forma
 
     assert unidad_forma(texto) == esperado
+
+
+def test_producto_borrado_que_vuelve_sin_principio_anterior(api, turno, corand):
+    p = api.post("/api/productos", {"codigo": "7800003", "descripcion": "IBUPROFENO 400 MG", "precio_venta": 1,
+                                    "existencia": 5, "principios": "IBUPROFENO 400 mg"}, esperado=201)
+    api.post("/api/ventas", {"caja_id": 1, "items": [{"producto_id": p["id"], "cantidad": 1}]}, esperado=201)
+    api.delete(f"/api/productos/{p['id']}")   # con ventas: queda desactivado
+    subir(api, corand)
+    vuelto = api.get("/api/productos/codigo/7800003")   # en CORAND es CREMA HIDRATANTE, sin principio activo
+    assert vuelto["id"] == p["id"] and vuelto["descripcion"] == "CREMA HIDRATANTE"
+    assert vuelto["principios"] is None

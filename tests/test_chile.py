@@ -32,3 +32,30 @@ def test_desglose_iva():
     assert desglosar_iva(1190) == (1000, 190)
     neto, iva = desglosar_iva(1590)
     assert neto + iva == 1590 and neto == 1336
+
+
+@pytest.mark.parametrize("texto,esperado", [
+    ("1.990", 1990), ("$1990", 1990), ("1990,00", 1990), ("1.990,00", 1990), ("$1.990,5", 1991),
+    ("20.000", 20000), ("20,000", 20000), ("1.000.000", 1000000), ("1.5", 2), ("-2.000", -2000),
+])
+def test_montos_a_la_chilena(texto, esperado):
+    from neji.validar import entero
+
+    assert entero(texto, "monto") == esperado
+
+
+@pytest.mark.parametrize("texto,esperado", [
+    ("5.000", 5000), ("0,755", 0.755), ("1.5", 1.5), ("1.234,5", 1234.5), ("-2.000", -2000), ("0.500", 0.5),
+])
+def test_cantidades_a_la_chilena(texto, esperado):
+    from neji.validar import cantidad
+
+    assert cantidad(texto) == esperado
+
+
+def test_numero_texto_no_redondea():
+    from neji.validar import numero_texto
+
+    assert numero_texto(1234.567) == "1234,567"
+    assert numero_texto(1234567.0) == "1234567"
+    assert numero_texto(0.000001) == "0,000001"

@@ -58,21 +58,54 @@ export function hoy(desplazamientoDias = 0) {
   return `${d.getFullYear()}-${dos(d.getMonth() + 1)}-${dos(d.getDate())}`;
 }
 
-/** '1.990' / '$1990' -> 1990 */
+/**
+ * Monto en pesos, igual que el servidor (validar.entero): '1.990', '$1990', '20,000' -> 20000.
+ * Solo una coma o un punto con 1 o 2 cifras al final son decimales y se redondean: '1.990,50' -> 1991.
+ */
 export function leerMonto(valor) {
   if (typeof valor === 'number') return Math.round(valor);
-  const limpio = String(valor ?? '').replace(/[^\d-]/g, '');
+  const s = String(valor ?? '').replace(/[\s$]/g, '');
+  if (/^-?\d+\.\d{1,2}$/.test(s)) return Math.round(Number(s));
+  if (/^-?(\d{1,3}(\.\d{3})+|\d+),\d{1,2}$/.test(s)) return Math.round(Number(s.replace(/\./g, '').replace(',', '.')));
+  const limpio = s.replace(/[^\d-]/g, '');
   return limpio ? parseInt(limpio, 10) : 0;
 }
 
-/** '0,755' / '1.5' -> número con hasta 3 decimales */
+/**
+ * Cantidad con hasta 3 decimales, igual que el servidor (validar.texto_a_numero): la coma es decimal y
+ * el punto separa miles cuando va en grupos de tres ('5.000' son cinco mil, '0,755' y '1.5' llevan decimales).
+ */
 export function leerCantidad(valor) {
   if (typeof valor === 'number') return valor;
   let s = String(valor ?? '').trim().replace(/[\s$]/g, '');
-  // Igual que el servidor (validar.texto_a_numero): '5.000' son cinco mil, '0,5' es medio, '1.5' es uno y medio.
-  if (s.includes(',') || /^[1-9]\d{0,2}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '').replace(',', '.');
-  const n = parseFloat(s);
-  return Number.isFinite(n) ? Math.round(n * 1000) / 1000 : NaN;
+  if (s.includes(',') || /^-?[1-9]\d{0,2}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '').replace(/,/g, '.');
+  if (!/^-?(\d+\.?\d*|\.\d+)$/.test(s)) return NaN;
+  return Math.round(Number(s) * 1000) / 1000;
+}
+
+/** Número para escribir en un campo: 2.125 -> '2,125' (así leerCantidad lo vuelve a leer igual). */
+export const decimalTexto = (n) => (n == null ? '' : String(n).replace('.', ','));
+
+const PREPOSICIONES = new Set(['a', 'al', 'con', 'de', 'del', 'en', 'para', 'por', 'sin']);
+const SIN_TILDE = { á: 'a', é: 'e', í: 'i', ó: 'o', ú: 'u' };
+
+/** Igual que el servidor (servicios/recetario.py: _plural_palabra). */
+function pluralPalabra(p) {
+  if (p.length <= 2 || !/[aeiouáéíóú]/.test(p) || /[sx]$/.test(p)) return p; // g, ml, de, ya en plural
+  if (/[lnrdzj]$/.test(p)) {
+    const base = p.endsWith('z') ? `${p.slice(0, -1)}c` : p;
+    return `${base.slice(0, -2)}${base.slice(-2).replace(/[áéíóú]/g, (c) => SIN_TILDE[c])}es`; // jabón -> jabones
+  }
+  return `${p}s`;
+}
+
+/** 'cápsula blanda' -> 'cápsulas blandas', 'cápsula de gelatina' -> 'cápsulas de gelatina', 'ml' -> 'ml'. */
+export function unidadPlural(cantidad, unidad, nombre) {
+  if (unidad === 'ml' || Number(cantidad) === 1) return nombre;
+  const palabras = nombre.split(' ');
+  let corte = palabras.findIndex((p) => PREPOSICIONES.has(p.toLowerCase()));
+  if (corte < 0) corte = palabras.length;
+  return [...palabras.slice(0, corte).map(pluralPalabra), ...palabras.slice(corte)].join(' ');
 }
 
 /** Importe de una línea igual que el servidor: cantidad (3 decimales) x precio, redondeo 0,5 hacia arriba. */
@@ -229,7 +262,9 @@ export function formulario({ titulo, campos, aceptar = 'Guardar', ancho = '', al
       } else {
         const tipos = { password: 'password', email: 'email', fecha: 'date' };
         const modo = { monto: 'numeric', cantidad: 'decimal' }[c.tipo];
-        control = h('input', { ...comunes, type: tipos[c.tipo] || 'text', inputmode: modo, value: c.valor ?? '', autocomplete: c.tipo === 'password' ? 'new-password' : 'off' });
+        // Una cantidad numérica se muestra con coma decimal: con punto, '2.125' se leería como 2125.
+        const valor = c.tipo === 'cantidad' && typeof c.valor === 'number' ? decimalTexto(c.valor) : (c.valor ?? '');
+        control = h('input', { ...comunes, type: tipos[c.tipo] || 'text', inputmode: modo, value: valor, autocomplete: c.tipo === 'password' ? 'new-password' : 'off' });
       }
       entradas[c.nombre] = control;
       if (c.tipo === 'check') {

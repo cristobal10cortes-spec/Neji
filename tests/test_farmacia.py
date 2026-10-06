@@ -154,6 +154,11 @@ def test_concentracion_normalizada():
     assert n("250 mg / 5 ml") == n("250mg/5ml")
     assert n("0,050%") == n("0.05%")
     assert n("") is None and n(None) is None
+    # números a la chilena: '1.000 mg' son mil mg, no 1 mg
+    assert n("1.000 mg") == n("1 g") == n("1000 mg") != n("1 mg")
+    assert n("100.000 UI") == n("100000 UI") != n("100 UI")
+    assert n("1.000 mcg") == n("1 mg")
+    assert separar_principios("PENICILINA BENZATINA 1.200.000 UI") == [("PENICILINA BENZATINA", "1.200.000 UI")]
 
 
 def test_alternativas_distinguen_la_dosis(api, farmacia):
@@ -174,11 +179,15 @@ def test_alternativas_distinguen_la_dosis(api, farmacia):
     assert orden == sorted(orden, key=["misma_dosis", "mismo_principio", "comparte"].index)
 
 
-def test_producto_reactivado_parte_sin_principios(api, farmacia):
+def test_producto_reactivado_parte_sin_principios(api, turno, farmacia):
+    # con ventas, borrar solo lo desactiva (queda en el historial) y el código puede volver a usarse
+    api.post("/api/ventas", {"caja_id": 1, "items": [{"producto_id": farmacia["otro"]["id"], "cantidad": 1}]},
+             esperado=201)
     api.delete(f"/api/productos/{farmacia['otro']['id']}")
     api.post("/api/productos", {"codigo": "7800004", "descripcion": "OTRO PRODUCTO", "precio_venta": 100},
              esperado=201)
-    assert api.get("/api/productos/codigo/7800004")["principios"] is None
+    reactivado = api.get("/api/productos/codigo/7800004")
+    assert reactivado["id"] == farmacia["otro"]["id"] and reactivado["principios"] is None
 
 
 def test_csv_exportado_no_ejecuta_formulas_y_se_reimporta(api):
@@ -198,3 +207,27 @@ def test_fecha_flexible_con_hora():
 
     assert fecha_flexible("2027-01-31 00:00:00", "vencimiento") == "2027-01-31"
     assert fecha_flexible("2027-01-31T10:00", "vencimiento") == "2027-01-31"
+
+
+def test_csv_conserva_decimales(api):
+    api.post("/api/productos", {"codigo": "G1", "descripcion": "QUESO GRANEL", "precio_venta": 9990,
+                                "tipo_venta": "granel", "existencia": 1234.567, "maximo": 1234567},
+             esperado=201)
+    exportado = api.http.get("/api/productos/exportar").get_data(as_text=True)
+    assert "1234,567" in exportado and "1234567" in exportado and "e+" not in exportado
+    r = api.http.post("/api/productos/importar",
+                      data={"archivo": (io.BytesIO(exportado.encode("utf-8")), "p.csv")},
+                      content_type="multipart/form-data").get_json()
+    assert r["actualizados"] == 1
+    p = api.get("/api/productos/codigo/G1")
+    assert (p["existencia"], p["maximo"]) == (1234.567, 1234567)
+
+
+def test_csv_con_montos_de_excel(api):
+    csv = "codigo;descripcion;precio_costo;precio_venta;existencia\nC1;Leche;1.200,00;1.990,00;1.000,00\n"
+    r = api.http.post("/api/productos/importar",
+                      data={"archivo": (io.BytesIO(csv.encode("utf-8")), "p.csv")},
+                      content_type="multipart/form-data").get_json()
+    assert r["creados"] == 1
+    p = api.get("/api/productos/codigo/C1")
+    assert (p["precio_costo"], p["precio_venta"], p["existencia"]) == (1200, 1990, 1000)
