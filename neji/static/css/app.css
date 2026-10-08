@@ -148,12 +148,47 @@ tfoot td { font-weight: 700; background: #f7f9fa; }
 .kpi.destacado .titulo { color: #cdeee9; }
 
 /* --- Pantalla de ventas -------------------------------------------------- */
-.ventas { display: flex; flex-direction: column; gap: .6rem; height: calc(100vh - 64px - 2rem); min-height: 520px; }
-.captura { display: flex; gap: .5rem; align-items: stretch; flex-wrap: wrap; }
-.captura .codigo { flex: 1 1 380px; display: flex; gap: .5rem; align-items: center; }
-.captura .codigo input { font-size: 1.3rem; min-height: 50px; font-family: var(--mono); }
-.captura .codigo input::placeholder { font: 1rem system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+main:has(> div > .ventas) { max-width: none; }
+.ventas { display: flex; flex-direction: column; gap: .6rem; height: calc(100vh - 64px - 2rem); min-height: 440px; }
+.venta-cuerpo { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: .75rem; }
+.venta-cuerpo.con-ficha { grid-template-columns: clamp(220px, 21vw, 360px) minmax(0, 1fr); }
+.venta-principal { display: flex; flex-direction: column; gap: .55rem; min-width: 0; min-height: 0; container-type: inline-size; }
+
+/* Buscador arriba y los atajos en una fila pareja debajo, del mismo ancho (como en eleventa). */
+.captura, .teclas { width: 100%; max-width: 1100px; }
+.captura { position: relative; display: flex; gap: .5rem; align-items: center; }
+.captura label { font-weight: 600; color: var(--suave); white-space: nowrap; }
+.captura input { flex: 1; min-width: 0; font-size: 1.25rem; min-height: 48px; font-family: var(--mono); }
+.captura input::placeholder { font: 1rem system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+.captura > .btn { min-height: 48px; }
+/* Los 7 crecen parejo y ninguno se achica más que su texto; si no caben en una fila, van en dos filas de 4. */
+.teclas { display: flex; gap: .4rem; }
+.teclas .btn { flex: 1 1 0; min-width: max-content; padding: .4rem .3rem; gap: .3rem; font-size: .88rem; }
+.teclas .btn span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+@container (max-width: 780px) {
+  .teclas { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .teclas .btn { min-width: 0; }
+}
+@container (max-width: 700px) {
+  .captura label { display: none; }
+}
 .atajos { display: flex; gap: .35rem; flex-wrap: wrap; }
+
+/* Resultados del buscador: celdas de código, nombre, precio y existencia. */
+.resultados {
+  position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; right: 0;
+  background: var(--panel); border: 1px solid var(--borde); border-radius: 10px; box-shadow: var(--sombra);
+  max-height: min(62vh, 520px); overflow: auto;
+}
+.tabla-resultados td { padding: .4rem .65rem; }
+.tabla-resultados td.mono { white-space: nowrap; }
+.resultados-pie {
+  position: sticky; bottom: 0; display: flex; justify-content: space-between; gap: .75rem; flex-wrap: wrap;
+  padding: .45rem .75rem; background: #f7f9fa; border-top: 1px solid var(--borde); font-size: .82rem; color: var(--suave);
+}
+.resultados-pie b { color: var(--texto); }
+.resultados .vacio { padding: 1.2rem; margin: 0; }
+
 .tickets { display: flex; gap: .3rem; align-items: center; flex-wrap: wrap; }
 .tickets button {
   border: 1px solid var(--borde); background: #e9edf1; padding: .35rem .8rem; border-radius: 8px 8px 0 0;
@@ -163,21 +198,59 @@ tfoot td { font-weight: 700; background: #f7f9fa; }
 .ticket-tabla { flex: 1; min-height: 160px; }
 .ticket-tabla td.desc { width: 45%; }
 .ticket-tabla .cant { font-weight: 700; }
+
 .pie-venta {
-  display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
-  background: var(--panel); border: 1px solid var(--borde); border-radius: 10px; padding: .75rem 1rem;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 1rem; align-items: center;
+  background: var(--panel); border: 1px solid var(--borde); border-radius: 10px; padding: .7rem 1rem;
 }
-.total-grande { text-align: right; margin-left: auto; }
+.pie-acciones { display: flex; flex-direction: column; gap: .45rem; min-width: 0; }
+.total-grande { text-align: right; }
 .total-grande .etq { font-size: .85rem; color: var(--suave); text-transform: uppercase; }
 .total-grande .monto { font-size: 2.6rem; font-weight: 800; color: var(--primario); line-height: 1; font-variant-numeric: tabular-nums; }
 .cliente-ticket { display: flex; align-items: center; gap: .4rem; }
+.cliente-ticket:empty { display: none; }
+/* Cancelar ticket va justo encima de Cobrar. */
+.cobrar { display: flex; flex-direction: column; gap: .4rem; min-width: 190px; }
+.cobrar .btn { width: 100%; }
+.cobrar .btn.peligro { min-height: 34px; padding: .3rem .8rem; }
 
+/* Ficha del vademécum (a la izquierda del buscador y del ticket). */
 .vademecum {
-  display: flex; gap: .75rem; align-items: center; justify-content: space-between; flex-wrap: wrap;
-  background: #fff8e1; border: 1px solid #f3d27a; color: #5c4400; border-radius: 10px; padding: .55rem .8rem;
+  display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  background: var(--panel); border: 1px solid var(--borde); border-radius: 10px;
 }
-.vademecum-textos { flex: 1 1 360px; font-size: .92rem; }
+.ficha-titulo {
+  display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+  padding: .55rem .8rem; background: var(--primario-claro); color: var(--primario-oscuro);
+  font-weight: 700; border-bottom: 1px solid var(--borde);
+}
+.ficha-titulo .etiqueta { background: rgba(255, 255, 255, .75); color: var(--primario-oscuro); }
+.ficha-titulo .etiqueta.mal { background: var(--peligro-claro); color: var(--peligro); }
+.ficha-cuerpo { flex: 1; min-height: 0; overflow: auto; padding: .75rem .8rem; display: flex; flex-direction: column; gap: .75rem; font-size: .9rem; }
+.ficha-cuerpo > p, .ficha-vacia p { margin: 0; }
+.ficha-vacia { color: var(--suave); display: flex; flex-direction: column; gap: .5rem; }
+.ficha-nombre { font-weight: 700; font-size: 1rem; line-height: 1.25; margin-bottom: .45rem; }
+.celdas { display: grid; grid-template-columns: 1fr 1fr; gap: .35rem; }
+.celda { display: flex; flex-direction: column; min-width: 0; background: #f7f9fa; border: 1px solid #edf0f3; border-radius: 8px; padding: .3rem .5rem; }
+.celda.ancha { grid-column: 1 / -1; }
+.celda .t { font-size: .7rem; text-transform: uppercase; letter-spacing: .3px; color: var(--suave); }
+.celda .v { font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.celda.mono .v { font-family: var(--mono); font-weight: 600; }
+.celda.rojo .v { color: var(--peligro); }
+.ficha-pa { border-top: 1px solid var(--borde); padding-top: .65rem; display: flex; flex-direction: column; gap: .35rem; }
+.ficha-pa p { margin: 0; }
+.pa-nombre { display: flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
+.pa-botones { display: flex; gap: .35rem; margin-left: auto; }
+.ficha-pa dl { margin: 0; }
+.ficha-pa dt { font-size: .72rem; text-transform: uppercase; letter-spacing: .3px; color: var(--suave); font-weight: 600; margin-top: .4rem; }
+.ficha-pa dd { margin: .1rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ficha-pie { padding: .5rem .6rem; border-top: 1px solid var(--borde); display: flex; }
+.ficha-pie .btn { flex: 1; }
 .ayuda.pa { color: #0b5953; }
+
+/* F10: buscador grande con la ficha al lado */
+.busqueda-con-ficha { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: .75rem; align-items: start; }
+.busqueda-con-ficha .vademecum, .busqueda-con-ficha .lista-busqueda { max-height: 56vh; }
 
 /* --- Modales y avisos ---------------------------------------------------- */
 .fondo-modal {
@@ -188,6 +261,7 @@ tfoot td { font-weight: 700; background: #f7f9fa; }
   background: var(--panel); border-radius: 12px; box-shadow: var(--sombra); width: 100%; max-width: 520px;
   display: flex; flex-direction: column; max-height: 88vh;
 }
+.modal:focus { outline: none; }
 .modal.ancho { max-width: 860px; }
 .modal.muy-ancho { max-width: 1100px; }
 .modal header { padding: .9rem 1.1rem; border-bottom: 1px solid var(--borde); display: flex; align-items: center; gap: .5rem; }
@@ -218,6 +292,7 @@ tfoot td { font-weight: 700; background: #f7f9fa; }
 
 /* Búsqueda */
 .lista-busqueda { max-height: 50vh; overflow: auto; }
+.lista-busqueda .tabla-resultados th { background: #f7f9fa; }
 
 /* Login */
 .centro { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
@@ -262,12 +337,38 @@ tfoot td { font-weight: 700; background: #f7f9fa; }
 @media (max-width: 1500px) {
   .sesion .nombre-usuario { display: none; }
 }
+@media (max-width: 900px) {
+  .ventas { height: auto; }
+  .venta-cuerpo.con-ficha { grid-template-columns: minmax(0, 1fr); }
+  .venta-cuerpo .vademecum { order: 2; max-height: 50vh; }
+  .ticket-tabla { min-height: 280px; }
+}
+/* Pantallas bajas (1366x768 con Windows al 125 %): todo un poco más compacto para que Cobrar se vea sin bajar. */
+@media (max-height: 640px) and (min-width: 901px) {
+  main:has(> div > .ventas) { padding-top: .6rem; padding-bottom: .6rem; }
+  .ventas { height: calc(100vh - 56px - 1.2rem); gap: .45rem; }
+  .venta-principal { gap: .4rem; }
+  .captura input, .captura > .btn { min-height: 42px; }
+  .teclas .btn { min-height: 34px; padding-top: .25rem; padding-bottom: .25rem; }
+  .pie-venta { padding: .45rem .8rem; }
+  .total-grande .monto { font-size: 2.1rem; }
+  .cobrar .btn.grande { min-height: 44px; padding: .45rem 1rem; }
+  .cobrar .btn.peligro { min-height: 30px; }
+  .ficha-cuerpo { padding: .6rem .7rem; gap: .55rem; }
+}
+@media (max-width: 860px) {
+  .busqueda-con-ficha { grid-template-columns: minmax(0, 1fr); }
+  .busqueda-con-ficha .vademecum { order: 2; max-height: 32vh; }
+}
 @media (max-width: 760px) {
   main { padding: .6rem; }
   .barra { flex-wrap: wrap; }
   .nav { order: 3; flex-basis: 100%; }
-  .ventas { height: auto; }
+  .captura label { display: none; }
+  .captura > .btn { padding: .5rem .7rem; }
+  .pie-venta { grid-template-columns: minmax(0, 1fr); }
+  .cobrar { min-width: 0; }
   .total-grande .monto { font-size: 2rem; }
-  .atajos .btn kbd { display: none; }
+  .atajos .btn kbd, .teclas .btn kbd { display: none; }
   .ocultar-movil { display: none; }
 }

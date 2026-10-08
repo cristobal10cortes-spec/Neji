@@ -46,6 +46,25 @@ def test_producto_trae_ficha_del_vademecum(api, farmacia):
     assert api.get("/api/productos/codigo/7800003")["principios"] == "PARACETAMOL 500 mg + CAFEINA 65 mg"
 
 
+def test_buscador_trae_la_ficha_del_vademecum(api, farmacia):
+    sin = api.get("/api/productos?q=paracetamol")["productos"]
+    assert all("principios_detalle" not in p for p in sin)
+    con = {p["codigo"]: p for p in api.get("/api/productos?q=%25paracetamol&vademecum=1")["productos"]}
+    assert con["7800001"]["principios_detalle"][0]["accion_terapeutica"] == "Analgésico y antipirético"
+    assert [pa["nombre"] for pa in con["7800003"]["principios_detalle"]] == ["PARACETAMOL", "CAFEINA"]
+    assert con["7800003"]["principios_detalle"][1]["concentracion"] == "65 mg"
+    sin_principio = api.post("/api/productos", {"codigo": "999", "descripcion": "PARCHE FRIO",
+                                                "precio_venta": 500}, esperado=201)
+    r = api.get("/api/productos?q=parche&vademecum=1")["productos"]
+    assert r[0]["id"] == sin_principio["id"] and r[0]["principios_detalle"] == []
+    # Lo que se edita en el vademécum se ve igual en el buscador
+    pa = con["7800001"]["principios_detalle"][0]
+    api.put(f"/api/principios/{pa['id']}", {"nombre": "PARACETAMOL", "accion_terapeutica": "Analgésico",
+                                            "notas": "Máximo 4 g al día"})
+    nuevo = api.get("/api/productos?q=7800001&vademecum=1")["productos"][0]["principios_detalle"][0]
+    assert nuevo["accion_terapeutica"] == "Analgésico" and nuevo["notas"] == "Máximo 4 g al día"
+
+
 def test_busqueda_por_componente_con_porcentaje(api, farmacia):
     codigos = {p["codigo"] for p in api.get("/api/productos?q=%25paracetamol")["productos"]}
     assert codigos == {"7800001", "7800002", "7800003"}

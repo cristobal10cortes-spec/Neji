@@ -106,7 +106,13 @@ otras cajas vendan. Cada caja tiene su propio turno y su propio corte.
 ### Ventas (estilo eleventa)
 
 - Captura por código de barras, con la sintaxis `3*código` para varias unidades.
-- Búsqueda por descripción.
+- **Buscador en vivo**: al escribir un nombre en el mismo campo del código aparece la
+  lista de productos con su código, nombre, precio y existencia. Se elige con `↑` `↓` y
+  `Enter`, o con un clic. Si el texto calza con un solo producto, `Enter` lo agrega
+  directo. `3*nombre` también funciona.
+- Los atajos (`INS` Varios, `Ctrl+P` Art. común, `F10` Buscar, `F11` Mayoreo,
+  `F9` Verificador, `F7` Entrada, `F8` Salida) van en una fila bajo el buscador, como en
+  eleventa, y **Cancelar ticket** queda justo encima de **Cobrar**.
 - Artículo común (un producto sin registrar).
 - Venta **por unidad o a granel**: kilos con decimales, por ejemplo `0,755`.
 - **Números a la chilena** en todas las pantallas y en los CSV: la coma es decimal y el
@@ -133,10 +139,13 @@ Se activa en **Configuración → Opciones → Farmacia**, o al configurar Neji 
   `PARACETAMOL 500 mg + CAFEINA 65 mg`.
 - Cada principio activo tiene su ficha: acción terapéutica, efectos adversos,
   contraindicaciones y notas.
-- Al vender, el **aviso del vademécum** muestra para qué sirve el producto y sus
-  efectos adversos, como en CORAND.ERP.
-- **Búsqueda por componente**: en `F10` escribe `%paracetamol` para ver todos los
-  productos que lo contienen.
+- Al vender, la **ficha del vademécum** se muestra a la izquierda del buscador: para
+  qué sirve, efectos adversos, contraindicaciones y notas de cada principio activo.
+  Sigue al producto marcado en el buscador o a la línea elegida del ticket.
+- Lo que se escribe en el vademécum se ve igual en la venta. El administrador puede
+  **editar la ficha desde la misma venta** (botón Editar) y el cambio aparece al tiro.
+- **Búsqueda por componente**: en el buscador (o en `F10`) escribe `%paracetamol` para
+  ver todos los productos que lo contienen.
 - **Alternativas** (`Ctrl+B`): productos con el mismo principio activo (bioequivalentes
   u otras marcas), ordenados por parecido:
   - **misma dosis**: mismos principios activos y misma concentración (500 mg = 0,5 g);
@@ -144,7 +153,7 @@ Se activa en **Configuración → Opciones → Farmacia**, o al configurar Neji 
   - **comparte principio**: solo coincide alguno de sus principios activos.
 
   Dentro de cada grupo van primero los que tienen stock y los más baratos. Si un
-  producto no tiene stock, el aviso recuerda usar `Ctrl+B`.
+  producto no tiene stock, la ficha lo marca y recuerda usar `Ctrl+B`.
 - La pantalla **Vademécum** lista los principios activos con cuántos productos hay en
   stock. Desde la ficha se puede vender directamente.
 
@@ -262,17 +271,19 @@ El detalle del análisis del programa anterior está en
 | Tecla | Acción |
 |---|---|
 | `F1` `F2` `F3` `F4` | Ventas · Clientes · Productos · Inventario |
-| `Enter` | Agregar el código escrito (`3*código` = 3 unidades) |
-| `F10` | Buscar producto (`%paracetamol` busca por principio activo) |
+| `Enter` | Agregar el código escrito (`3*código` = 3 unidades) o el producto elegido en la lista |
+| `↑` `↓` con texto escrito | Moverse por la lista del buscador (la ficha del vademécum la sigue) |
+| `Esc` | Cerrar la lista del buscador |
+| `F10` | Buscar producto en una ventana grande (`%paracetamol` busca por principio activo) |
 | `INS` | Varios (cantidad + código) |
 | `Ctrl+P` | Artículo común |
 | `F11` o `Ctrl+M` | Precio de mayoreo en la línea |
-| `↑` `↓` | Moverse por el ticket |
+| `↑` `↓` | Moverse por el ticket (con el buscador vacío) |
 | `+` `-` `*` | Sumar, restar o escribir la cantidad |
 | `Supr` | Borrar línea |
 | `Ctrl+D` | Descuento |
 | `F5` | Asignar cliente |
-| `Ctrl+B` | Alternativas con el mismo principio activo (farmacia) |
+| `Ctrl+B` | Alternativas con el mismo principio activo del producto que muestra la ficha (farmacia) |
 | `F6` | Nuevo ticket (deja el actual pendiente) |
 | `RePág` `AvPág` | Cambiar de ticket |
 | `F7` `F8` | Entrada y salida de efectivo |

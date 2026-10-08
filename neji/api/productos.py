@@ -8,7 +8,7 @@ from flask import Response, jsonify, request
 from ..auth import solo_admin, usuario_actual
 from ..db import ahora, fila, filas, get_db, sin_acentos, transaccion
 from ..servicios.farmacia import (SQL_PRINCIPIOS_TEXTO, alternativas, guardar_principios_producto,
-                                  principios_de_producto)
+                                  principios_de_producto, principios_de_productos)
 from ..servicios.inventario import mover_existencia
 from ..validar import (ErrorNegocio, booleano, cantidad, celda_csv, entero, fecha_flexible,
                        leer_celda_csv, numero_texto, texto)
@@ -141,6 +141,11 @@ def listar_productos():
     productos = filas(con.execute(
         f"{SELECT_PRODUCTO} WHERE {where} ORDER BY p.descripcion LIMIT ? OFFSET ?",
         params + [por_pagina, (pagina - 1) * por_pagina]))
+    if booleano(request.args.get("vademecum", "")):
+        # El buscador de la venta muestra al lado la ficha del vademécum de cada resultado.
+        fichas = principios_de_productos(con, [p["id"] for p in productos])
+        for p in productos:
+            p["principios_detalle"] = fichas[p["id"]]
     return jsonify(productos=sin_costos(productos), total=total, pagina=pagina, por_pagina=por_pagina)
 
 

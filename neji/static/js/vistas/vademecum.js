@@ -3,6 +3,7 @@
 import { api, qs } from '../api.js';
 import { ir } from '../app.js';
 import { esAdmin } from '../estado.js';
+import { formProducto } from './productos.js';
 import { aviso, avisoError, confirmar, debounce, formulario, h, modal, numero, pesos, tabla, vaciar } from '../ui.js';
 
 const LIMITE = 5000; // principios activos que se listan de una vez (la búsqueda filtra en el servidor)
@@ -96,6 +97,142 @@ export async function fichaPrincipio(id, alCambiar = () => {}) {
       { texto: 'Editar', clase: 'primario', accion: async () => { if (await formPrincipio(pa)) { m.cerrar(); alCambiar(); fichaPrincipio(id, alCambiar); } } },
     ] : [],
   });
+}
+
+const SECCIONES_FICHA = [
+  ['accion_terapeutica', 'Acción terapéutica'],
+  ['efectos_adversos', 'Efectos adversos'],
+  ['contraindicaciones', 'Contraindicaciones e interacciones'],
+  ['notas', 'Notas'],
+];
+
+const celda = (titulo, valor, clase = '') => h(`div.celda${clase}`, h('span.t', titulo), h('span.v', valor));
+
+/**
+ * Panel con la ficha del vademécum del producto en foco (al buscar o al elegir una línea del ticket).
+ * Muestra lo mismo que la pantalla Vademécum para cada principio activo, y quien es administrador
+ * puede editarlo desde aquí. `fichas` guarda los productos ya leídos del servidor (id -> producto).
+ * Devuelve { el, mostrar(producto, contexto), recordar(producto), producto }.
+ */
+export function panelVademecum({ fichas = new Map(), alternativas = null, alTerminar = () => {} } = {}) {
+  const contexto = h('span.etiqueta.oculto');
+  const cuerpo = h('div.ficha-cuerpo');
+  const pie = h('div.ficha-pie.oculto');
+  // Los botones no le quitan el foco al buscador: así su lista de resultados no se cierra al hacer clic.
+  const el = h('aside.vademecum', { 'aria-label': 'Vademécum', onmousedown: (e) => { if (e.target.closest('button')) e.preventDefault(); } },
+    h('div.ficha-titulo', h('span', 'Vademécum'), contexto),
+    cuerpo, pie);
+  let producto = null;
+  let clave = null;
+
+  const actual = () => (producto && fichas.get(producto.id)) || producto;
+
+  function recordar(p) {
+    if (p?.id && p.principios_detalle) fichas.set(p.id, p);
+  }
+
+  function mostrar(p, texto = '') {
+    const nueva = p ? `${p.id}|${texto}` : null;
+    if (nueva === clave) return;
+    clave = nueva;
+    producto = p;
+    contexto.textContent = texto;
+    contexto.className = `etiqueta${texto ? '' : ' oculto'}${texto === 'sin stock' ? ' mal' : ''}`;
+    pintar();
+    if (p?.id && !fichas.has(p.id)) cargar(p.id);
+  }
+
+  async function cargar(id) {
+    try {
+      fichas.set(id, await api.get(`/api/productos/${id}`));
+    } catch {
+      return; // se queda con lo que traía el ticket
+    }
+    if (producto?.id === id) pintar();
+  }
+
+  function refrescar() {
+    fichas.clear();
+    if (producto?.id) cargar(producto.id);
+  }
+
+  async function editar(id) {
+    try {
+      const pa = await api.get(`/api/principios/${id}`);
+      if (await formPrincipio(pa)) {
+        aviso('Vademécum actualizado.', 'ok');
+        refrescar();
+      }
+    } catch (e) {
+      avisoError(e);
+    }
+    alTerminar();
+  }
+
+  async function asignarPrincipio(id) {
+    try {
+      if (await formProducto(await api.get(`/api/productos/${id}`))) {
+        aviso('Producto actualizado.', 'ok');
+        refrescar();
+      }
+    } catch (e) {
+      avisoError(e);
+    }
+    alTerminar();
+  }
+
+  function seccion(pa) {
+    const textos = SECCIONES_FICHA.filter(([k]) => pa[k]);
+    return h('section.ficha-pa',
+      h('div.pa-nombre',
+        h('b', pa.nombre), pa.concentracion ? h('span.etiqueta', pa.concentracion) : null,
+        h('span.pa-botones',
+          h('button.btn.chico', { type: 'button', title: 'Ficha completa y productos que lo contienen', onclick: () => fichaPrincipio(pa.id, refrescar) }, 'Ficha'),
+          esAdmin() ? h('button.btn.chico', { type: 'button', title: `Editar lo que dice el vademécum de ${pa.nombre}`, onclick: () => editar(pa.id) }, 'Editar') : null)),
+      textos.length
+        ? h('dl', textos.map(([k, titulo]) => [h('dt', titulo), h('dd', pa[k])]))
+        : h('p.suave', esAdmin() ? 'Sin ficha en el vademécum. Usa Editar para escribirla.' : 'Sin ficha en el vademécum.'));
+  }
+
+  function pintar() {
+    const p = actual();
+    if (!p) {
+      pie.classList.add('oculto');
+      vaciar(cuerpo, h('div.ficha-vacia',
+        h('p', 'Escribe en el buscador o elige una línea del ticket para ver aquí su ficha.'),
+        h('p.ayuda', 'Escribe % y el principio activo para buscar por componente (ej: %paracetamol).')));
+      return;
+    }
+    const detalle = p.principios_detalle || [];
+    const sinStock = p.usa_inventario && p.existencia <= 0;
+    vaciar(cuerpo,
+      h('div.ficha-producto',
+        h('div.ficha-nombre', p.descripcion),
+        h('div.celdas',
+          celda('Código', p.codigo, '.ancha.mono'),
+          celda('Precio', pesos(p.precio_venta)),
+          celda('Existencia', p.usa_inventario ? numero(p.existencia) : '—', sinStock ? '.rojo' : ''))),
+      detalle.length
+        ? detalle.map(seccion)
+        : h('div.ficha-pa',
+          h('p.suave', 'Este producto no tiene principio activo asignado.'),
+          esAdmin() && p.id ? h('button.btn.chico', { type: 'button', onclick: () => asignarPrincipio(p.id) }, 'Asignar principio activo') : null),
+      detalle.length ? h('p.ayuda', 'Información de referencia de la farmacia. No reemplaza la indicación del médico ni la del químico farmacéutico.') : null);
+    const conAlternativas = alternativas && detalle.length && p.id;
+    pie.classList.toggle('oculto', !conAlternativas);
+    if (conAlternativas) {
+      vaciar(pie, h(`button.btn.chico${sinStock ? '.primario' : ''}`, { type: 'button', onclick: () => alternativas(p) },
+        h('kbd', 'Ctrl+B'), sinStock ? 'Sin stock: ver alternativas' : 'Alternativas'));
+    }
+  }
+
+  pintar();
+  return {
+    el,
+    mostrar,
+    recordar,
+    get producto() { return actual(); },
+  };
 }
 
 export async function montar(contenedor) {

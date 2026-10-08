@@ -167,7 +167,7 @@ export function modalAbierto() {
 export function modal({ titulo, cuerpo, botones = [], ancho = '', alCerrar, alTeclear }) {
   const errorEl = h('div.error-modal.oculto', { role: 'alert' });
   const pie = h('footer');
-  const caja = h(`div.modal${ancho ? '.' + ancho : ''}`, { role: 'dialog', 'aria-modal': 'true', 'aria-label': titulo },
+  const caja = h(`div.modal${ancho ? '.' + ancho : ''}`, { role: 'dialog', 'aria-modal': 'true', 'aria-label': titulo, tabindex: '-1' },
     h('header', h('h3', titulo), h('button.cerrar', { type: 'button', title: 'Cerrar (Esc)', 'aria-label': 'Cerrar', onclick: () => obj.cerrar() }, '×')),
     h('div.cuerpo', errorEl, cuerpo),
     pie);
@@ -201,8 +201,9 @@ export function modal({ titulo, cuerpo, botones = [], ancho = '', alCerrar, alTe
   document.getElementById('modales').append(fondo);
   pila.push(obj);
   setTimeout(() => {
-    const foco = caja.querySelector('[autofocus]') || caja.querySelector('.cuerpo input, .cuerpo select, .cuerpo textarea') || caja.querySelector('footer .btn.primario');
-    foco?.focus();
+    // Sin campos ni botón principal, el foco queda en la ventana: así las teclas no siguen escribiendo en la pantalla de atrás.
+    const foco = caja.querySelector('[autofocus]') || caja.querySelector('.cuerpo input, .cuerpo select, .cuerpo textarea') || caja.querySelector('footer .btn.primario') || caja;
+    foco.focus();
     if (foco?.select && foco.tagName === 'INPUT') foco.select();
   }, 0);
   return obj;

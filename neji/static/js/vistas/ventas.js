@@ -1,15 +1,15 @@
 // Pantalla de ventas, pensada para usarse solo con teclado (al estilo eleventa).
 
-import { api } from '../api.js';
+import { api, qs } from '../api.js';
 import { esFarmacia, estado, guardarTickets, leerTickets, nuevoTicket, opcion, puede } from '../estado.js';
 import { imprimir, ticketCotizacion, ticketVenta } from '../impresion.js';
 import {
-  aviso, avisoError, confirmar, formulario, h, importe, leerCantidad, leerMonto, modal, numero, pesos, pitido,
+  aviso, avisoError, confirmar, formulario, h, importe, leerCantidad, leerMonto, modal, modalAbierto, numero, pesos, pitido,
   redondeoEfectivo, vaciar,
 } from '../ui.js';
 import { elegirCliente } from './clientes.js';
 import { abrirTurno, movimientoCaja } from './caja.js';
-import { fichaPrincipio } from './vademecum.js';
+import { panelVademecum } from './vademecum.js';
 
 const METODOS = [
   ['efectivo', 'Efectivo', 'F1'],
@@ -51,6 +51,42 @@ function snapshot(p) {
   return { id, codigo, descripcion, precio_venta, precio_mayoreo, cantidad_mayoreo, tipo_venta, existencia, usa_inventario, departamento, principios, principios_detalle };
 }
 
+/** Resultados del buscador en celdas: código, nombre, precio y existencia. */
+function tablaResultados(lista, sel, { alElegir, alMarcar = null }) {
+  return h('table.tabla-resultados',
+    h('thead', h('tr', h('th', 'Código'), h('th', 'Nombre'), h('th.num', 'Precio'), h('th.num', 'Existencia'))),
+    h('tbody', lista.map((p, i) => h('tr.clic', {
+      class: i === sel ? 'sel' : null,
+      onclick: () => alElegir(i),
+      onmousemove: alMarcar ? () => alMarcar(i) : null,
+    },
+    h('td.mono', p.codigo),
+    h('td', p.descripcion, p.departamento ? h('span.suave', ` · ${p.departamento}`) : null,
+      esFarmacia() && p.principios ? h('div.ayuda.pa', p.principios) : null),
+    h('td.num', pesos(p.precio_venta)),
+    h('td.num', { class: p.usa_inventario && p.existencia <= 0 ? 'rojo' : 'suave' }, p.usa_inventario ? numero(p.existencia) : '—')))));
+}
+
+/** '3*parac' -> cantidad 3 y búsqueda 'parac' (igual que al escanear '3*código'). */
+function separarCantidad(texto) {
+  const m = texto.match(/^(\d+(?:[.,]\d+)?)\s*\*\s*(.+)$/);
+  return m ? { cantidad: leerCantidad(m[1]), consulta: m[2].trim() } : { cantidad: null, consulta: texto };
+}
+
+const consultaValida = (q) => !q.includes('*') && q.replace(/^%/, '').trim().length >= 2;
+
+const sinTildes = (t) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+/**
+ * El único resultado se agrega directo solo si calza por el nombre (o por principio activo con %).
+ * Si solo coincide el comienzo del código ('10' -> '100'), puede ser un código mal escaneado: se pide confirmar.
+ */
+function calzaPorNombre(p, consulta) {
+  if (consulta.startsWith('%')) return true;
+  const descripcion = sinTildes(p.descripcion);
+  return sinTildes(consulta).split(/\s+/).every((palabra) => descripcion.includes(palabra));
+}
+
 // Qué tan parecida es la alternativa (ver servicios/farmacia.py: alternativas).
 function etiquetaCoincidencia(coincidencia) {
   if (coincidencia === 'misma_dosis') return h('span.etiqueta.ok', 'misma dosis');
@@ -66,10 +102,22 @@ export async function montar(contenedor, parametros = {}) {
   const actual = () => tickets.lista[tickets.activo];
 
   // --- Elementos ---------------------------------------------------------------
-  const codigo = h('input', { placeholder: 'Código de barras (o 3*código) + Enter', autocomplete: 'off', 'aria-label': 'Código del producto' });
+  const farmacia = esFarmacia();
+  const codigo = h('input', {
+    id: 'codigo-producto',
+    placeholder: farmacia ? 'Escanea o escribe código, nombre o %principio activo' : 'Escanea o escribe el código o el nombre del producto',
+    autocomplete: 'off', spellcheck: 'false', 'aria-label': 'Código del producto',
+    role: 'combobox', 'aria-autocomplete': 'list', 'aria-expanded': 'false', 'aria-controls': 'resultados-busqueda',
+  });
+  // Lista del buscador. No le quita el foco al campo: se elige con el mouse o con ↑ ↓ y Enter.
+  const listaBusqueda = h('div.resultados.oculto', { id: 'resultados-busqueda', onmousedown: (e) => e.preventDefault() });
+  const busqueda = { lista: [], total: 0, sel: 0, texto: '', abierta: false, suspendida: false, elegida: false, mensaje: '', pedido: 0, espera: null };
+  const fichas = new Map(); // productos leídos del servidor con su ficha del vademécum
+  const ficha = farmacia
+    ? panelVademecum({ fichas, alternativas: (p) => alternativas(p, textoBuscado()), alTerminar: () => enfocar() })
+    : null;
+  let productoSinStock = null; // último producto que no se pudo agregar por falta de stock (Ctrl+B)
   const avisoTurno = h('div.panel.oculto', { style: { background: '#fff7e0', borderColor: '#f3d27a' } });
-  const avisoVademecum = h('div.vademecum.oculto', { role: 'status' });
-  let productoVademecum = null;
   const pestanasTickets = h('div.tickets');
   const cuerpoTabla = h('tbody');
   const lblCliente = h('span');
@@ -79,44 +127,75 @@ export async function montar(contenedor, parametros = {}) {
 
   const boton = (tecla, texto, accion, extra = {}) =>
     h('button.btn', { type: 'button', onclick: () => { accion(); }, ...extra }, tecla ? h('kbd', tecla) : null, texto);
+  // Fila de atajos bajo el buscador, como en eleventa.
+  const tecla = (teclaTexto, texto, accion, extra = {}) =>
+    h('button.btn', { type: 'button', title: `${texto} (${teclaTexto})`, onclick: () => { accion(); }, ...extra }, h('kbd', teclaTexto), h('span', texto));
 
   vaciar(contenedor, h('div.ventas',
     avisoTurno,
-    h('div.captura',
-      h('div.codigo', codigo, boton('', 'Agregar', () => procesarCodigo(), { class: 'primario' })),
-      h('div.atajos',
-        boton('INS', 'Varios', varios),
-        boton('Ctrl+P', 'Art. común', articuloComun),
-        boton('F10', 'Buscar', buscarProducto),
-        boton('F11', 'Mayoreo', alternarMayoreo, { title: 'También Ctrl+M' }),
-        boton('F9', 'Verificador', verificador),
-        boton('F7', 'Entrada', () => movimiento('entrada')),
-        boton('F8', 'Salida', () => movimiento('salida')))),
-    h('div.fila.entre', pestanasTickets,
-      h('div.fila', boton('F6', 'Nuevo ticket', nuevo), boton('', 'Cancelar ticket', cancelarTicket, { class: 'peligro' }))),
-    avisoVademecum,
-    h('div.tabla-caja.ticket-tabla', h('table',
-      h('thead', h('tr',
-        h('th', '#'), h('th', 'Código'), h('th', 'Descripción'), h('th.num', 'Precio'), h('th.num', 'Cant.'),
-        h('th.num', 'Importe'), h('th.num.ocultar-movil', 'Existencia'))),
-      cuerpoTabla)),
+    h(`div.venta-cuerpo${ficha ? '.con-ficha' : ''}`,
+      ficha?.el,
+      h('div.venta-principal',
+        h('div.captura',
+          h('label', { for: 'codigo-producto' }, 'Código del producto'),
+          codigo,
+          boton('Enter', 'Agregar producto', () => enterEnCodigo(), { class: 'primario', onmousedown: (e) => e.preventDefault() }),
+          listaBusqueda),
+        h('div.teclas',
+          tecla('INS', 'Varios', varios),
+          tecla('Ctrl+P', 'Art. común', articuloComun),
+          tecla('F10', 'Buscar', buscarProducto),
+          tecla('F11', 'Mayoreo', alternarMayoreo, { title: 'Mayoreo (F11 o Ctrl+M)' }),
+          tecla('F9', 'Verificador', verificador),
+          tecla('F7', 'Entrada', () => movimiento('entrada'), { title: 'Entrada de efectivo (F7)' }),
+          tecla('F8', 'Salida', () => movimiento('salida'), { title: 'Salida de efectivo (F8)' })),
+        h('div.fila.entre', pestanasTickets, boton('F6', 'Nuevo ticket', nuevo)),
+        h('div.tabla-caja.ticket-tabla', h('table',
+          h('thead', h('tr',
+            h('th', '#'), h('th', 'Código'), h('th', 'Descripción'), h('th.num', 'Precio'), h('th.num', 'Cant.'),
+            h('th.num', 'Importe'), h('th.num.ocultar-movil', 'Existencia'))),
+          cuerpoTabla)))),
     h('div.pie-venta',
-      h('div.atajos',
-        boton('Supr', 'Borrar', borrarLinea),
-        boton('*', 'Cantidad', editarCantidad),
-        boton('Ctrl+D', 'Descuento', descuento),
-        boton('', 'Precio', cambiarPrecio),
-        boton('F5', 'Cliente', asignarCliente),
-        boton('', 'Cotizar', guardarCotizacion)),
-      h('div.cliente-ticket', lblCliente),
+      h('div.pie-acciones',
+        h('div.atajos',
+          boton('Supr', 'Borrar', borrarLinea),
+          boton('*', 'Cantidad', editarCantidad),
+          boton('Ctrl+D', 'Descuento', descuento),
+          boton('', 'Precio', cambiarPrecio),
+          boton('F5', 'Cliente', asignarCliente),
+          boton('', 'Cotizar', guardarCotizacion)),
+        h('div.cliente-ticket', lblCliente)),
       h('div.total-grande', lblArticulos, lblDescuento, h('div.etq', 'Total'), lblTotal),
-      h('button.btn.primario.grande', { type: 'button', onclick: cobrar }, h('kbd', 'F12'), 'Cobrar'))));
+      h('div.cobrar',
+        boton('', 'Cancelar ticket', cancelarTicket, { class: 'peligro' }),
+        h('button.btn.primario.grande', { type: 'button', onclick: cobrar }, h('kbd', 'F12'), 'Cobrar')))));
 
+  codigo.addEventListener('input', alEscribir);
   codigo.addEventListener('keydown', (e) => {
+    if (modalAbierto()) return; // las teclas son de la ventana abierta
     if (e.key === 'Enter') {
       e.preventDefault();
-      procesarCodigo();
+      enterEnCodigo();
+    } else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && consultaValida(separarCantidad(codigo.value.trim()).consulta)) {
+      // Con algo escrito, las flechas recorren los resultados (sin texto mueven la línea del ticket).
+      e.preventDefault();
+      e.stopPropagation();
+      if (busqueda.abierta) moverResultado(e.key === 'ArrowDown' ? 1 : -1);
+      else reabrirBusqueda();
+    } else if (e.key === 'Escape' && (busqueda.abierta || codigo.value)) {
+      e.preventDefault();
+      e.stopPropagation();
+      codigo.value = '';
+      cerrarBusqueda();
     }
+  });
+  codigo.addEventListener('blur', () => {
+    // Si se abre una ventana (ficha, Ctrl+B, F9...) la lista vuelve al regresar; con un clic en otra parte se cierra.
+    if (busqueda.abierta) cerrarBusqueda({ suspender: Boolean(document.querySelector('.fondo-modal')) || !document.hasFocus() });
+  });
+  codigo.addEventListener('focus', () => {
+    if (busqueda.suspendida && separarCantidad(codigo.value.trim()).consulta === busqueda.texto) abrirBusqueda();
+    busqueda.suspendida = false;
   });
 
   // --- Dibujo ------------------------------------------------------------------
@@ -137,7 +216,7 @@ export async function montar(contenedor, parametros = {}) {
     }));
 
     if (!t.items.length) {
-      vaciar(cuerpoTabla, h('tr', h('td.vacio', { colspan: 7 }, 'Escanea un producto o presiona F10 para buscar.')));
+      vaciar(cuerpoTabla, h('tr', h('td.vacio', { colspan: 7 }, 'Escanea un producto o escribe su nombre en el buscador. 3*código agrega 3 unidades.')));
     } else {
       vaciar(cuerpoTabla, t.items.map((it, i) => {
         const { precio, tipo } = precioLinea(it);
@@ -168,8 +247,9 @@ export async function montar(contenedor, parametros = {}) {
     lblTotal.textContent = pesos(tot.total);
     lblArticulos.textContent = `${numero(tot.articulos)} artículo${tot.articulos === 1 ? '' : 's'}`;
     lblDescuento.textContent = tot.descuento ? `Subtotal ${pesos(tot.subtotal)} · Descuento -${pesos(tot.descuento)}` : '';
-    // El aviso del vademécum sigue a la línea seleccionada (se oculta en recetas, artículos comunes o ticket vacío).
-    mostrarVademecum(t.items[t.sel]?.producto || null);
+    // La ficha del vademécum sigue a la línea seleccionada (o al resultado marcado en el buscador).
+    productoSinStock = null;
+    actualizarFicha();
     vaciar(lblCliente, t.cliente
       ? [h('span.etiqueta.ok', 'Cliente'), ` ${t.cliente.nombre}`, t.cliente.saldo ? h('span.suave', ` (debe ${pesos(t.cliente.saldo)})`) : null,
         h('button.btn.chico', { type: 'button', onclick: () => { t.cliente = null; guardar(); dibujar(); } }, 'Quitar')]
@@ -211,6 +291,7 @@ export async function montar(contenedor, parametros = {}) {
   function agregarProducto(producto, cantidad = 1) {
     const t = actual();
     const p = snapshot(producto);
+    ficha?.recordar(producto);
     if (!Number.isFinite(cantidad) || cantidad <= 0) {
       aviso('Cantidad no válida.', 'error');
       return;
@@ -229,7 +310,10 @@ export async function montar(contenedor, parametros = {}) {
       aviso(`No hay existencia suficiente de «${p.descripcion}» (hay ${numero(p.existencia)}).`
         + (conAlternativas ? ' Ctrl+B para ver alternativas.' : ''), 'error', 6000);
       // Muestra su ficha para que Ctrl+B ofrezca alternativas de este producto, sin abrir nada solo.
-      if (conAlternativas) mostrarVademecum(p);
+      if (conAlternativas) {
+        productoSinStock = producto;
+        actualizarFicha();
+      }
       return;
     }
     if (existente >= 0) {
@@ -255,30 +339,174 @@ export async function montar(contenedor, parametros = {}) {
   }
 
   async function procesarCodigo() {
-    let texto = codigo.value.trim();
-    if (!texto) return;
-    let cantidad = null;
-    const m = texto.match(/^(\d+(?:[.,]\d+)?)\s*\*\s*(.+)$/);
-    if (m) {
-      cantidad = leerCantidad(m[1]); // '3*código', '0,755*código' (igual que en los formularios)
-      texto = m[2].trim();
-    }
+    const escrito = codigo.value.trim();
+    if (!escrito) return;
+    const { cantidad, consulta: texto } = separarCantidad(escrito); // '3*código', '0,755*código'
     codigo.value = '';
+    cerrarBusqueda();
     let producto;
     try {
       producto = await api.get(`/api/productos/codigo/${encodeURIComponent(texto)}`);
     } catch (e) {
-      pitido();
-      avisoError(e);
-      enfocar();
-      return;
+      // No es un código: si el nombre calza con un solo producto se agrega; si no, se elige de la lista.
+      const r = e.status === 404 && consultaValida(texto) ? await buscarEnVivo(texto) : null;
+      const n = r?.productos.length || 0;
+      if (n === 1 && calzaPorNombre(r.productos[0], texto)) {
+        producto = r.productos[0];
+      } else if (n && codigo.value === '') {
+        if (n === 1) pitido(); // parecido a un código, pero no igual
+        codigo.value = escrito;
+        busqueda.elegida = true;
+        busqueda.mensaje = n === 1
+          ? `No hay un producto con el código «${texto}». ¿Es este? Confirma con Enter.`
+          : `${n === r.total ? n : 'Varios'} productos coinciden con «${texto}»: elige con ↑ ↓ y confirma con Enter.`;
+        if (document.activeElement === codigo) abrirBusqueda();
+        return;
+      } else {
+        pitido();
+        avisoError(e);
+        enfocar();
+        return;
+      }
     }
+    await agregarConCantidad(producto, cantidad);
+  }
+
+  async function agregarConCantidad(producto, cantidad) {
     if (cantidad === null && producto.tipo_venta === 'granel') {
       cantidad = await pedirCantidad(producto);
       if (cantidad === null) { enfocar(); return; }
     }
     agregarProducto(producto, cantidad ?? 1);
     enfocar();
+  }
+
+  // --- Buscador en vivo ----------------------------------------------------------------
+  // Al escribir un nombre aparecen los productos en celdas y la ficha del vademécum del marcado.
+  const textoBuscado = () => (busqueda.abierta ? codigo.value : null);
+
+  function alEscribir() {
+    clearTimeout(busqueda.espera);
+    const { consulta } = separarCantidad(codigo.value.trim());
+    if (!consultaValida(consulta)) {
+      cerrarBusqueda();
+      return;
+    }
+    if (busqueda.abierta && consulta === busqueda.texto) return;
+    busqueda.espera = setTimeout(async () => {
+      if (await buscarEnVivo(consulta) && document.activeElement === codigo) abrirBusqueda();
+    }, 200);
+  }
+
+  async function buscarEnVivo(consulta) {
+    clearTimeout(busqueda.espera);
+    const n = ++busqueda.pedido;
+    let r;
+    try {
+      r = await api.get(`/api/productos${qs({ q: consulta, por_pagina: 30, vademecum: farmacia ? 1 : '' })}`);
+    } catch (e) {
+      if (n === busqueda.pedido) avisoError(e);
+      return null;
+    }
+    if (n !== busqueda.pedido) return null; // llegó tarde: ya se escribió o escaneó otra cosa
+    r.productos.forEach((p) => ficha?.recordar(p));
+    Object.assign(busqueda, { lista: r.productos, total: r.total, sel: 0, texto: consulta, elegida: false, mensaje: '' });
+    return r;
+  }
+
+  async function reabrirBusqueda() {
+    const { consulta } = separarCantidad(codigo.value.trim());
+    if (consulta === busqueda.texto && busqueda.lista.length) abrirBusqueda();
+    else if (await buscarEnVivo(consulta) && document.activeElement === codigo) abrirBusqueda();
+  }
+
+  function abrirBusqueda() {
+    busqueda.abierta = true;
+    busqueda.suspendida = false;
+    listaBusqueda.classList.remove('oculto');
+    codigo.setAttribute('aria-expanded', 'true');
+    pintarBusqueda();
+    actualizarFicha();
+  }
+
+  function cerrarBusqueda({ suspender = false } = {}) {
+    clearTimeout(busqueda.espera);
+    busqueda.pedido++; // descarta las búsquedas que vienen en camino
+    busqueda.suspendida = suspender && busqueda.abierta;
+    if (!suspender) Object.assign(busqueda, { elegida: false, mensaje: '' });
+    if (!busqueda.abierta) return;
+    busqueda.abierta = false;
+    listaBusqueda.classList.add('oculto');
+    codigo.setAttribute('aria-expanded', 'false');
+    actualizarFicha();
+  }
+
+  function pintarBusqueda() {
+    const { lista, sel, total, texto, mensaje } = busqueda;
+    vaciar(listaBusqueda,
+      lista.length
+        ? tablaResultados(lista, sel, { alElegir: elegirResultado, alMarcar: (i) => { if (i !== busqueda.sel) marcarResultado(i); } })
+        : h('p.vacio', `Sin resultados para «${texto}». Enter busca el código exacto.`),
+      h('div.resultados-pie',
+        mensaje ? h('b', mensaje) : h('span', '↑ ↓ elegir · Enter agregar · Esc cerrar', farmacia ? ' · Ctrl+B alternativas' : ''),
+        total > lista.length ? h('span', `Primeros ${lista.length} de ${numero(total)}: escribe más para afinar`) : null));
+    listaBusqueda.querySelector('tr.sel')?.scrollIntoView({ block: 'nearest' });
+  }
+
+  function marcarResultado(i, desplazar = false) {
+    busqueda.sel = i;
+    const filas = listaBusqueda.querySelectorAll('tbody tr');
+    filas.forEach((tr, j) => tr.classList.toggle('sel', j === i));
+    if (desplazar) filas[i]?.scrollIntoView({ block: 'nearest' });
+    actualizarFicha();
+  }
+
+  function moverResultado(delta) {
+    if (!busqueda.lista.length) return;
+    busqueda.elegida = true;
+    marcarResultado(Math.max(0, Math.min(busqueda.sel + delta, busqueda.lista.length - 1)), true);
+  }
+
+  /** Enter (o el botón Agregar): el código exacto, el único resultado o el marcado con ↑ ↓. */
+  function enterEnCodigo() {
+    const { consulta } = separarCantidad(codigo.value.trim());
+    const { abierta, texto, lista, elegida, sel } = busqueda;
+    if (abierta && texto === consulta && lista.length) {
+      if (elegida) return elegirResultado(sel);
+      const exacto = lista.findIndex((p) => p.codigo === consulta);
+      if (exacto >= 0) return elegirResultado(exacto);
+      if (lista.length === 1 && calzaPorNombre(lista[0], consulta)) return elegirResultado(0);
+    }
+    return procesarCodigo();
+  }
+
+  async function elegirResultado(i) {
+    const elegido = busqueda.lista[i];
+    if (!elegido) return;
+    const { cantidad } = separarCantidad(codigo.value.trim());
+    codigo.value = '';
+    cerrarBusqueda();
+    let producto;
+    try {
+      producto = await api.get(`/api/productos/codigo/${encodeURIComponent(elegido.codigo)}`);
+    } catch (e) {
+      pitido();
+      avisoError(e);
+      enfocar();
+      return;
+    }
+    await agregarConCantidad(producto, cantidad);
+  }
+
+  /** Producto que muestra la ficha: el marcado en el buscador, el que no tenía stock o la línea elegida. */
+  function actualizarFicha() {
+    if (!ficha) return;
+    const enBusqueda = busqueda.abierta ? busqueda.lista[busqueda.sel] : null;
+    const t = actual();
+    const linea = t.items[t.sel]?.producto;
+    if (enBusqueda) ficha.mostrar(enBusqueda, 'búsqueda');
+    else if (productoSinStock) ficha.mostrar(productoSinStock, 'sin stock');
+    else ficha.mostrar(linea || null, linea ? `línea ${t.sel + 1}` : '');
   }
 
   async function varios() {
@@ -321,10 +549,11 @@ export async function montar(contenedor, parametros = {}) {
   function buscarProducto() {
     return new Promise((resolver) => {
       const entrada = h('input', {
-        placeholder: esFarmacia() ? 'Descripción o código. Empieza con % para buscar por principio activo (ej: %paracetamol)' : 'Escribe parte de la descripción o del código',
+        placeholder: farmacia ? 'Descripción o código. Empieza con % para buscar por principio activo (ej: %paracetamol)' : 'Escribe parte de la descripción o del código',
         autocomplete: 'off', autofocus: true,
       });
       const lista = h('div.lista-busqueda');
+      const fichaBusqueda = farmacia ? panelVademecum({ fichas, alTerminar: () => entrada.focus() }) : null;
       let resultados = [];
       let sel = 0;
       let elegido = null;
@@ -332,23 +561,20 @@ export async function montar(contenedor, parametros = {}) {
 
       const pintar = () => {
         vaciar(lista, resultados.length
-          ? h('table', h('tbody', resultados.map((p, i) => h('tr.clic', {
-            class: i === sel ? 'sel' : null,
-            onclick: () => { sel = i; elegir(); },
-          },
-          h('td.mono', p.codigo), h('td', p.descripcion, p.departamento ? h('span.suave', ` · ${p.departamento}`) : null,
-            esFarmacia() && p.principios ? h('div.ayuda.pa', p.principios) : null),
-          h('td.num', pesos(p.precio_venta)),
-          h('td.num', { class: p.usa_inventario && p.existencia <= 0 ? 'rojo' : 'suave' }, p.usa_inventario ? numero(p.existencia) : '—')))))
+          ? tablaResultados(resultados, sel, { alElegir: (i) => { sel = i; elegir(); } })
           : h('p.vacio', entrada.value ? 'Sin resultados.' : 'Escribe para buscar.'));
         lista.querySelector('tr.sel')?.scrollIntoView({ block: 'nearest' });
+        fichaBusqueda?.mostrar(resultados[sel] || null);
       };
       const cargar = async () => {
         const n = ++consulta;
         const q = entrada.value.trim();
-        const r = q ? await api.get(`/api/productos?q=${encodeURIComponent(q)}&por_pagina=60`).catch(() => ({ productos: [] })) : { productos: [] };
+        const r = q
+          ? await api.get(`/api/productos${qs({ q, por_pagina: 60, vademecum: farmacia ? 1 : '' })}`).catch(() => ({ productos: [] }))
+          : { productos: [] };
         if (n !== consulta) return;
         resultados = r.productos;
+        resultados.forEach((p) => fichaBusqueda?.recordar(p));
         sel = 0;
         pintar();
       };
@@ -357,8 +583,9 @@ export async function montar(contenedor, parametros = {}) {
 
       const m = modal({
         titulo: 'Buscar producto',
-        ancho: 'ancho',
-        cuerpo: [entrada, h('p.ayuda', '↑ ↓ para moverte, Enter para agregar, Esc para cerrar.'), lista],
+        ancho: farmacia ? 'muy-ancho' : 'ancho',
+        cuerpo: [entrada, h('p.ayuda', '↑ ↓ para moverte, Enter para agregar, Esc para cerrar.'),
+          fichaBusqueda ? h('div.busqueda-con-ficha', fichaBusqueda.el, lista) : lista],
         alCerrar: () => resolver(elegido),
         alTeclear: (e) => {
           if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(sel + 1, resultados.length - 1); pintar(); }
@@ -373,14 +600,9 @@ export async function montar(contenedor, parametros = {}) {
       }
       pintar();
     }).then(async (elegido) => {
-      // La ficha completa trae el vademécum del producto
       const producto = elegido && await api.get(`/api/productos/codigo/${encodeURIComponent(elegido.codigo)}`).catch(() => elegido);
-      if (producto) {
-        let cantidad = 1;
-        if (producto.tipo_venta === 'granel') cantidad = await pedirCantidad(producto);
-        if (cantidad !== null) agregarProducto(producto, cantidad);
-      }
-      enfocar();
+      if (producto) await agregarConCantidad(producto, null);
+      else enfocar();
     });
   }
 
@@ -404,25 +626,9 @@ export async function montar(contenedor, parametros = {}) {
     enfocar();
   }
 
-  // --- Vademécum y alternativas -----------------------------------------------------
-  function mostrarVademecum(producto) {
-    if (producto && producto === productoVademecum) return;
-    const detalle = esFarmacia() ? (producto?.principios_detalle || []) : [];
-    productoVademecum = detalle.length ? producto : null;
-    avisoVademecum.classList.toggle('oculto', !detalle.length);
-    if (!detalle.length) return;
-    vaciar(avisoVademecum,
-      h('div.vademecum-textos', detalle.map((pa) => h('div',
-        h('b', `${pa.nombre}${pa.concentracion ? ' ' + pa.concentracion : ''}: `),
-        pa.accion_terapeutica || h('span.suave', 'sin ficha en el vademécum'),
-        pa.efectos_adversos ? h('span.suave', ` · Efectos adversos: ${pa.efectos_adversos}`) : null))),
-      h('div.fila',
-        detalle.map((pa) => h('button.btn.chico', { type: 'button', onclick: () => fichaPrincipio(pa.id) }, `Ficha ${pa.nombre.toLowerCase()}`)),
-        h('button.btn.chico', { type: 'button', onclick: () => alternativas(producto) }, h('kbd', 'Ctrl+B'), 'Alternativas')));
-  }
-
+  // --- Alternativas ---------------------------------------------------------------
   /** Productos con el mismo principio activo (bioequivalentes u otras marcas). */
-  async function alternativas(producto) {
+  async function alternativas(producto, textoBusqueda = null) {
     if (!producto?.id) {
       aviso('Selecciona un producto del ticket.', 'error');
       return;
@@ -468,6 +674,11 @@ export async function montar(contenedor, parametros = {}) {
     async function elegir() {
       const a = lista[sel];
       if (!a) return;
+      // Si se abrió desde el buscador, la búsqueda ya cumplió su objetivo.
+      if (textoBusqueda !== null && codigo.value === textoBusqueda) {
+        codigo.value = '';
+        cerrarBusqueda();
+      }
       m.cerrar();
       try {
         const p = await api.get(`/api/productos/codigo/${encodeURIComponent(a.codigo)}`);
@@ -484,9 +695,8 @@ export async function montar(contenedor, parametros = {}) {
 
   function alternativasDeLinea() {
     const t = actual();
-    const it = t.items[t.sel];
-    // El aviso del vademécum muestra la línea seleccionada o el último producto sin stock.
-    alternativas(productoVademecum || it?.producto);
+    // De lo que muestra la ficha: el resultado marcado, el último producto sin stock o la línea elegida.
+    alternativas(ficha?.producto || t.items[t.sel]?.producto, textoBuscado());
   }
 
   // --- Recetas magistrales ------------------------------------------------------------

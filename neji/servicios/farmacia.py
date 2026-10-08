@@ -103,11 +103,22 @@ def guardar_principios_producto(con, producto_id, entrada, cache=None):
 
 
 def principios_de_producto(con, producto_id):
-    return filas(con.execute(
-        """SELECT pa.id, pa.nombre, pp.concentracion, pa.accion_terapeutica, pa.efectos_adversos,
-                  pa.contraindicaciones, pa.notas
-           FROM producto_principios pp JOIN principios_activos pa ON pa.id = pp.principio_id
-           WHERE pp.producto_id = ? ORDER BY pp.orden""", (producto_id,)))
+    return principios_de_productos(con, [producto_id])[producto_id]
+
+
+def principios_de_productos(con, ids):
+    """Ficha del vademécum de cada principio activo de varios productos: {producto_id: [...]}."""
+    resultado = {i: [] for i in ids}
+    if not ids:
+        return resultado
+    for pa in filas(con.execute(
+            f"""SELECT pp.producto_id, pa.id, pa.nombre, pp.concentracion, pa.accion_terapeutica,
+                       pa.efectos_adversos, pa.contraindicaciones, pa.notas
+                FROM producto_principios pp JOIN principios_activos pa ON pa.id = pp.principio_id
+                WHERE pp.producto_id IN ({', '.join('?' for _ in ids)})
+                ORDER BY pp.producto_id, pp.orden""", list(ids))):
+        resultado[pa.pop("producto_id")].append(pa)
+    return resultado
 
 
 _EN_MG = {"mcg": Decimal("0.001"), "mg": Decimal(1), "g": Decimal(1000)}
