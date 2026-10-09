@@ -163,3 +163,75 @@ def cerrar_turno(con, caja_id, usuario_id, efectivo_contado, nota=None):
          turno["id"]),
     )
     return turno["id"]
+
+
+# --- Corte general --------------------------------------------------------------------------------
+
+def exigir_caja_principal(con, caja_id):
+    caja = exigir_caja(con, caja_id)
+    if not caja["principal"]:
+        principal = con.execute("SELECT nombre FROM cajas WHERE principal = 1").fetchone()
+        raise ErrorNegocio("El corte general se hace desde la caja principal"
+                           + (f" ({principal['nombre']})." if principal else "."), status=403)
+    return caja
+
+
+def turnos_abiertos(con):
+    """Resumen de cada turno abierto (todas las cajas), para el corte general."""
+    return [resumen_turno(con, r["id"]) for r in con.execute(
+        "SELECT t.id FROM turnos t JOIN cajas c ON c.id = t.caja_id "
+        "WHERE t.estado = 'abierto' ORDER BY c.principal DESC, c.id")]
+
+
+def corte_general(con, caja_id, usuario_id, cortes, nota=None):
+    """Cierra juntos los turnos indicados ({turno_id, efectivo_contado}) y devuelve el id del corte."""
+    exigir_caja_principal(con, caja_id)
+    if not cortes:
+        raise ErrorNegocio("No hay turnos abiertos para cortar.")
+    ids = [c["turno_id"] for c in cortes]
+    if len(set(ids)) != len(ids):
+        raise ErrorNegocio("Un turno aparece dos veces en el corte.")
+    corte_id = con.execute(
+        "INSERT INTO cortes_generales (fecha, caja_id, usuario_id, nota) VALUES (?, ?, ?, ?)",
+        (ahora(), caja_id, usuario_id, nota)).lastrowid
+    for c in cortes:
+        turno = fila(con.execute("SELECT * FROM turnos WHERE id = ?", (c["turno_id"],)).fetchone())
+        if turno is None or turno["estado"] != "abierto":
+            raise ErrorNegocio(f"El turno #{c['turno_id']} ya no está abierto: vuelve a cargar la caja.")
+        cerrar_turno(con, turno["caja_id"], usuario_id, c["efectivo_contado"], nota)
+        con.execute("UPDATE turnos SET corte_general_id = ? WHERE id = ?", (corte_id, turno["id"]))
+    return corte_id
+
+
+def resumen_corte_general(con, corte_id):
+    """Los turnos del corte general con su detalle, los totales y lo vendido por cada cajero."""
+    corte = fila(con.execute(
+        """SELECT g.*, c.nombre AS caja, u.nombre AS usuario FROM cortes_generales g
+           JOIN cajas c ON c.id = g.caja_id JOIN usuarios u ON u.id = g.usuario_id
+           WHERE g.id = ?""", (corte_id,)).fetchone())
+    if corte is None:
+        raise ErrorNegocio("Corte general no encontrado.", status=404)
+    turnos = [resumen_turno(con, r["id"]) for r in con.execute(
+        "SELECT id FROM turnos WHERE corte_general_id = ? ORDER BY caja_id", (corte_id,))]
+    sumar = ("fondo_inicial", "ventas_efectivo", "abonos_efectivo", "abonos_otros", "entradas", "salidas",
+             "devoluciones", "devoluciones_efectivo", "efectivo_esperado", "efectivo_contado", "diferencia",
+             "n_ventas", "total_ventas", "ganancia", "redondeo")
+    totales = {k: sum(t.get(k) or 0 for t in turnos) for k in sumar}
+    totales["por_metodo"] = {}
+    for t in turnos:
+        for metodo, monto in t["por_metodo"].items():
+            totales["por_metodo"][metodo] = totales["por_metodo"].get(metodo, 0) + monto
+    departamentos = {}
+    for t in turnos:
+        for d in t["departamentos"]:
+            departamentos[d["departamento"]] = departamentos.get(d["departamento"], 0) + d["total"]
+    totales["departamentos"] = [{"departamento": k, "total": v}
+                                for k, v in sorted(departamentos.items(), key=lambda x: -x[1])]
+    marcas = ",".join("?" for _ in turnos) or "NULL"
+    por_cajero = filas(con.execute(
+        f"""SELECT u.nombre AS cajero, COUNT(*) AS n_ventas, SUM(v.total) AS total
+            FROM ventas v JOIN usuarios u ON u.id = v.usuario_id
+            WHERE v.turno_id IN ({marcas}) GROUP BY v.usuario_id ORDER BY 3 DESC""",
+        [t["id"] for t in turnos]))
+    corte.update(turnos=turnos, totales=totales, por_cajero=por_cajero)
+    return corte

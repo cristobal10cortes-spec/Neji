@@ -77,7 +77,7 @@ inventario.
 | — | Orden de preparación / presupuesto impreso. |
 | Total con decimales truncado al pasarlo a la venta | Redondeo consistente al peso, o a $10/$50/$100 si se configura. |
 | Vencimiento y distribuidor por producto | Igual, más la pestaña Inventario → Vencimientos. |
-| — | Importación directa de `corand_erp_pro.db`. |
+| Importar Excel duplicaba el stock | Importación de inventario en CSV que reemplaza o suma el stock a elección, con kardex. |
 
 ## Problemas encontrados en CORAND.ERP
 

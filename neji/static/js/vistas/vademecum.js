@@ -2,7 +2,7 @@
 
 import { api, qs } from '../api.js';
 import { ir } from '../app.js';
-import { esAdmin } from '../estado.js';
+import { puede } from '../estado.js';
 import { formProducto } from './productos.js';
 import { aviso, avisoError, confirmar, debounce, formulario, h, modal, numero, pesos, tabla, vaciar } from '../ui.js';
 
@@ -47,8 +47,11 @@ function bloque(titulo, texto) {
   return texto ? h('div', h('h3', titulo), h('p', { style: { whiteSpace: 'pre-wrap', marginTop: 0 } }, texto)) : null;
 }
 
-/** Ficha de un principio activo con los productos que lo contienen. */
-export async function fichaPrincipio(id, alCambiar = () => {}) {
+/**
+ * Ficha de un principio activo con los productos que lo contienen. Desde la venta, `alVender(codigo)`
+ * agrega el producto al ticket a la vista; si no, «Vender» abre la pantalla de ventas.
+ */
+export async function fichaPrincipio(id, alCambiar = () => {}, { alVender = null } = {}) {
   let pa;
   try {
     pa = await api.get(`/api/principios/${id}`);
@@ -79,13 +82,17 @@ export async function fichaPrincipio(id, alCambiar = () => {}) {
           valor: (p) => h('button.btn.chico.primario', {
             type: 'button',
             disabled: p.usa_inventario && p.existencia <= 0,
-            onclick: () => { m.cerrar(); ir('ventas', { codigo: p.codigo }); },
+            onclick: () => {
+              m.cerrar();
+              if (alVender) alVender(p.codigo);
+              else ir('ventas', { codigo: p.codigo });
+            },
           }, 'Vender'),
         },
       ], pa.lista_productos, { vacio: 'Ningún producto del catálogo tiene este principio activo.' }),
       h('p.ayuda', 'Información de referencia ingresada por la farmacia. No reemplaza la indicación del médico ni la del químico farmacéutico.'),
     ],
-    botones: esAdmin() ? [
+    botones: puede('vademecum') ? [
       {
         texto: 'Eliminar',
         clase: 'peligro',
@@ -94,7 +101,7 @@ export async function fichaPrincipio(id, alCambiar = () => {}) {
           try { await api.del(`/api/principios/${pa.id}`); m.cerrar(); alCambiar(); aviso('Principio activo eliminado.', 'ok'); } catch (e) { m.error(e.message); }
         },
       },
-      { texto: 'Editar', clase: 'primario', accion: async () => { if (await formPrincipio(pa)) { m.cerrar(); alCambiar(); fichaPrincipio(id, alCambiar); } } },
+      { texto: 'Editar', clase: 'primario', accion: async () => { if (await formPrincipio(pa)) { m.cerrar(); alCambiar(); fichaPrincipio(id, alCambiar, { alVender }); } } },
     ] : [],
   });
 }
@@ -114,9 +121,13 @@ const celda = (titulo, valor, clase = '') => h(`div.celda${clase}`, h('span.t', 
  * puede editarlo desde aquí. `fichas` guarda los productos ya leídos del servidor (id -> producto) y puede
  * compartirse entre paneles: si otro panel lo renueva al editar, este se vuelve a pintar al mostrarla.
  * Mientras `retenerFoco()` sea verdadero, un clic en el panel no le quita el foco al buscador.
+ * `alActualizar(producto)` recibe los datos frescos de un producto (al leerlo o al asignarle un principio),
+ * para que el ticket muestre lo mismo; `alVender(codigo)` se usa en el botón «Vender» de la ficha completa.
  * Devuelve { el, mostrar(producto, contexto), recordar(producto), producto }.
  */
-export function panelVademecum({ fichas = new Map(), alternativas = null, alTerminar = () => {}, retenerFoco = () => false } = {}) {
+export function panelVademecum({
+  fichas = new Map(), alternativas = null, alTerminar = () => {}, retenerFoco = () => false, alActualizar = () => {}, alVender = null,
+} = {}) {
   const contexto = h('span.etiqueta.oculto');
   const anuncio = h('span.solo-lector', { role: 'status' }); // el lector de pantalla anuncia el producto en foco
   const cuerpo = h('div.ficha-cuerpo');
@@ -152,26 +163,31 @@ export function panelVademecum({ fichas = new Map(), alternativas = null, alTerm
     contexto.textContent = texto;
     contexto.className = `etiqueta${texto ? '' : ' oculto'}${alerta ? ' mal' : ''}`;
     pintar();
-    if (p?.id && !fichas.has(p.id)) cargar(p.id);
+    if (p?.id && !fichas.has(p.id)) cargar(p);
   }
 
-  async function cargar(id) {
+  async function cargar(p) {
+    const { id } = p;
     if (cargando.has(id)) return;
     cargando.add(id);
+    let fresco = null;
     try {
-      fichas.set(id, await api.get(`/api/productos/${id}`));
-    } catch {
-      fichas.set(id, null); // se queda con lo que traía el ticket, sin volver a pedirlo a cada rato
+      fresco = await api.get(`/api/productos/${id}`);
+    } catch (e) {
+      // Borrado del catálogo: se avisa. Sin conexión: se queda con lo que traía el ticket, sin volver a pedirlo a cada rato.
+      fichas.set(id, e.status === 404 ? { ...p, principios_detalle: [], eliminado: true } : null);
       return;
     } finally {
       cargando.delete(id);
     }
+    fichas.set(id, fresco.activo ? fresco : { ...p, principios_detalle: [], eliminado: true });
+    if (fresco.activo) alActualizar(fresco);
     if (producto?.id === id) pintar();
   }
 
   function refrescar() {
     fichas.clear();
-    if (producto?.id) cargar(producto.id);
+    if (producto?.id) cargar(producto);
   }
 
   async function editar(id) {
@@ -189,8 +205,10 @@ export function panelVademecum({ fichas = new Map(), alternativas = null, alTerm
 
   async function asignarPrincipio(id) {
     try {
-      if (await formProducto(await api.get(`/api/productos/${id}`))) {
+      const guardado = await formProducto(await api.get(`/api/productos/${id}`));
+      if (guardado) {
         aviso('Producto actualizado.', 'ok');
+        alActualizar(guardado); // el ticket toma el principio y, si cambió, el precio nuevo
         refrescar();
       }
     } catch (e) {
@@ -205,11 +223,11 @@ export function panelVademecum({ fichas = new Map(), alternativas = null, alTerm
       h('div.pa-nombre',
         h('b', pa.nombre), pa.concentracion ? h('span.etiqueta', pa.concentracion) : null,
         h('span.pa-botones',
-          h('button.btn.chico', { type: 'button', title: 'Ficha completa y productos que lo contienen', onclick: () => fichaPrincipio(pa.id, refrescar) }, 'Ficha'),
-          esAdmin() ? h('button.btn.chico', { type: 'button', title: `Editar lo que dice el vademécum de ${pa.nombre}`, onclick: () => editar(pa.id) }, 'Editar') : null)),
+          h('button.btn.chico', { type: 'button', title: 'Ficha completa y productos que lo contienen', onclick: () => fichaPrincipio(pa.id, refrescar, { alVender }) }, 'Ficha'),
+          puede('vademecum') ? h('button.btn.chico', { type: 'button', title: `Editar lo que dice el vademécum de ${pa.nombre}`, onclick: () => editar(pa.id) }, 'Editar') : null)),
       textos.length
         ? h('dl', textos.map(([k, titulo]) => [h('dt', titulo), h('dd', { onclick: (e) => alternarTexto(e.currentTarget) }, pa[k])]))
-        : h('p.suave', esAdmin() ? 'Sin ficha en el vademécum. Usa Editar para escribirla.' : 'Sin ficha en el vademécum.'));
+        : h('p.suave', puede('vademecum') ? 'Sin ficha en el vademécum. Usa Editar para escribirla.' : 'Sin ficha en el vademécum.'));
   }
 
   // Cada texto largo se muestra en unas líneas; con un clic se ve completo (y la ficha completa está en «Ficha»).
@@ -242,6 +260,13 @@ export function panelVademecum({ fichas = new Map(), alternativas = null, alTerm
         h('p.ayuda', 'Escribe % y el principio activo para buscar por componente (ej: %paracetamol).')));
       return;
     }
+    if (p.eliminado) {
+      pie.classList.add('oculto');
+      vaciar(cuerpo, h('div.ficha-producto',
+        h('div.ficha-nombre', { title: p.descripcion }, p.descripcion),
+        h('p.rojo', 'Este producto ya no está en el catálogo. Quítalo del ticket con Supr.')));
+      return;
+    }
     const detalle = p.principios_detalle || [];
     const sinStock = p.usa_inventario && p.existencia <= 0;
     vaciar(cuerpo,
@@ -255,7 +280,7 @@ export function panelVademecum({ fichas = new Map(), alternativas = null, alTerm
         ? detalle.map(seccion)
         : h('div.ficha-pa',
           h('p.suave', 'Este producto no tiene principio activo asignado.'),
-          esAdmin() && p.id ? h('button.btn.chico', { type: 'button', onclick: () => asignarPrincipio(p.id) }, 'Asignar principio activo') : null),
+          puede('productos') && p.id ? h('button.btn.chico', { type: 'button', onclick: () => asignarPrincipio(p.id) }, 'Asignar principio activo') : null),
       detalle.length ? h('p.ayuda', 'Información de referencia de la farmacia. No reemplaza la indicación del médico ni la del químico farmacéutico.') : null);
     const conAlternativas = alternativas && detalle.length && p.id;
     pie.classList.toggle('oculto', !conAlternativas);
@@ -284,7 +309,7 @@ export async function montar(contenedor) {
   vaciar(contenedor,
     h('div.fila.entre',
       h('h2', 'Vademécum'),
-      esAdmin() ? h('button.btn.primario', { type: 'button', onclick: async () => { if (await formPrincipio()) cargar(); } }, 'Nuevo principio activo') : null),
+      puede('vademecum') ? h('button.btn.primario', { type: 'button', onclick: async () => { if (await formPrincipio()) cargar(); } }, 'Nuevo principio activo') : null),
     h('div.fila', buscar, h('label.check', conStock, 'Solo con productos en stock'), h('span.espacio'), contador),
     h('p.ayuda', 'En la venta, escribe % antes del nombre para buscar productos por componente (ej: %paracetamol).'),
     lista);
@@ -305,7 +330,7 @@ export async function montar(contenedor) {
       { titulo: 'Productos', valor: (p) => h('span', { class: p.con_stock ? 'verde' : 'suave' }, `${p.con_stock} con stock / ${p.productos}`), clase: 'num' },
       { titulo: 'Recetario', valor: (p) => textoPrecioReceta(p), clase: 'num' },
     ], principios, {
-      vacio: buscar.value ? 'Sin resultados.' : 'Aún no hay principios activos. Se crean al asignarlos a un producto, al importar desde CORAND.ERP o con «Nuevo principio activo».',
+      vacio: buscar.value ? 'Sin resultados.' : 'Aún no hay principios activos. Se crean al asignarlos a un producto, al importar el inventario en CSV (columna principio_activo) o con «Nuevo principio activo».',
       alClic: (p) => fichaPrincipio(p.id, cargar),
     }));
   }

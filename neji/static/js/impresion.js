@@ -1,19 +1,159 @@
 // Impresión: ticket de venta, corte de caja, cotización y etiquetas con código de barras.
 
 import { estado } from './estado.js';
-import { fecha, h, numero, pesos, unidadPlural } from './ui.js';
+import { aviso, fecha, h, numero, pesos, unidadPlural } from './ui.js';
 
 const NOMBRE_METODO = {
   efectivo: 'Efectivo', debito: 'Débito', credito: 'Crédito', transferencia: 'Transferencia', fiado: 'Fiado (crédito cliente)',
 };
 export const nombreMetodo = (m) => NOMBRE_METODO[m] || m;
 
-export function imprimir(contenido) {
+// --- Impresora de tickets de este computador -------------------------------------------------------
+// En NejiPOS.exe los tickets van directo a la impresora elegida en Configuración → Impresora de tickets
+// (o a la que se detecta sola), sin cuadro de impresión. En el navegador se usa el cuadro de siempre.
+
+const CLAVE_IMPRESORA = 'neji.impresora';
+const PAPEL_COLUMNAS = { 80: 48, 58: 32 };
+
+/** Configuración de la impresora de esta terminal (o null). */
+export function leerImpresora() {
+  try {
+    const c = JSON.parse(localStorage.getItem(CLAVE_IMPRESORA) || 'null');
+    return c && typeof c === 'object' ? c : null;
+  } catch {
+    return null;
+  }
+}
+
+export function guardarImpresora(config) {
+  try {
+    if (config) localStorage.setItem(CLAVE_IMPRESORA, JSON.stringify(config));
+    else localStorage.removeItem(CLAVE_IMPRESORA);
+  } catch { /* sin almacenamiento */ }
+  impresorasDetectadas = null;
+}
+
+const apiEscritorio = () => (window.pywebview?.api?.impresoras ? window.pywebview.api : null);
+// NejiPOS.exe deja lista su API (window.pywebview.api) poco después de cargar la página. Se espera una sola
+// vez, al comienzo: en el navegador, después de eso imprimir no espera nada.
+const escritorioListo = new Promise((resolver) => {
+  const listo = () => resolver(apiEscritorio());
+  window.addEventListener('pywebviewready', listo, { once: true });
+  setTimeout(listo, 1500);
+});
+
+/** La API del programa de escritorio (window.pywebview.api), o null en el navegador. */
+export function escritorio() {
+  const api = apiEscritorio();
+  return api ? Promise.resolve(api) : escritorioListo;
+}
+
+let impresorasDetectadas = null; // se leen una vez por sesión
+
+/** Impresoras de este computador según NejiPOS.exe: { ok, impresoras, error }. */
+export async function listarImpresoras({ refrescar = false } = {}) {
+  const api = await escritorio();
+  if (!api) return { ok: false, escritorio: false, impresoras: [] };
+  if (refrescar || !impresorasDetectadas) impresorasDetectadas = api.impresoras();
+  const r = await impresorasDetectadas;
+  if (!r?.ok) impresorasDetectadas = null;
+  return { escritorio: true, impresoras: [], ...r };
+}
+
+/** Elige sola la impresora de tickets: la predeterminada si es de tickets, si no la primera de tickets. */
+export function impresoraSugerida(impresoras) {
+  const reales = impresoras.filter((i) => !i.virtual);
+  return reales.find((i) => i.termica && i.predeterminada) || reales.find((i) => i.termica && !i.sin_conexion)
+    || reales.find((i) => i.termica) || null;
+}
+
+export const papelTicket = () => leerImpresora()?.papel || (estado.config.ticket_ancho === '58' ? '58' : '80');
+
+/** Impresora para los tickets de esta terminal: la elegida o, si no hay, la que se detecta sola. */
+async function impresoraParaTickets() {
+  const elegida = leerImpresora();
+  if (elegida?.dialogo) return null; // eligió usar siempre el cuadro de impresión
+  if (elegida?.nombre) return elegida;
+  const { ok, impresoras } = await listarImpresoras();
+  const sugerida = ok ? impresoraSugerida(impresoras) : null;
+  if (!sugerida) return null;
+  const config = { nombre: sugerida.nombre, modo: 'escpos', papel: papelTicket(), cortar: true, cajon: true, codigo: 'cp850', copias: 1, automatica: true };
+  guardarImpresora(config);
+  return config;
+}
+
+/** Trabajo para NejiPOS.exe a partir de la configuración de la impresora. */
+export function trabajoImpresion(config, bloques, { abrirCajon = false } = {}) {
+  const papel = config.papel === '58' ? '58' : '80';
+  return {
+    impresora: config.nombre, modo: config.modo === 'windows' ? 'windows' : 'escpos',
+    columnas: Number(config.columnas) || PAPEL_COLUMNAS[papel], papel, cortar: config.cortar !== false,
+    cajon: Boolean(abrirCajon && config.cajon), codigo: config.codigo || 'cp850', copias: Number(config.copias) || 1, bloques,
+  };
+}
+
+/**
+ * Ticket en pantalla → bloques que entiende la impresora: texto (izquierda o centrado), par
+ * (izquierda y derecha), línea y espacio. «.g» es negrita y «.xl» letra grande.
+ */
+export function bloquesTicket(raiz) {
+  const bloques = [];
+  const estilo = (el) => ({ negrita: el.matches('.g, .xl, b, strong') || Boolean(el.querySelector(':scope > b, :scope > strong')), grande: el.matches('.xl') });
+  const visitar = (el) => {
+    for (const hijo of el.children) {
+      if (hijo.matches('hr')) bloques.push({ tipo: 'linea' });
+      else if (hijo.matches('.ln')) {
+        const [izq, der] = hijo.children;
+        bloques.push({ tipo: 'par', izq: izq?.textContent || '', der: der?.textContent || '', ...estilo(hijo) });
+      } else if (hijo.matches('table')) {
+        for (const tr of hijo.querySelectorAll('tr')) {
+          const celdas = [...tr.children].map((c) => c.textContent.trim());
+          bloques.push(celdas.length > 1 ? { tipo: 'par', izq: celdas.slice(0, -1).join(' '), der: celdas.at(-1) } : { tipo: 'texto', texto: celdas[0] || '' });
+        }
+      } else if (hijo.children.length && [...hijo.children].some((c) => c.matches('div, hr, table'))) {
+        visitar(hijo);
+      } else if (hijo.textContent.trim()) {
+        bloques.push({ tipo: 'texto', texto: hijo.textContent, alinear: hijo.matches('.c') ? 'centro' : 'izq', ...estilo(hijo) });
+      } else if (hijo.style?.height) {
+        bloques.push({ tipo: 'espacio', lineas: 2 });
+      }
+    }
+  };
+  visitar(raiz);
+  return bloques;
+}
+
+export function imprimirConDialogo(contenido) {
   const zona = document.getElementById('impresion');
   zona.replaceChildren(contenido);
   const limpiar = () => { zona.replaceChildren(); window.removeEventListener('afterprint', limpiar); };
   window.addEventListener('afterprint', limpiar);
   setTimeout(() => window.print(), 50);
+}
+
+/**
+ * Imprime un ticket (directo en la impresora de tickets si está NejiPOS.exe) o cualquier hoja (etiquetas,
+ * compras sugeridas) con el cuadro de impresión. `abrirCajon`: venta en efectivo con cajón conectado.
+ */
+export async function imprimir(contenido, { abrirCajon = false } = {}) {
+  if (contenido?.classList?.contains('ticket')) {
+    const config = await impresoraParaTickets();
+    if (config) {
+      const api = await escritorio();
+      const r = api ? await api.imprimir(trabajoImpresion(config, bloquesTicket(contenido), { abrirCajon })) : null;
+      if (r?.ok) return true;
+      aviso(`No se pudo imprimir en «${config.nombre}»: ${r?.error || 'el programa no respondió'}. Se abre el cuadro de impresión.`, 'error', 8000);
+    }
+  }
+  imprimirConDialogo(contenido);
+  return false;
+}
+
+/** Abre el cajón de dinero (conectado a la impresora de tickets) sin imprimir nada. */
+export async function abrirCajon() {
+  const config = await impresoraParaTickets();
+  const api = config?.cajon ? await escritorio() : null;
+  if (api) await api.imprimir(trabajoImpresion(config, [], { abrirCajon: true }));
 }
 
 const ln = (izq, der, clase = '') => h(`div.ln${clase ? '.' + clase : ''}`, h('span', izq), h('span', der));
@@ -30,9 +170,9 @@ function encabezadoNegocio() {
   ];
 }
 
-const claseTicket = () => `div.ticket${estado.config.ticket_ancho === '58' ? '.t58' : ''}`;
+const claseTicket = () => `div.ticket${papelTicket() === '58' ? '.t58' : ''}`;
 
-export function ticketVenta(v) {
+export function ticketVenta(v, { destacarAtendio = false } = {}) {
   const c = estado.config;
   const pagos = v.pagos.map((p) => ln(nombreMetodo(p.metodo), pesos(p.monto)));
   const efectivo = v.pagos.find((p) => p.metodo === 'efectivo');
@@ -40,7 +180,7 @@ export function ticketVenta(v) {
     encabezadoNegocio(),
     h('hr'),
     ln(`Folio: ${v.folio}`, fecha(v.fecha)),
-    h('div', `${v.caja} · Atendió: ${v.usuario}`),
+    h('div', { class: destacarAtendio ? 'atendio' : null }, `${v.caja} · Atendió: ${v.atendio || v.usuario}`),
     v.cliente ? h('div', `Cliente: ${v.cliente}${v.cliente_rut ? ' · ' + v.cliente_rut : ''}`) : null,
     h('hr'),
     v.items.map((i) => [
@@ -101,6 +241,48 @@ export function ticketCorte(t) {
     t.departamentos?.length ? [h('hr'), h('div.g', 'Por departamento'), t.departamentos.map((d) => ln(d.departamento, pesos(d.total)))] : null,
     t.movimientos?.length ? [h('hr'), h('div.g', 'Entradas y salidas'), t.movimientos.map((mv) => ln(`${mv.tipo === 'entrada' ? '+' : '-'} ${mv.concepto}`, pesos(mv.monto)))] : null,
     t.nota ? [h('hr'), h('div', `Nota: ${t.nota}`)] : null,
+    h('div', { style: { height: '8mm' } }));
+}
+
+/** Corte general: todas las cajas cerradas juntas desde la caja principal. */
+export function ticketCorteGeneral(g) {
+  const t = g.totales;
+  return h(claseTicket(),
+    encabezadoNegocio(),
+    h('hr'),
+    h('div.c.g', `CORTE GENERAL N° ${g.id}`),
+    h('div', fecha(g.fecha)),
+    h('div', `Hizo: ${g.usuario} · ${g.caja}`),
+    h('hr'),
+    g.turnos.map((x) => [
+      h('div.g', `${x.caja} · Turno #${x.id}`),
+      h('div', `Abrió: ${x.usuario} ${fecha(x.abierto)}`),
+      ln('Ventas', `${x.n_ventas} · ${pesos(x.total_ventas)}`),
+      ln('Esperado en caja', pesos(x.efectivo_esperado)),
+      ln('Contado', pesos(x.efectivo_contado)),
+      ln(x.diferencia < 0 ? 'FALTANTE' : x.diferencia > 0 ? 'SOBRANTE' : 'Diferencia', pesos(x.diferencia)),
+      h('hr'),
+    ]),
+    h('div.g', 'TOTAL DE TODAS LAS CAJAS'),
+    ln('Fondos iniciales', pesos(t.fondo_inicial)),
+    ln('+ Ventas en efectivo', pesos(t.ventas_efectivo)),
+    ln('+ Abonos en efectivo', pesos(t.abonos_efectivo)),
+    ln('+ Entradas', pesos(t.entradas)),
+    ln('- Salidas', pesos(t.salidas)),
+    ln('- Devoluciones', pesos(t.devoluciones_efectivo)),
+    ln('= Esperado', pesos(t.efectivo_esperado), 'g'),
+    ln('Contado', pesos(t.efectivo_contado)),
+    ln(t.diferencia < 0 ? 'FALTANTE' : t.diferencia > 0 ? 'SOBRANTE' : 'Diferencia', pesos(t.diferencia), 'g'),
+    h('hr'),
+    h('div.g', `Ventas (${t.n_ventas})`),
+    Object.entries(t.por_metodo).filter(([, v]) => v).map(([k, v]) => ln(nombreMetodo(k), pesos(v))),
+    t.redondeo ? ln('Redondeo', pesos(t.redondeo)) : null,
+    ln('Total ventas', pesos(t.total_ventas), 'g'),
+    t.devoluciones ? ln('Devoluciones', pesos(t.devoluciones)) : null,
+    t.ganancia != null ? ln('Ganancia estimada', pesos(t.ganancia)) : null,
+    g.por_cajero.length ? [h('hr'), h('div.g', 'Por cajero'), g.por_cajero.map((c) => ln(`${c.cajero} (${c.n_ventas})`, pesos(c.total)))] : null,
+    t.departamentos.length ? [h('hr'), h('div.g', 'Por departamento'), t.departamentos.map((d) => ln(d.departamento, pesos(d.total)))] : null,
+    g.nota ? [h('hr'), h('div', `Nota: ${g.nota}`)] : null,
     h('div', { style: { height: '8mm' } }));
 }
 

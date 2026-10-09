@@ -1,7 +1,7 @@
 // Catálogo de productos: alta, edición, departamentos, CSV, kardex y etiquetas.
 
 import { api, descargar, qs } from '../api.js';
-import { esAdmin, esFarmacia } from '../estado.js';
+import { esFarmacia, puede } from '../estado.js';
 import { hojaEtiquetas, imprimir } from '../impresion.js';
 import {
   aviso, avisoError, confirmar, debounce, fecha, formulario, h, leerCantidad, leerMonto, modal, numero, pesos, tabla, vaciar,
@@ -100,39 +100,64 @@ async function verKardex(p) {
   }
 }
 
-async function importarCsv() {
-  const archivo = h('input', { type: 'file', accept: '.csv,text/csv' });
+/**
+ * Importación del catálogo y del inventario desde CSV (Excel, eleventa u otro sistema). Devuelve
+ * { el, importar() }: se usa en Productos (en una ventana) y en Configuración → Importar inventario.
+ */
+export function importadorCsv({ alTerminar = () => {} } = {}) {
+  const archivo = h('input', { type: 'file', accept: '.csv,text/csv', 'aria-label': 'Archivo CSV' });
+  const reemplazar = h('input', { type: 'radio', name: 'existencias-csv', value: 'reemplazar', checked: true });
+  const sumar = h('input', { type: 'radio', name: 'existencias-csv', value: 'sumar' });
   const resultado = h('div');
+  const error = h('div.error-modal.oculto', { role: 'alert' });
+  const mostrarError = (texto) => { error.textContent = texto; error.classList.toggle('oculto', !texto); };
+
+  async function importar() {
+    if (!archivo.files[0]) return mostrarError('Elige el archivo CSV.');
+    const datos = new FormData();
+    datos.append('archivo', archivo.files[0]);
+    datos.append('existencias', sumar.checked ? 'sumar' : 'reemplazar');
+    mostrarError('');
+    try {
+      const r = await api.subir('/api/productos/importar', datos);
+      vaciar(resultado, h('div.panel',
+        h('p', h('b', `${r.creados} creados, ${r.actualizados} actualizados.`)),
+        r.errores.length ? [h('p.rojo', `${r.errores.length} filas con problemas:`),
+          h('ul', r.errores.map((e) => h('li', `Fila ${e.fila}: ${e.error}`)))] : null));
+      archivo.value = '';
+      alTerminar(r);
+    } catch (err) {
+      mostrarError(err.message);
+    }
+    return null;
+  }
+
+  const el = h('div.importador-csv',
+    h('p', 'Sirve para traer tu catálogo y tu inventario desde Excel, eleventa u otro sistema. Guarda la planilla como CSV (separado por punto y coma o coma).'),
+    h('p.ayuda', 'Columnas reconocidas: codigo, descripcion, precio_venta, precio_costo, precio_mayoreo, cantidad_mayoreo, departamento, tipo_venta (unidad/granel), existencia, minimo, maximo, usa_inventario (si/no), exento (si/no), principio_activo, proveedor y vencimiento. También entiende nombres como "Código", "Precio Venta", "Costo", "Stock", "Categoría", "Distribuidor" o "Principio Activo".'),
+    h('p.ayuda', 'Si el código ya existe, el producto se actualiza con las columnas que traigan datos. Para cargar solo el stock basta con las columnas codigo, descripcion y existencia.'),
+    h('div.fila',
+      h('button.btn.chico', { type: 'button', onclick: () => descargar('/api/productos/plantilla.csv') }, 'Descargar planilla de ejemplo'),
+      h('button.btn.chico', { type: 'button', onclick: () => descargar('/api/productos/exportar') }, 'Exportar mi catálogo actual')),
+    error,
+    archivo,
+    h('fieldset.opciones-csv',
+      h('legend', 'La columna existencia de los productos que ya tienes'),
+      h('label.check', reemplazar, 'Reemplaza el stock (conteo de inventario)'),
+      h('label.check', sumar, 'Se suma al stock (entrada de mercadería)')),
+    resultado);
+  return { el, importar };
+}
+
+async function importarCsv(alTerminar) {
+  const importador = importadorCsv({ alTerminar });
   modal({
     titulo: 'Importar productos desde CSV',
     ancho: 'ancho',
-    cuerpo: [
-      h('p', 'Sirve para traer tu catálogo desde Excel, eleventa u otro sistema. Guarda la planilla como CSV (separado por punto y coma o coma).'),
-      h('p.ayuda', 'Columnas reconocidas: codigo, descripcion, precio_venta, precio_costo, precio_mayoreo, cantidad_mayoreo, departamento, tipo_venta (unidad/granel), existencia, minimo, maximo, usa_inventario (si/no), exento (si/no), principio_activo, proveedor y vencimiento. También entiende nombres como "Código", "Precio Venta", "Costo", "Stock", "Categoría", "Distribuidor" o "Principio Activo".'),
-      h('p.ayuda', 'Si el código ya existe, el producto se actualiza con las columnas que traigan datos.'),
-      archivo, resultado,
-    ],
+    cuerpo: importador.el,
     botones: [
       { texto: 'Cerrar', accion: (m) => m.cerrar() },
-      {
-        texto: 'Importar',
-        clase: 'primario',
-        accion: async (m) => {
-          if (!archivo.files[0]) return m.error('Elige un archivo.');
-          const datos = new FormData();
-          datos.append('archivo', archivo.files[0]);
-          m.error('');
-          try {
-            const r = await api.subir('/api/productos/importar', datos);
-            vaciar(resultado, h('div.panel',
-              h('p', h('b', `${r.creados} creados, ${r.actualizados} actualizados.`)),
-              r.errores.length ? [h('p.rojo', `${r.errores.length} filas con problemas:`),
-                h('ul', r.errores.map((e) => h('li', `Fila ${e.fila}: ${e.error}`)))] : null));
-          } catch (err) {
-            m.error(err.message);
-          }
-        },
-      },
+      { texto: 'Importar', clase: 'primario', accion: () => importador.importar() },
     ],
   });
 }
@@ -209,7 +234,7 @@ function imprimirEtiquetas(productos) {
 }
 
 export async function montar(contenedor) {
-  const admin = esAdmin();
+  const admin = puede('productos');
   const buscar = h('input', { type: 'search', placeholder: esFarmacia() ? 'Descripción, código o %principio activo' : 'Buscar por descripción o código', autofocus: true, style: { maxWidth: '380px' } });
   const departamento = h('select', { style: { width: 'auto' } });
   const bajoMinimo = h('input', { type: 'checkbox' });
@@ -239,7 +264,7 @@ export async function montar(contenedor) {
         btnEtiquetas,
         admin ? [
           h('button.btn', { type: 'button', onclick: () => administrarDepartamentos(cargarDepartamentos) }, 'Departamentos'),
-          h('button.btn', { type: 'button', onclick: async () => { await importarCsv(); } }, 'Importar CSV'),
+          h('button.btn', { type: 'button', onclick: () => importarCsv(() => cargar()) }, 'Importar CSV'),
           h('button.btn', { type: 'button', onclick: () => descargar('/api/productos/exportar') }, 'Exportar CSV'),
           h('button.btn.primario', { type: 'button', onclick: async () => { if (await formProducto()) { aviso('Producto guardado.', 'ok'); cargar(); } } }, 'Nuevo producto'),
         ] : null)),

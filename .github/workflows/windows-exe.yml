@@ -62,6 +62,62 @@ jobs:
           if (Test-Path $informe) { Get-Content $informe -Raw } else { Write-Host 'No se generó el informe' }
           if ($p.ExitCode -ne 0) { throw "La prueba falló (código $($p.ExitCode))" }
 
+      - name: Prueba de impresoras (una impresora de tickets de prueba que escribe en un archivo)
+        timeout-minutes: 6
+        run: |
+          # Una impresora con el controlador «Generic / Text Only» de Windows y un puerto que escribe en un
+          # archivo: así se ve exactamente lo que Neji le manda (ESC/POS) y que el modo Windows (GDI) imprime.
+          $archivo = Join-Path $env:RUNNER_TEMP 'ticket.prn'
+          $nombre = 'POS-80 Prueba Neji'
+          try {
+            Start-Service Spooler -ErrorAction SilentlyContinue
+            Add-PrinterDriver -Name 'Generic / Text Only' -ErrorAction Stop
+            Add-PrinterPort -Name $archivo -ErrorAction Stop
+            Add-Printer -Name $nombre -DriverName 'Generic / Text Only' -PortName $archivo -ErrorAction Stop
+          } catch {
+            Write-Host "::warning::No se pudo crear la impresora de prueba en esta máquina: $_"
+            exit 0
+          }
+          function Neji($argumentos, $informe) {
+            $p = Start-Process -FilePath 'dist\NejiPOS\NejiPOS.exe' -ArgumentList ($argumentos + @('--salida', "`"$informe`"")) -Wait -PassThru
+            if (Test-Path $informe) { Write-Host (Get-Content $informe -Raw) } else { Write-Host 'No se generó el informe' }
+            return $p.ExitCode
+          }
+          function Esperar-Archivo {
+            for ($i = 0; $i -lt 40; $i++) {
+              if ((Test-Path $archivo) -and (Get-Item $archivo).Length -gt 0) { Start-Sleep -Milliseconds 500; return [IO.File]::ReadAllBytes($archivo) }
+              Start-Sleep -Milliseconds 500
+            }
+            throw 'La cola de impresión no escribió el ticket'
+          }
+
+          # 1. La ve sola, como impresora de tickets.
+          $lista = Join-Path $env:RUNNER_TEMP 'impresoras.json'
+          if ((Neji @('--listar-impresoras') $lista) -ne 0) { throw 'No se pudieron listar las impresoras' }
+          $prueba = (Get-Content $lista -Raw | ConvertFrom-Json).impresoras | Where-Object { $_.nombre -eq $nombre }
+          if (-not $prueba) { throw 'Neji POS no ve la impresora de prueba' }
+          if (-not $prueba.termica) { throw 'No la reconoce como impresora de tickets' }
+
+          # 2. ESC/POS directo: los bytes llegan tal cual, con tildes en la página 850, corte al final.
+          if ((Neji @('--prueba-impresora', "`"$nombre`"") (Join-Path $env:RUNNER_TEMP 'escpos.json')) -ne 0) { throw 'Falló la impresión ESC/POS' }
+          $bytes = Esperar-Archivo
+          [Text.Encoding]::RegisterProvider([Text.CodePagesEncodingProvider]::Instance)
+          $texto = [Text.Encoding]::GetEncoding(850).GetString($bytes)
+          if ($bytes[0] -ne 0x1B -or $bytes[1] -ne 0x40) { throw 'El ticket no empieza con ESC @' }
+          if (-not $texto.Contains('Tildes y eñes: áéíóú')) { throw 'Las tildes no llegaron bien (página 850)' }
+          if ($bytes[-4] -ne 0x1D -or $bytes[-3] -ne 0x56) { throw 'Falta el corte de papel al final' }
+          Write-Host "ESC/POS: $($bytes.Length) bytes"
+          Remove-Item $archivo
+
+          # 3. Con el controlador de Windows (GDI): cualquier impresora.
+          if ((Neji @('--prueba-impresora', "`"$nombre`"", '--modo', 'windows') (Join-Path $env:RUNNER_TEMP 'windows.json')) -ne 0) { throw 'Falló la impresión con el controlador de Windows' }
+          $bytes = Esperar-Archivo
+          $texto = [Text.Encoding]::Default.GetString($bytes)
+          Write-Host "Windows (GDI): $($bytes.Length) bytes"
+          Write-Host $texto
+          # «Generic / Text Only» pasa el dibujo a su propia grilla de letras: el texto puede variar.
+          if (-not $texto.Contains('Prueba')) { Write-Host '::warning::El texto del modo Windows no se reconoce en la salida de «Generic / Text Only»' }
+
       - name: Asegurar Microsoft Edge WebView2 Runtime
         run: |
           $claves = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',

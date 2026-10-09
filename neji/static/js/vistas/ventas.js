@@ -2,7 +2,7 @@
 
 import { api, qs } from '../api.js';
 import { esFarmacia, estado, guardarTickets, leerTickets, nuevoTicket, opcion, puede } from '../estado.js';
-import { imprimir, ticketCotizacion, ticketVenta } from '../impresion.js';
+import { abrirCajon, imprimir, ticketCotizacion, ticketVenta } from '../impresion.js';
 import {
   aviso, avisoError, confirmar, formulario, h, importe, leerCantidad, leerMonto, modal, modalAbierto, numero, pesos, pitido,
   redondeoEfectivo, vaciar,
@@ -53,7 +53,7 @@ function snapshot(p) {
 
 // Al elegir de una lista con un clic, la lista se cierra y el segundo clic de un doble clic caería en lo que estaba
 // debajo (una línea del ticket, un atajo): ese clic se descarta (ver montar).
-let ultimoClicLista = 0;
+let ultimoClicLista = -Infinity; // performance.now() parte en 0 al cargar la página
 const marcarClicLista = () => { ultimoClicLista = performance.now(); };
 const clicRecienEnLista = () => performance.now() - ultimoClicLista < 500;
 
@@ -126,7 +126,14 @@ export async function montar(contenedor, parametros = {}) {
   };
   const fichas = new Map(); // productos leídos del servidor con su ficha del vademécum
   const ficha = farmacia
-    ? panelVademecum({ fichas, alternativas: (p) => alternativas(p, textoBuscado()), alTerminar: () => enfocar(), retenerFoco: () => busqueda.abierta })
+    ? panelVademecum({
+      fichas,
+      alternativas: (p) => alternativas(p, textoBuscado()),
+      alTerminar: () => enfocar(),
+      retenerFoco: () => busqueda.abierta,
+      alActualizar: (p) => refrescarProducto(p),
+      alVender: (c) => venderCodigo(c),
+    })
     : null;
   let productoSinStock = null; // último producto que no se pudo agregar por falta de stock (Ctrl+B)
   const avisoTurno = h('div.panel.oculto', { style: { background: '#fff7e0', borderColor: '#f3d27a' } });
@@ -414,6 +421,48 @@ export async function montar(contenedor, parametros = {}) {
     await agregarConCantidad(producto, cantidad);
   }
 
+  /** «Vender» desde la ficha de un principio: agrega al ticket a la vista, sin volver a montar la venta. */
+  async function venderCodigo(c) {
+    let producto;
+    try {
+      producto = await api.get(`/api/productos/codigo/${encodeURIComponent(c)}`);
+    } catch (e) {
+      pitido();
+      avisoError(e);
+      enfocar();
+      return;
+    }
+    await agregarConCantidad(producto, null);
+  }
+
+  /**
+   * Datos frescos de un producto (leídos por la ficha o recién editados): las líneas de los tickets y los
+   * resultados del buscador los toman, así lo que se ve coincide con lo que el servidor va a cobrar.
+   */
+  function refrescarProducto(p) {
+    let cambio = false;
+    for (const tk of tickets.lista) {
+      for (const it of tk.items) {
+        if (it.producto?.id === p.id && it.producto.codigo === p.codigo) {
+          it.producto = snapshot(p);
+          cambio = true;
+        }
+      }
+    }
+    if (busqueda.lista.some((x) => x.id === p.id)) {
+      busqueda.lista = busqueda.lista.map((x) => (x.id === p.id ? { ...x, ...p } : x));
+      if (busqueda.abierta) pintarBusqueda();
+    }
+    if (cambio) {
+      const sinStock = productoSinStock; // dibujar() vuelve la ficha a la línea elegida
+      dibujar();
+      if (sinStock) {
+        productoSinStock = sinStock;
+        actualizarFicha();
+      }
+    }
+  }
+
   async function agregarConCantidad(producto, cantidad) {
     if (cantidad === null && producto.tipo_venta === 'granel') {
       cantidad = await pedirCantidad(producto);
@@ -618,7 +667,14 @@ export async function montar(contenedor, parametros = {}) {
         autocomplete: 'off', autofocus: true,
       });
       const lista = h('div.lista-busqueda');
-      const fichaBusqueda = farmacia ? panelVademecum({ fichas, alTerminar: () => entrada.focus() }) : null;
+      const fichaBusqueda = farmacia
+        ? panelVademecum({
+          fichas,
+          alTerminar: () => entrada.focus(),
+          alActualizar: (p) => refrescarProducto(p),
+          alVender: (c) => { elegido = { codigo: c }; m.cerrar(); },
+        })
+        : null;
       let resultados = [];
       let sel = 0;
       let elegido = null;
@@ -666,9 +722,22 @@ export async function montar(contenedor, parametros = {}) {
       pintar();
     }).then(async (elegido) => {
       actualizarFicha();
-      const producto = elegido && await api.get(`/api/productos/codigo/${encodeURIComponent(elegido.codigo)}`).catch(() => elegido);
-      if (producto) await agregarConCantidad(producto, null);
-      else enfocar();
+      if (!elegido) {
+        enfocar();
+        return;
+      }
+      let producto = elegido;
+      try {
+        producto = await api.get(`/api/productos/codigo/${encodeURIComponent(elegido.codigo)}`);
+      } catch (e) {
+        if (!elegido.id) { // «Vender» desde la ficha solo trae el código
+          pitido();
+          avisoError(e);
+          enfocar();
+          return;
+        }
+      }
+      await agregarConCantidad(producto, null);
     });
   }
 
@@ -879,7 +948,7 @@ export async function montar(contenedor, parametros = {}) {
   async function cambiarPrecio() {
     const it = lineaEditable();
     if (!it) return;
-    if (!puede('cajero_puede_cambiar_precio')) {
+    if (!puede('cambiar_precio')) {
       aviso('No tienes permiso para cambiar precios.', 'error');
       return;
     }
@@ -899,7 +968,7 @@ export async function montar(contenedor, parametros = {}) {
   async function descuento() {
     const t = actual();
     if (!t.items.length) return;
-    if (!puede('cajero_puede_cambiar_precio')) {
+    if (!puede('cambiar_precio')) {
       aviso('No tienes permiso para aplicar descuentos.', 'error');
       return;
     }
@@ -1154,8 +1223,10 @@ export async function montar(contenedor, parametros = {}) {
   }
 
   function mostrarResultado(venta, imprimirlo) {
-    if (imprimirlo) imprimir(ticketVenta(venta));
     const efectivo = venta.pagos.some((p) => p.metodo === 'efectivo');
+    // Con efectivo se abre el cajón de dinero (si está conectado a la impresora de tickets).
+    if (imprimirlo) imprimir(ticketVenta(venta), { abrirCajon: efectivo });
+    else if (efectivo) abrirCajon();
     const m = modal({
       titulo: `Venta registrada · Folio ${venta.folio}`,
       cuerpo: h('div.resultado-venta',

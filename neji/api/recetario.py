@@ -6,7 +6,7 @@ import json
 
 from flask import Response, jsonify, request
 
-from ..auth import solo_admin, usuario_actual
+from ..auth import con_permiso, usuario_actual
 from ..chile import formatear_rut, validar_rut
 from ..db import fila, filas, get_db, sin_acentos, transaccion
 from ..servicios import recetario as svc
@@ -45,7 +45,7 @@ def listar_formas():
 
 
 @bp.post("/recetario/formas")
-@solo_admin
+@con_permiso("vademecum")
 def crear_forma():
     datos = _leer_forma(datos_json())
     con = get_db()
@@ -59,7 +59,7 @@ def crear_forma():
 
 
 @bp.put("/recetario/formas/<int:forma_id>")
-@solo_admin
+@con_permiso("vademecum")
 def editar_forma(forma_id):
     datos = _leer_forma(datos_json())
     con = get_db()
@@ -147,7 +147,7 @@ def _composicion(componentes):
 
 
 @bp.get("/recetario/recetas.csv")
-@solo_admin
+@con_permiso("reportes")
 def exportar_recetas():
     """Libro recetario en CSV (para respaldo o fiscalización)."""
     where, params = _filtro_recetas()

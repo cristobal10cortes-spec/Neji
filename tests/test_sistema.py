@@ -58,6 +58,19 @@ def test_producto_duplicado_y_reactivar(api, turno):
     assert nuevo["id"] == p["id"] and nuevo["descripcion"] == "Nuevo"
 
 
+def test_borrar_producto_no_reutiliza_su_id(api):
+    # Aunque nunca se haya vendido, borrar solo lo desactiva: un ticket abierto en otra terminal que
+    # aún lo tenga no puede terminar cobrando un producto nuevo con el mismo id.
+    p = api.post("/api/productos", {"codigo": "Z1", "descripcion": "AMOXICILINA", "precio_venta": 3500},
+                 esperado=201)
+    api.delete(f"/api/productos/{p['id']}")
+    assert api.get(f"/api/productos/{p['id']}")["activo"] == 0
+    nuevo = api.post("/api/productos", {"codigo": "Y1", "descripcion": "DIAZEPAM", "precio_venta": 1500},
+                     esperado=201)
+    assert nuevo["id"] != p["id"]
+    api.delete("/api/productos/999999", esperado=404)
+
+
 def test_busqueda_productos(api, productos):
     r = api.get("/api/productos?q=cola bebida")
     assert [p["codigo"] for p in r["productos"]] == ["7801610001196"]
@@ -116,3 +129,96 @@ def test_respaldos(api, app):
     assert [r["nombre"] for r in api.get("/api/respaldos")] == [nombre]
     assert api.http.get(f"/api/respaldos/{nombre}").status_code == 200
     assert api.http.get("/api/respaldos/..%2Fneji.db").status_code == 404
+
+
+def test_importar_csv_reemplaza_o_suma_existencias(api):
+    import io
+
+    def subir(texto, existencias):
+        r = api.http.post("/api/productos/importar", data={
+            "archivo": (io.BytesIO(texto.encode("utf-8")), "inventario.csv"), "existencias": existencias},
+            content_type="multipart/form-data")
+        assert r.status_code == 200, r.get_data(as_text=True)
+        return r.get_json()
+
+    assert subir("codigo;descripcion;precio_venta;existencia\nC1;CREMA;1000;10\n", "reemplazar")["creados"] == 1
+    assert api.get("/api/productos/codigo/C1")["existencia"] == 10
+    subir("codigo;descripcion;existencia\nC1;CREMA;4\n", "sumar")         # entrada de mercadería
+    assert api.get("/api/productos/codigo/C1")["existencia"] == 14
+    subir("codigo;descripcion;existencia\nC1;CREMA;7\n", "reemplazar")    # conteo
+    assert api.get("/api/productos/codigo/C1")["existencia"] == 7
+    r = subir("codigo;descripcion;existencia\nC1;CREMA;-2\n", "sumar")
+    assert r["errores"] and api.get("/api/productos/codigo/C1")["existencia"] == 7
+    tipos = [m["tipo"] for m in api.get(f"/api/productos/{api.get('/api/productos/codigo/C1')['id']}/kardex")]
+    assert tipos[:2] == ["ajuste", "entrada"]
+
+
+def test_plantilla_csv_se_puede_importar_tal_cual(api):
+    import io
+    plantilla = api.http.get("/api/productos/plantilla.csv").get_data()
+    r = api.http.post("/api/productos/importar", data={"archivo": (io.BytesIO(plantilla), "p.csv")},
+                      content_type="multipart/form-data").get_json()
+    assert r["creados"] == 2 and not r["errores"]
+    assert api.get("/api/productos/codigo/PAN")["existencia"] == 15.5
+
+
+def _entrar_como(api, usuario, clave="1111"):
+    api.post("/api/logout")
+    api.post("/api/login", {"usuario": usuario, "password": clave})
+
+
+def test_permisos_por_usuario(api, turno, productos):
+    catalogo = api.get("/api/permisos")
+    assert [p["clave"] for p in catalogo][:2] == ["cambiar_precio", "devoluciones"]
+    caja = api.post("/api/usuarios", {"usuario": "caja", "password": "1111", "rol": "cajero"}, esperado=201)
+    assert caja["permisos"]["movimientos_caja"] and caja["permisos"]["corte"]
+    assert not caja["permisos"]["cambiar_precio"] and not caja["permisos"]["productos"]
+    # Un cajero con permiso de descuentos y productos, pero sin reportes.
+    api.put(f"/api/usuarios/{caja['id']}", {"permisos": {"cambiar_precio": True, "productos": True, "corte": False}})
+    _entrar_como(api, "caja")
+    yo = api.get("/api/estado")["usuario"]
+    assert yo["permisos"]["cambiar_precio"] and not yo["permisos"]["reportes"]
+    api.post("/api/ventas", {"caja_id": 1, "descuento": 100,
+                             "items": [{"producto_id": productos["bebida"]["id"], "cantidad": 1}]}, esperado=201)
+    api.put(f"/api/productos/{productos['huevos']['id']}",
+            {"codigo": "HUEVO", "descripcion": "Huevo color", "precio_venta": 260})
+    assert "precio_costo" in api.get("/api/productos/codigo/HUEVO")   # quien edita productos ve el costo
+    api.get("/api/reportes/ventas", esperado=403)
+    api.post("/api/caja/1/cerrar", {"efectivo_contado": 0}, esperado=403)   # sin permiso de corte
+    api.post("/api/caja/1/movimiento", {"tipo": "entrada", "monto": 100, "concepto": "sencillo"}, esperado=201)
+    api.get("/api/turnos", esperado=403)
+    api.get("/api/usuarios", esperado=403)
+
+
+def test_permisos_desconocidos_se_ignoran_y_admin_los_tiene_todos(api):
+    u = api.post("/api/usuarios", {"usuario": "x", "password": "1111", "rol": "cajero",
+                                   "permisos": {"reportes": "si", "borrar_todo": True}}, esperado=201)
+    assert u["permisos"]["reportes"] is True and "borrar_todo" not in u["permisos"]
+    api.put(f"/api/usuarios/{u['id']}", {"permisos": "todo"}, esperado=400)
+    admin = api.get("/api/estado")["usuario"]
+    assert all(admin["permisos"].values())
+
+
+def test_nombre_en_el_ticket(api, turno, productos):
+    api.put("/api/usuarios/1", {"nombre_ticket": "Cajero 1 · Cristóbal Araya Cortés"})
+    venta = api.post("/api/ventas", {"caja_id": 1, "items": [{"producto_id": productos["pan"]["id"],
+                                                              "cantidad": 1}]}, esperado=201)
+    assert venta["atendio"] == "Cajero 1 · Cristóbal Araya Cortés" and venta["usuario"] == "Dueño"
+    api.put("/api/usuarios/1", {"nombre_ticket": ""})            # vacío: vuelve a su nombre
+    assert api.get(f"/api/ventas/{venta['id']}")["atendio"] == "Dueño"
+
+
+def test_migracion_pasa_las_opciones_de_cajeros_a_cada_usuario(app, api):
+    import json
+
+    from neji.db import conectar, migrar
+    api.post("/api/usuarios", {"usuario": "caja", "password": "1111", "rol": "cajero"}, esperado=201)
+    con = conectar(app.config["DATABASE"])
+    con.execute("ALTER TABLE usuarios DROP COLUMN permisos")       # base de una versión anterior
+    con.execute("UPDATE config SET valor = '1' WHERE clave = 'cajero_puede_devolver'")
+    migrar(con)
+    permisos = {u: json.loads(p) if p else None
+                for u, p in con.execute("SELECT usuario, permisos FROM usuarios").fetchall()}
+    con.close()
+    assert permisos["caja"]["devoluciones"] is True and permisos["caja"]["cambiar_precio"] is False
+    assert permisos["admin"] is None

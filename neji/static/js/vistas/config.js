@@ -1,9 +1,14 @@
 // Configuración: negocio, ticket, opciones, usuarios, cajas, esta terminal y respaldos.
 
 import { api, descargar } from '../api.js';
-import { ir, recargarConfiguracion } from '../app.js';
-import { esAdmin, estado, fijarCaja } from '../estado.js';
+import { recargarConfiguracion } from '../app.js';
+import { esAdmin, esFarmacia, estado, fijarCaja, nombreCaja } from '../estado.js';
+import {
+  bloquesTicket, escritorio, guardarImpresora, impresoraSugerida, imprimirConDialogo, leerImpresora, listarImpresoras, papelTicket, ticketVenta,
+  trabajoImpresion,
+} from '../impresion.js';
 import { aviso, avisoError, fecha, formulario, h, numero, pestanas, tabla, vaciar } from '../ui.js';
+import { importadorCsv } from './productos.js';
 
 let pestanaActual = null;
 
@@ -60,15 +65,15 @@ function vistaNegocio() {
         campo('Mensaje al final', c.ticket_pie),
         campo('Leyenda legal', c.ticket_leyenda, 'Mientras no emitas boleta electrónica desde Neji, el ticket es un comprobante interno.')),
       check('Imprimir el ticket automáticamente al cobrar', c.imprimir_automatico),
-      check('Imprimir directo, sin mostrar el cuadro de impresión (programa NejiPOS.exe)', c.impresion_directa,
-        'Usa la impresora predeterminada de Windows: deja tu impresora de tickets como predeterminada. Se aplica al volver a abrir Neji POS. En el navegador, usa el acceso directo con --kiosk-printing.'),
+      check('Cuando se use el cuadro de impresión, imprimir sin mostrarlo (en la impresora predeterminada)', c.impresion_directa,
+        'La impresora de tickets de cada caja se elige en la pestaña «Impresora de tickets» y ahí siempre se imprime directo. Esta opción es para lo demás (etiquetas, hojas) en NejiPOS.exe; se aplica al volver a abrir Neji POS.'),
     ];
   });
 }
 
 function vistaOpciones() {
   return formularioConfig({
-    redondeo_efectivo: 'check', permitir_stock_negativo: 'check', cajero_puede_cambiar_precio: 'check', cajero_puede_devolver: 'check',
+    redondeo_efectivo: 'check', permitir_stock_negativo: 'check',
     iva_porcentaje: 'texto', respaldos_mantener: 'texto', modulo_farmacia: 'check',
   }, (c) => [
     h('h3', 'Tipo de negocio'),
@@ -78,9 +83,7 @@ function vistaOpciones() {
     h('h3', 'Ventas'),
     check('Redondear pagos en efectivo (Ley 20.956)', c.redondeo_efectivo, 'Si el total termina en 1 a 5 baja a la decena; si termina en 6 a 9 sube. La boleta se emite por el monto exacto.'),
     check('Permitir vender sin existencia (inventario negativo)', c.permitir_stock_negativo, 'Útil si todavía no cargas todo tu inventario.'),
-    h('h3', { style: { marginTop: '1.2rem' } }, 'Permisos de cajeros'),
-    check('Los cajeros pueden cambiar precios y aplicar descuentos', c.cajero_puede_cambiar_precio),
-    check('Los cajeros pueden hacer devoluciones', c.cajero_puede_devolver),
+    h('p.ayuda', { style: { marginTop: '1rem' } }, 'Los permisos de cada cajero (descuentos, devoluciones, corte, reportes…) se eligen en la pestaña Usuarios.'),
     h('h3', { style: { marginTop: '1.2rem' } }, 'Otros'),
     h('div.rejilla',
       campo('IVA (%)', c.iva_porcentaje),
@@ -88,33 +91,141 @@ function vistaOpciones() {
   ]);
 }
 
+/** Venta de ejemplo para la vista previa del ticket. */
+function ventaDeEjemplo(atendio) {
+  const items = esFarmacia()
+    ? [['PARACETAMOL 500MG X 16 COMP', 2, 990], ['LORATADINA 10MG X 10', 1, 1890]]
+    : [['Bebida cola 1.5L', 2, 1590], ['Pan batido (kg)', 0.5, 2290]];
+  const lineas = items.map(([descripcion, cantidad, precio]) => ({
+    descripcion, cantidad, precio_unitario: precio, importe: Math.round(cantidad * precio), tipo_precio: 'normal',
+  }));
+  const total = lineas.reduce((t, l) => t + l.importe, 0);
+  const iva = Math.round(total - total / 1.19);
+  const recibido = Math.ceil(total / 1000) * 1000;
+  return {
+    folio: 1024, fecha: new Date().toISOString().slice(0, 19).replace('T', ' '), caja: nombreCaja(), atendio, usuario: atendio,
+    items: lineas, subtotal: total, descuento: 0, total, neto: total - iva, iva, exento: 0,
+    pagos: [{ metodo: 'efectivo', monto: total }], efectivo_recibido: recibido, cambio: recibido - total, redondeo: 0,
+  };
+}
+
+/** Ticket de ejemplo en pantalla, con la línea «Atendió» destacada. */
+export function previaTicket(atendio) {
+  return h('div.papel-ticket', { 'aria-label': 'Vista previa del ticket' }, ticketVenta(ventaDeEjemplo(atendio), { destacarAtendio: true }));
+}
+
 async function vistaUsuarios(zona) {
-  const cargar = async () => {
-    const usuarios = await api.get('/api/usuarios');
-    vaciar(zona, h('div.panel',
+  const catalogo = (await api.get('/api/permisos')).filter((p) => !p.farmacia || esFarmacia());
+  let usuarios = [];
+  let elegido = null;
+  const lista = h('div');
+  const previa = h('div');
+  vaciar(zona, h('div.usuarios', lista, previa));
+
+  async function cargar(id = elegido) {
+    usuarios = await api.get('/api/usuarios');
+    elegido = usuarios.some((u) => u.id === id) ? id : (usuarios.find((u) => u.id === estado.usuario.id) || usuarios[0])?.id;
+    pintar();
+  }
+
+  function resumenPermisos(u) {
+    if (u.rol === 'admin') return h('span.etiqueta.ok', 'Todos');
+    const si = catalogo.filter((p) => u.permisos[p.clave]);
+    return h('span', { title: si.map((p) => p.etiqueta).join('\n') || 'Solo vender' }, `${si.length} de ${catalogo.length}`);
+  }
+
+  function pintar() {
+    vaciar(lista, h('div.panel',
       h('div.fila.entre', h('h3', 'Usuarios'), h('button.btn.primario', { type: 'button', onclick: () => editar() }, 'Nuevo usuario')),
       tabla([
         { titulo: 'Usuario', valor: (u) => h('b', u.usuario) },
         { titulo: 'Nombre', valor: (u) => u.nombre },
+        { titulo: 'En el ticket', valor: (u) => u.nombre_ticket || h('span.suave', u.nombre) },
         { titulo: 'Rol', valor: (u) => (u.rol === 'admin' ? 'Administrador' : 'Cajero') },
+        { titulo: 'Permisos', valor: resumenPermisos },
         { titulo: 'Estado', valor: (u) => h(`span.etiqueta.${u.activo ? 'ok' : 'mal'}`, u.activo ? 'Activo' : 'Inactivo') },
-      ], usuarios, { alClic: (u) => editar(u) }),
-      h('p.ayuda', 'El administrador ve reportes, costos e inventario y cambia la configuración. El cajero vende, cobra, atiende clientes y hace cortes.')));
-  };
-  const editar = async (u = null) => {
+        { titulo: '', valor: (u) => h('button.btn.chico', { type: 'button', onclick: (e) => { e.stopPropagation(); editar(u); } }, 'Editar') },
+      ], usuarios, {
+        alClic: (u) => { elegido = u.id; pintar(); },
+        claseFila: (u) => (u.id === elegido ? 'sel' : ''),
+      }),
+      h('p.ayuda', 'El administrador puede todo, incluida esta configuración. A cada cajero se le eligen sus permisos con «Editar». Haz clic en un usuario para ver cómo sale en el ticket.')));
+    pintarPrevia();
+  }
+
+  function pintarPrevia() {
+    const u = usuarios.find((x) => x.id === elegido);
+    if (!u) {
+      vaciar(previa);
+      return;
+    }
+    const nombre = h('input', { value: u.nombre_ticket || '', placeholder: u.nombre, maxlength: 60, 'aria-label': 'Nombre en el ticket' });
+    const papel = h('div');
+    const refrescar = () => vaciar(papel, previaTicket(nombre.value.trim() || u.nombre));
+    nombre.addEventListener('input', refrescar);
+    const guardar = async () => {
+      try {
+        await api.put(`/api/usuarios/${u.id}`, { nombre_ticket: nombre.value.trim() });
+        if (u.id === estado.usuario.id) estado.usuario.nombre_ticket = nombre.value.trim() || null;
+        aviso('Nombre del ticket guardado.', 'ok');
+        await cargar(u.id);
+      } catch (e) {
+        avisoError(e);
+      }
+    };
+    nombre.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); guardar(); } });
+    refrescar();
+    vaciar(previa, h('div.panel.previa-ticket',
+      h('h3', 'Así sale en el ticket'),
+      h('label.campo', `Atendió (${u.usuario})`, nombre,
+        h('span.ayuda', 'Ej: «Cajero 1 · Cristóbal Araya Cortés». Vacío = su nombre.')),
+      h('div.fila.fin', h('button.btn.primario', { type: 'button', onclick: guardar }, 'Guardar')),
+      papel));
+  }
+
+  async function editar(u = null) {
+    const casillas = Object.fromEntries(catalogo.map((p) => [p.clave,
+      h('input', { type: 'checkbox', checked: u ? u.permisos[p.clave] : p.por_defecto })]));
+    const nota = h('p.ayuda');
+    const permisos = h('fieldset.permisos',
+      h('legend', 'Permisos del cajero'),
+      h('p.ayuda', 'Todos pueden vender, cobrar, abrir la caja y atender clientes.'),
+      catalogo.map((p) => h('label.check', casillas[p.clave], p.etiqueta)),
+      nota);
     const r = await formulario({
       titulo: u ? `Editar ${u.usuario}` : 'Nuevo usuario',
+      ancho: 'ancho',
       campos: [
-        { nombre: 'usuario', etiqueta: 'Usuario', valor: u?.usuario, requerido: !u, deshabilitado: Boolean(u), autofocus: !u },
+        { nombre: 'usuario', etiqueta: 'Usuario (para entrar)', valor: u?.usuario, requerido: !u, deshabilitado: Boolean(u), autofocus: !u },
         { nombre: 'nombre', etiqueta: 'Nombre', valor: u?.nombre, autofocus: Boolean(u) },
+        { nombre: 'nombre_ticket', etiqueta: 'Nombre en el ticket (Atendió)', valor: u?.nombre_ticket, placeholder: 'Vacío = su nombre', atributos: { maxlength: 60 } },
         { nombre: 'rol', etiqueta: 'Rol', tipo: 'select', valor: u?.rol || 'cajero', opciones: [['cajero', 'Cajero'], ['admin', 'Administrador']] },
         { nombre: 'password', etiqueta: u ? 'Nueva contraseña (vacío = no cambiar)' : 'Contraseña', tipo: 'password', requerido: !u },
         u ? { nombre: 'activo', etiqueta: 'Activo', tipo: 'check', valor: Boolean(u.activo) } : null,
       ].filter(Boolean),
-      alEnviar: (v) => (u ? api.put(`/api/usuarios/${u.id}`, v) : api.post('/api/usuarios', v)),
+      extra: permisos,
+      alMostrar: (e) => {
+        const segunRol = () => {
+          const admin = e.rol.value === 'admin';
+          permisos.disabled = admin;
+          permisos.classList.toggle('apagado', admin);
+          nota.textContent = admin ? 'El administrador tiene todos los permisos, incluida la configuración, los usuarios y las cajas.' : '';
+        };
+        e.rol.addEventListener('change', segunRol);
+        segunRol();
+      },
+      alEnviar: (v) => {
+        v.permisos = Object.fromEntries(Object.entries(casillas).map(([k, el]) => [k, el.checked]));
+        return u ? api.put(`/api/usuarios/${u.id}`, v) : api.post('/api/usuarios', v);
+      },
     });
-    if (r) { aviso('Usuario guardado.', 'ok'); cargar(); }
-  };
+    if (r) {
+      aviso('Usuario guardado.', 'ok');
+      if (u?.id === estado.usuario.id) estado.usuario = { ...estado.usuario, nombre: r.nombre, nombre_ticket: r.nombre_ticket };
+      await cargar(r.id);
+    }
+  }
+
   await cargar();
 }
 
@@ -157,9 +268,10 @@ async function vistaCajas(zona) {
       h('div.fila.entre', h('h3', 'Cajas'), h('button.btn.primario', { type: 'button', onclick: () => editar() }, 'Nueva caja')),
       tabla([
         { titulo: 'N°', valor: (c) => c.id },
-        { titulo: 'Nombre', valor: (c) => c.nombre },
+        { titulo: 'Nombre', valor: (c) => [c.nombre, c.principal ? h('span.etiqueta.ok', ' principal') : null] },
         { titulo: 'Estado', valor: (c) => h(`span.etiqueta.${c.activa ? 'ok' : 'mal'}`, c.activa ? 'Activa' : 'Inactiva') },
       ], cajas, { alClic: (c) => editar(c) }),
+      h('p.ayuda', 'Desde la caja principal se hace el corte general: cierra juntas todas las cajas y suma lo de todos los cajeros.'),
       panelRed(equipo)));
   };
   const equipo = await api.get('/api/equipo').catch(() => null);
@@ -169,6 +281,7 @@ async function vistaCajas(zona) {
       campos: [
         { nombre: 'nombre', etiqueta: 'Nombre', valor: c?.nombre, requerido: true },
         c ? { nombre: 'activa', etiqueta: 'Activa', tipo: 'check', valor: Boolean(c.activa) } : null,
+        c && !c.principal ? { nombre: 'principal', etiqueta: 'Caja principal (aquí se hace el corte general)', tipo: 'check', valor: false } : null,
       ].filter(Boolean),
       alEnviar: (v) => (c ? api.put(`/api/cajas/${c.id}`, v) : api.post('/api/cajas', v)),
     });
@@ -208,72 +321,147 @@ function vistaTerminal() {
     ]));
 }
 
-const OPCIONES_IMPORTAR = [
-  ['productos', 'Productos (código, nombre, costo, precio, departamento, distribuidor, vencimiento y principio activo)'],
-  ['existencias', 'Existencias (stock) de los productos'],
-  ['vademecum', 'Vademécum (uso terapéutico y efectos adversos)'],
-  ['recetario', 'Recetario: precios de principios activos y fórmulas magistrales'],
-  ['negocio', 'Datos del negocio para el ticket (nombre, dirección, teléfono, correo)'],
-];
-
-function resumenImportacion(r) {
-  return h('div.panel', { style: { marginTop: '1rem' } },
-    h('h3', 'Importación terminada'),
-    h('ul',
-      h('li', `Productos nuevos: ${r.productos_creados} · actualizados: ${r.productos_actualizados} · con principio activo: ${r.productos_con_principio}`),
-      h('li', `Fichas de vademécum: ${r.fichas_vademecum}`),
-      h('li', `Principios activos con precio de recetario: ${r.precios_recetario} · fórmulas magistrales: ${r.formas}`),
-      h('li', `Datos del negocio actualizados: ${r.datos_negocio}`)),
-    r.advertencias?.length ? [h('p.rojo', `${r.advertencias.length} advertencias:`), h('ul', r.advertencias.map((a) => h('li', a)))] : null,
-    h('button.btn', { type: 'button', onclick: () => ir('vademecum') }, 'Ir al vademécum'));
+function vistaImportar() {
+  const importador = importadorCsv();
+  return h('div.panel',
+    h('h3', 'Importar inventario desde CSV'),
+    importador.el,
+    h('div.fila.fin', { style: { marginTop: '1rem' } },
+      h('button.btn.primario', { type: 'button', onclick: () => importador.importar() }, 'Importar')));
 }
 
-function vistaImportar(resumen = null) {
-  const archivo = h('input', { type: 'file', accept: '.db,.sqlite,.sqlite3' });
-  const opciones = Object.fromEntries(OPCIONES_IMPORTAR.map(([k]) => [k, h('input', { type: 'checkbox', checked: true })]));
-  const resultado = h('div', resumen ? resumenImportacion(resumen) : null);
-  const error = h('div.error-modal.oculto', { role: 'alert' });
-  const boton = h('button.btn.primario', { type: 'button' }, 'Importar');
-  boton.addEventListener('click', async () => {
-    error.classList.add('oculto');
-    if (!archivo.files[0]) {
-      error.textContent = 'Elige el archivo corand_erp_pro.db.';
-      error.classList.remove('oculto');
-      return;
-    }
-    const datos = new FormData();
-    datos.append('archivo', archivo.files[0]);
-    for (const [k, el] of Object.entries(opciones)) datos.append(k, el.checked ? '1' : '0');
-    boton.disabled = true;
-    boton.textContent = 'Importando...';
-    try {
-      const r = await api.subir('/api/importar/corand', datos);
-      aviso('Importación terminada. Se hizo un respaldo antes de empezar.', 'ok', 6000);
-      // La importación puede activar el módulo farmacia y cambiar el nombre del negocio: se
-      // recarga la aplicación (menú incluido) y se vuelve a esta pestaña con el resumen.
-      await recargarConfiguracion({ pestana: 'importar', resumen: r });
-      return;
-    } catch (e) {
-      error.textContent = e.message;
-      error.classList.remove('oculto');
-    } finally {
-      boton.disabled = false;
-      boton.textContent = 'Importar';
-    }
-  });
-  return h('div.panel',
-    h('h3', 'Importar desde CORAND.ERP / Easy Pharma'),
-    h('p', 'Trae tus datos del programa anterior: elige el archivo ', h('b', 'corand_erp_pro.db'), ' (está en la misma carpeta que el programa).'),
-    h('ol.ayuda',
-      h('li', 'Cierra CORAND.ERP antes de copiar el archivo.'),
-      h('li', 'Neji hace un respaldo de su base antes de importar y no modifica tu archivo original.'),
-      h('li', 'Si un producto o principio activo ya existe, se actualiza (no se duplica). Puedes importar de nuevo cuando quieras.'),
-      h('li', 'Los usuarios no se importan: en CORAND las contraseñas están sin cifrar. Créalos en la pestaña Usuarios.')),
-    error,
-    h('div.fila', archivo),
-    h('div', { style: { margin: '.75rem 0' } }, OPCIONES_IMPORTAR.map(([k, t]) => h('label.check', opciones[k], t))),
-    boton,
-    resultado);
+/** Ticket de prueba: tildes, eñes, columnas y letra grande. */
+function ticketPrueba(papel) {
+  const ln = (izq, der, clase = '') => h(`div.ln${clase ? '.' + clase : ''}`, h('span', izq), h('span', der));
+  return h(`div.ticket${papel === '58' ? '.t58' : ''}`,
+    h('div.c.xl', estado.config.negocio_nombre || 'Neji POS'),
+    h('div.c', 'Prueba de impresión'),
+    h('hr'),
+    h('div', 'Tildes y eñes: áéíóú ÁÉÍÓÚ ñ Ñ ü ¿? ¡! °'),
+    ln('Izquierda', 'Derecha'),
+    ln('Producto con un nombre bastante largo para ver cómo se corta', '$1.990'),
+    ln('TOTAL', '$12.345', 'xl'),
+    h('hr'),
+    h('div.c', 'Si ves esto bien, la impresora está lista.'),
+    h('div', { style: { height: '8mm' } }));
+}
+
+/** Impresora de tickets de este computador (se guarda en este equipo, no en el servidor). */
+async function vistaImpresora(zona) {
+  let detectadas = await listarImpresoras();
+  const guardada = leerImpresora();
+  let config = { modo: 'escpos', papel: papelTicket(), cortar: true, cajon: true, codigo: 'cp850', copias: 1, ...(guardada || {}) };
+  if (!guardada && detectadas.ok) {
+    // Sin elegir todavía: se propone la que Neji usaría sola.
+    const sugerida = impresoraSugerida(detectadas.impresoras);
+    if (sugerida) config = { ...config, nombre: sugerida.nombre, automatica: true };
+  }
+
+  function formularioActual(campos) {
+    return {
+      ...config,
+      nombre: campos.nombre(),
+      dialogo: !campos.nombre(),
+      modo: campos.modo.value,
+      papel: campos.papel.value,
+      cortar: campos.cortar.checked,
+      cajon: campos.cajon.checked,
+      copias: Number(campos.copias.value) || 1,
+      codigo: campos.codigo.value,
+      columnas: campos.columnas.value ? Math.max(16, Math.min(80, Number(campos.columnas.value) || 0)) || null : null,
+      automatica: false,
+    };
+  }
+
+  function pintar() {
+    const impresoras = detectadas.impresoras || [];
+    const actual = impresoras.some((i) => i.nombre === config.nombre) ? config.nombre : (config.dialogo ? '' : config.nombre || '');
+    const radios = [];
+    const opcion = (valor) => {
+      const r = h('input', { type: 'radio', name: 'impresora', value: valor, checked: valor === actual });
+      radios.push(r);
+      return r;
+    };
+    const etiquetas = (i) => [
+      i.termica ? h('span.etiqueta.ok', 'de tickets') : null,
+      i.predeterminada ? h('span.etiqueta', 'predeterminada') : null,
+      i.virtual ? h('span.etiqueta', 'virtual') : null,
+      i.sin_conexion ? h('span.etiqueta.mal', 'sin conexión') : null,
+      i.sin_papel ? h('span.etiqueta.mal', 'sin papel') : null,
+    ];
+    const campos = {
+      nombre: () => radios.find((r) => r.checked)?.value || '',
+      papel: h('select', { 'aria-label': 'Papel' }, h('option', { value: '80', selected: config.papel !== '58' }, '80 mm (48 letras por línea)'), h('option', { value: '58', selected: config.papel === '58' }, '58 mm (32 letras por línea)')),
+      modo: h('select', { 'aria-label': 'Forma de imprimir' },
+        h('option', { value: 'escpos', selected: config.modo !== 'windows' }, 'Directa (ESC/POS)'),
+        h('option', { value: 'windows', selected: config.modo === 'windows' }, 'Con el controlador de Windows')),
+      cortar: h('input', { type: 'checkbox', checked: config.cortar !== false }),
+      cajon: h('input', { type: 'checkbox', checked: config.cajon !== false }),
+      copias: h('select', { 'aria-label': 'Copias' }, [1, 2, 3].map((n) => h('option', { value: n, selected: Number(config.copias || 1) === n }, String(n)))),
+      codigo: h('select', { 'aria-label': 'Página de códigos' },
+        [['cp850', 'PC850 Latino (recomendada)'], ['cp858', 'PC858 (con €)'], ['cp1252', 'Windows-1252'], ['cp437', 'PC437 (de fábrica)']]
+          .map(([v, t]) => h('option', { value: v, selected: (config.codigo || 'cp850') === v }, t))),
+      columnas: h('input', { inputmode: 'numeric', value: config.columnas || '', placeholder: 'Automático', style: { maxWidth: '140px' } }),
+    };
+
+    const estadoActual = config.nombre && !config.dialogo
+      ? h('p', 'Los tickets se imprimen directo en ', h('b', config.nombre), config.automatica ? ' (Neji la encontró sola).' : '.')
+      : h('p', 'Los tickets se imprimen con el cuadro de impresión de Windows.');
+
+    const lista = !detectadas.escritorio
+      ? h('div.aviso-suave',
+        h('p', h('b', 'Estás usando Neji POS en el navegador. '), 'Aquí la impresora se elige en el cuadro de impresión.'),
+        h('p.ayuda', 'Con el programa NejiPOS.exe, Neji encuentra solo las impresoras instaladas en este computador (USB, red o serie: POS-80, POS-58, SLK, Epson, Xprinter…) e imprime directo, sin preguntar.'))
+      : !detectadas.ok
+        ? h('div.error-modal', detectadas.error || 'No se pudieron leer las impresoras.')
+        : tabla([
+          { titulo: 'Usar', valor: (i) => opcion(i.nombre) },
+          { titulo: 'Impresora', valor: (i) => [h('b', i.nombre), ' ', etiquetas(i)] },
+          { titulo: 'Conexión', valor: (i) => i.conexion },
+          { titulo: 'Controlador', valor: (i) => h('span.suave', i.controlador) },
+        ], impresoras, { vacio: 'No hay impresoras instaladas en este computador.', alClic: (i) => { const r = radios.find((x) => x.value === i.nombre); if (r) r.checked = true; } });
+
+    const probar = async () => {
+      const prueba = formularioActual(campos);
+      if (!prueba.nombre) return imprimirConDialogo(ticketPrueba(prueba.papel));
+      const api = await escritorio();
+      const r = api ? await api.imprimir(trabajoImpresion(prueba, bloquesTicket(ticketPrueba(prueba.papel)))) : null;
+      if (r?.ok) aviso(`Prueba enviada a «${prueba.nombre}».`, 'ok');
+      else avisoError(new Error(r?.error || 'No se pudo imprimir.'));
+      return null;
+    };
+
+    vaciar(zona, h('div.panel.impresora',
+      h('div.fila.entre', h('h3', 'Impresora de tickets de este computador'),
+        detectadas.escritorio ? h('button.btn', { type: 'button', onclick: async () => { detectadas = await listarImpresoras({ refrescar: true }); pintar(); } }, 'Buscar de nuevo') : null),
+      estadoActual,
+      lista,
+      detectadas.escritorio && detectadas.ok ? h('label.check', opcion(''), 'Ninguna: usar siempre el cuadro de impresión de Windows') : null,
+      h('div.rejilla', { style: { marginTop: '1rem' } },
+        h('label.campo', 'Papel', campos.papel),
+        h('label.campo', 'Forma de imprimir', campos.modo, h('span.ayuda', 'La directa es para impresoras de tickets: más rápida, corta el papel y abre el cajón. La del controlador sirve con cualquier impresora; úsala si salen símbolos raros.')),
+        h('label.campo', 'Copias', campos.copias)),
+      h('label.check', campos.cortar, 'Cortar el papel al terminar el ticket'),
+      h('label.check', campos.cajon, 'Abrir el cajón de dinero al cobrar en efectivo (cajón conectado a la impresora)'),
+      h('details', { style: { marginTop: '.6rem' } },
+        h('summary', 'Avanzado'),
+        h('div.rejilla', { style: { marginTop: '.6rem' } },
+          h('label.campo', 'Página de códigos (tildes y ñ)', campos.codigo, h('span.ayuda', 'Si las tildes salen mal, prueba otra.')),
+          h('label.campo', 'Letras por línea', campos.columnas, h('span.ayuda', 'Vacío = según el papel. Algunas de 80 mm usan 42.')))),
+      h('div.fila.fin', { style: { marginTop: '1rem' } },
+        h('button.btn', { type: 'button', onclick: probar }, 'Imprimir prueba'),
+        h('button.btn.primario', {
+          type: 'button',
+          onclick: () => {
+            config = formularioActual(campos);
+            guardarImpresora(config);
+            aviso('Impresora guardada en este computador.', 'ok');
+            pintar();
+          },
+        }, 'Guardar')),
+      h('p.ayuda', 'Esta elección es de este computador: cada caja usa su propia impresora. Las etiquetas de códigos de barras y las hojas se imprimen siempre con el cuadro de impresión.')));
+  }
+  pintar();
 }
 
 async function vistaRespaldos(zona) {
@@ -299,10 +487,10 @@ async function vistaRespaldos(zona) {
 export async function montar(contenedor, parametros = {}) {
   const admin = esAdmin();
   const opciones = admin
-    ? [['negocio', 'Negocio y ticket'], ['opciones', 'Opciones'], ['usuarios', 'Usuarios'], ['cajas', 'Cajas'], ['terminal', 'Esta terminal'], ['respaldos', 'Respaldos'], ['importar', 'Importar']]
-    : [['terminal', 'Esta terminal']];
+    ? [['negocio', 'Negocio y ticket'], ['opciones', 'Opciones'], ['usuarios', 'Usuarios'], ['cajas', 'Cajas'], ['terminal', 'Esta terminal'],
+      ['impresora', 'Impresora de tickets'], ['respaldos', 'Respaldos'], ['importar', 'Importar inventario (CSV)']]
+    : [['terminal', 'Esta terminal'], ['impresora', 'Impresora de tickets']];
   let actual = opciones.some(([k]) => k === parametros.pestana) ? parametros.pestana : opciones[0][0];
-  let resumenImportado = parametros.resumen || null; // se muestra una vez, al volver de importar
   const barra = h('div');
   const zona = h('div');
   vaciar(contenedor, h('h2', 'Configuración'), barra, zona);
@@ -317,7 +505,8 @@ export async function montar(contenedor, parametros = {}) {
       else if (p === 'usuarios') await vistaUsuarios(zona);
       else if (p === 'cajas') await vistaCajas(zona);
       else if (p === 'respaldos') await vistaRespaldos(zona);
-      else if (p === 'importar') { vaciar(zona, vistaImportar(resumenImportado)); resumenImportado = null; }
+      else if (p === 'importar') vaciar(zona, vistaImportar());
+      else if (p === 'impresora') await vistaImpresora(zona);
       else vaciar(zona, vistaTerminal());
     } catch (e) {
       avisoError(e);

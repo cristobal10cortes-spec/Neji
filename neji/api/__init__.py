@@ -21,9 +21,9 @@ CAMPOS_PRIVADOS = {"precio_costo", "costo_unitario", "ganancia", "costo_estimado
 
 def sin_costos(datos):
     """Quita costos y ganancias de la respuesta si quien consulta es cajero."""
-    from ..auth import usuario_actual
+    from ..auth import usuario_actual, ve_costos
 
-    if usuario_actual()["rol"] == "admin":
+    if ve_costos(usuario_actual()):
         return datos
 
     def limpiar(valor):
@@ -57,5 +57,5 @@ def rango_fechas():
     return desde, hasta, f"{desde} 00:00:00", f"{hasta} 23:59:59"
 
 
-from . import (caja, clientes, farmacia, importar, inventario, productos, recetario,  # noqa: E402,F401
-               reportes, sistema, ventas)
+from . import (caja, clientes, farmacia, inventario, productos, recetario, reportes,  # noqa: E402,F401
+               sistema, ventas)

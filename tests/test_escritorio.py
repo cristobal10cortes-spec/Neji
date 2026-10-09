@@ -108,3 +108,38 @@ def test_busca_webview2_en_el_disco(tmp_path, monkeypatch):
 def test_fuera_de_windows_el_motor_no_necesita_preparacion():
     if sys.platform != "win32":
         assert escritorio.preparar_motor() == ("ok", "", {})
+
+
+def test_la_ventana_le_da_a_la_interfaz_las_impresoras_de_este_computador(monkeypatch):
+    creadas = {}
+
+    class WebviewFalso:
+        def create_window(self, *args, **kwargs):
+            creadas.update(kwargs)
+            return object()
+
+    escritorio.crear_ventana(WebviewFalso(), "http://127.0.0.1:5000/")
+    api = creadas["js_api"]
+    assert isinstance(api, escritorio.ApiEscritorio)
+    # Los errores vuelven como {ok: False, error} para mostrarlos en la caja, nunca como excepción.
+    assert api.imprimir({"impresora": ""}) == {"ok": False, "error": "No hay una impresora elegida."}
+    if sys.platform != "win32":
+        r = api.impresoras()
+        assert r["ok"] is False and "Windows" in r["error"]
+
+
+def test_imprimir_arma_escpos_y_lo_manda_a_la_impresora(monkeypatch):
+    from neji import impresoras
+    enviados = []
+    monkeypatch.setattr(impresoras, "imprimir_crudo", lambda nombre, datos, *a: enviados.append((nombre, datos)))
+    r = escritorio.ApiEscritorio().imprimir({"impresora": "POS-80", "papel": "80", "cajon": True, "copias": 2,
+                                             "bloques": escritorio.TICKET_PRUEBA})
+    assert r == {"ok": True}
+    assert [n for n, _ in enviados] == ["POS-80", "POS-80"]
+    primero, segundo = enviados[0][1], enviados[1][1]
+    assert impresoras.ABRIR_CAJON in primero and impresoras.ABRIR_CAJON not in segundo   # cajón solo una vez
+    assert "Tildes y eñes".encode("cp850") in primero and primero.endswith(impresoras.CORTAR)
+    # Sin bloques: solo abre el cajón.
+    enviados.clear()
+    escritorio.ApiEscritorio().imprimir({"impresora": "POS-80", "cajon": True, "bloques": []})
+    assert enviados == [("POS-80", impresoras.INICIAR + b"\x1bt\x02" + impresoras.ABRIR_CAJON)]

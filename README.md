@@ -49,9 +49,13 @@ Neji POS se abre en **su propia ventana**, sin navegador ni ventana negra:
 - F5 y F12 no hacen nada fuera de la venta: son atajos de Neji (cliente, cobrar).
   Para recargar la pantalla usa `Ctrl+Shift+R`.
 
-**Imprimir el ticket sin el cuadro de impresión:** deja tu impresora térmica (58 u
-80 mm) como predeterminada en Windows y marca **Configuración → Negocio y ticket →
-Imprimir directo**. Se aplica al volver a abrir Neji POS.
+**Impresora de tickets:** NejiPOS.exe encuentra sola las impresoras instaladas en el
+computador (USB, red o serie: POS-80, POS-58, XP-80, SLK, Epson TM, Bixolon…) y manda
+el ticket directo a la de tickets, sin cuadro de impresión. Basta con tener instalado
+el controlador de la impresora. En **Configuración → Impresora de tickets** se ve cuál
+encontró y se puede elegir otra, el papel (80 o 58 mm), cortar el papel, abrir el cajón
+de dinero al cobrar en efectivo e imprimir una prueba. Cada caja usa su propia impresora,
+también las que se conectan a otro equipo con `--conectar`.
 
 ### Con Python (para quien prefiera el navegador)
 
@@ -189,29 +193,18 @@ Se activa en **Configuración → Opciones → Farmacia**, o al configurar Neji 
 - Cada producto puede tener **proveedor/distribuidor** y **fecha de vencimiento**.
 - **Inventario → Vencimientos** lista lo que vence pronto.
 
-**Importar desde CORAND.ERP / Easy Pharma**
+**Importar el inventario desde CSV**
 
-En **Configuración → Importar**, elige el archivo `corand_erp_pro.db` y Neji trae:
+En **Configuración → Importar inventario (CSV)** (o en Productos → Importar CSV) se sube
+una planilla guardada como CSV desde Excel, eleventa u otro sistema:
 
-- Productos con su principio activo, distribuidor y vencimiento.
-- El stock.
-- El vademécum.
-- Los precios de los principios activos del recetario y las fórmulas magistrales.
-- Los datos del ticket.
+- Crea los productos nuevos y actualiza los que ya existen (por código), con su
+  principio activo, distribuidor, vencimiento y stock.
+- La existencia puede **reemplazar** el stock (conteo de inventario) o **sumarse**
+  (entrada de mercadería). Cada cambio queda en el kardex.
+- Trae una **planilla de ejemplo** para descargar con todas las columnas.
 
-Cómo funciona:
-
-- Antes de importar hace un respaldo.
-- No modifica el archivo original.
-- No duplica si importas dos veces.
-
-También se puede desde la línea de comandos:
-
-```
-python importar_corand.py ruta/a/corand_erp_pro.db
-```
-
-El detalle del análisis del programa anterior está en
+El análisis del programa anterior (CORAND.ERP) está en
 [`docs/analisis-corand.md`](docs/analisis-corand.md).
 
 ### Productos e inventario
@@ -242,7 +235,10 @@ El detalle del análisis del programa anterior está en
 - **Estado de caja en vivo**: cuánto debería haber en el cajón.
 - **Corte de caja**: se compara lo contado con lo esperado y se indica el faltante o sobrante.
   También muestra las ventas por forma de pago y por departamento.
-- Historial de cortes.
+- **Corte general** desde la caja principal: se cuenta el efectivo de cada caja y se cierran
+  todas juntas. El ticket suma todas las cajas y muestra lo vendido por cada cajero. La caja
+  principal se elige en **Configuración → Cajas**.
+- Historial de cortes y de cortes generales.
 
 ### Devoluciones
 
@@ -261,9 +257,13 @@ El detalle del análisis del programa anterior está en
 
 ### Usuarios y seguridad
 
-- Roles **administrador** y **cajero**.
-- Los cajeros no ven costos, reportes ni configuración.
-- Se puede permitir o no que un cajero cambie precios o haga devoluciones.
+- En **Configuración → Usuarios** se agregan y modifican usuarios.
+- Roles **administrador** (puede todo) y **cajero**.
+- Cada cajero tiene **sus propios permisos**: cambiar precios y descuentos, devoluciones,
+  entradas y salidas de efectivo, corte de su caja, corte general, crédito a clientes,
+  productos, inventario, reportes y costos, y vademécum.
+- **Nombre en el ticket**: cómo aparece cada usuario en «Atendió:» (por ejemplo
+  «Cajero 1 · Cristóbal Araya Cortés»), con una vista previa del ticket al lado.
 - **Respaldo automático diario**, que guarda los últimos 10 (configurable),
   más respaldo y descarga manual.
 
@@ -318,9 +318,10 @@ Para restaurar un respaldo:
 1. En eleventa: **Productos → Exportar a Excel**. En otros sistemas, usa su
    exportación de productos.
 2. Abre el archivo en Excel y guárdalo como **CSV (delimitado por punto y coma)**.
-3. En Neji: **Productos → Importar CSV**.
+3. En Neji: **Configuración → Importar inventario (CSV)** (o **Productos → Importar CSV**).
    - Si el código ya existe, el producto se actualiza.
    - Si no existe, se crea.
+   - Elige si la existencia reemplaza el stock o se suma a él.
 
 ---
 
@@ -347,7 +348,6 @@ tests/                 pruebas con pytest
 run.py                 inicia el servidor y abre el navegador
 escritorio.py          NejiPOS.exe: servidor + ventana propia (pywebview / WebView2)
 empaquetado/           receta de PyInstaller, instalador (Inno Setup) e ícono
-importar_corand.py     importación desde CORAND.ERP por línea de comandos
 docs/investigacion.md  lo mejor de cada POS y qué se tomó de cada uno
 ```
 
@@ -397,9 +397,9 @@ Para agregar una función nueva:
 
 ## El programa anterior: CORAND.ERP / Easy Pharma (`corand_erp.py`)
 
-Este repositorio también guarda el programa original de la farmacia, para seguir usándolo
-mientras se pasa a Neji POS. Sus datos se traen a Neji desde **Configuración → Importar**
-(ver «Farmacia: vademécum y recetario magistral»).
+Este repositorio también guarda el programa original de la farmacia, como referencia. Para
+pasar el inventario a Neji POS, expórtalo a una planilla y súbela en **Configuración →
+Importar inventario (CSV)**.
 
 Sistema de punto de venta e inventario para farmacia, escrito en **Python** con **PyQt6**.
 

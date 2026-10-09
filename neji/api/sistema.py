@@ -1,12 +1,13 @@
 """Configuración inicial, sesión, usuarios, cajas, departamentos, configuración y respaldos."""
 
+import json
 import os
 
 from flask import current_app, jsonify, send_from_directory, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .. import equipo, respaldos
-from ..auth import solo_admin, usuario_actual
+from ..auth import PERMISOS, con_permiso, leer_permisos, permisos_de, solo_admin, usuario_actual
 from ..chile import formatear_rut, validar_rut
 from ..db import CONFIG_POR_DEFECTO, ahora, filas, get_db, leer_config, transaccion
 from ..validar import ErrorNegocio, booleano, entero, texto
@@ -132,11 +133,26 @@ def guardar_config():
 
 # --- Usuarios ----------------------------------------------------------------
 
+def _usuario_publico(u):
+    u = dict(u)
+    u["permisos"] = permisos_de(u)
+    u.pop("password_hash", None)
+    return u
+
+
+@bp.get("/permisos")
+def catalogo_permisos():
+    """Los permisos que se pueden dar a un cajero, en orden y con su explicación."""
+    return jsonify([{"clave": clave, "etiqueta": etiqueta, "por_defecto": defecto, "farmacia": farmacia}
+                    for clave, etiqueta, defecto, farmacia in PERMISOS])
+
+
 @bp.get("/usuarios")
 @solo_admin
 def listar_usuarios():
-    return jsonify(filas(get_db().execute(
-        "SELECT id, usuario, nombre, rol, activo, creado FROM usuarios ORDER BY nombre")))
+    return jsonify([_usuario_publico(u) for u in get_db().execute(
+        "SELECT id, usuario, nombre, nombre_ticket, rol, activo, creado, permisos FROM usuarios "
+        "ORDER BY nombre")])
 
 
 def _leer_rol(datos):
@@ -159,11 +175,13 @@ def crear_usuario():
         if con.execute("SELECT 1 FROM usuarios WHERE usuario = ?", (usuario,)).fetchone():
             raise ErrorNegocio("Ya existe un usuario con ese nombre.")
         nuevo = con.execute(
-            "INSERT INTO usuarios (usuario, nombre, password_hash, rol, creado) VALUES (?, ?, ?, ?, ?)",
-            (usuario, texto(datos, "nombre") or usuario, generate_password_hash(password),
-             _leer_rol(datos), ahora()),
+            "INSERT INTO usuarios (usuario, nombre, nombre_ticket, password_hash, rol, permisos, creado) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (usuario, texto(datos, "nombre", max_largo=80) or usuario,
+             texto(datos, "nombre_ticket", max_largo=60) or None, generate_password_hash(password),
+             _leer_rol(datos), json.dumps(leer_permisos(datos.get("permisos"))), ahora()),
         ).lastrowid
-    return jsonify(id=nuevo), 201
+    return jsonify(_usuario_publico(con.execute("SELECT * FROM usuarios WHERE id = ?", (nuevo,)).fetchone())), 201
 
 
 @bp.put("/usuarios/<int:usuario_id>")
@@ -185,15 +203,20 @@ def editar_usuario(usuario_id):
                 (usuario_id,)).fetchone()[0]
             if not otros:
                 raise ErrorNegocio("Debe quedar al menos un administrador activo.")
-        con.execute("UPDATE usuarios SET nombre = ?, rol = ?, activo = ? WHERE id = ?",
-                    (texto(datos, "nombre") or actual["nombre"], rol, activo, usuario_id))
+        nombre_ticket = (texto(datos, "nombre_ticket", max_largo=60) or None) if "nombre_ticket" in datos \
+            else actual["nombre_ticket"]
+        permisos = leer_permisos(datos.get("permisos"), permisos_de({**dict(actual), "rol": "cajero"}))
+        con.execute("UPDATE usuarios SET nombre = ?, nombre_ticket = ?, rol = ?, activo = ?, permisos = ? "
+                    "WHERE id = ?",
+                    (texto(datos, "nombre", max_largo=80) or actual["nombre"], nombre_ticket, rol, activo,
+                     json.dumps(permisos), usuario_id))
         password = str(datos.get("password") or "")
         if password:
             if len(password) < 4:
                 raise ErrorNegocio("La contraseña debe tener al menos 4 caracteres.")
             con.execute("UPDATE usuarios SET password_hash = ? WHERE id = ?",
                         (generate_password_hash(password), usuario_id))
-    return jsonify(ok=True)
+    return jsonify(_usuario_publico(con.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()))
 
 
 # --- Cajas y departamentos ---------------------------------------------------
@@ -231,7 +254,15 @@ def editar_caja(caja_id):
         if not activa and con.execute(
                 "SELECT 1 FROM turnos WHERE caja_id = ? AND estado = 'abierto'", (caja_id,)).fetchone():
             raise ErrorNegocio("Cierra el turno de la caja antes de desactivarla.")
-        con.execute("UPDATE cajas SET nombre = ?, activa = ? WHERE id = ?", (nombre, activa, caja_id))
+        principal = booleano(datos.get("principal", caja["principal"]))
+        if caja["principal"] and not principal:
+            raise ErrorNegocio("Para cambiar la caja principal, marca como principal la otra caja.")
+        if principal and not activa:
+            raise ErrorNegocio("La caja principal no se puede desactivar.")
+        if principal and not caja["principal"]:
+            con.execute("UPDATE cajas SET principal = 0")   # solo una caja es la principal
+        con.execute("UPDATE cajas SET nombre = ?, activa = ?, principal = ? WHERE id = ?",
+                    (nombre, activa, 1 if principal else 0, caja_id))
     return jsonify(ok=True)
 
 
@@ -244,7 +275,7 @@ def listar_departamentos():
 
 
 @bp.post("/departamentos")
-@solo_admin
+@con_permiso("productos")
 def crear_departamento():
     nombre = texto(datos_json(), "nombre", requerido=True, nombre="el nombre", max_largo=60)
     con = get_db()
@@ -256,7 +287,7 @@ def crear_departamento():
 
 
 @bp.put("/departamentos/<int:dep_id>")
-@solo_admin
+@con_permiso("productos")
 def editar_departamento(dep_id):
     nombre = texto(datos_json(), "nombre", requerido=True, nombre="el nombre", max_largo=60)
     con = get_db()
@@ -271,7 +302,7 @@ def editar_departamento(dep_id):
 
 
 @bp.delete("/departamentos/<int:dep_id>")
-@solo_admin
+@con_permiso("productos")
 def borrar_departamento(dep_id):
     con = get_db()
     with transaccion(con):

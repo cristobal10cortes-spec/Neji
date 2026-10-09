@@ -113,7 +113,7 @@ export async function verVenta(id, alCambiar = () => {}) {
     ],
     botones: [
       { texto: 'Reimprimir ticket', accion: () => imprimir(ticketVenta(v)) },
-      v.estado !== 'devuelta' && puede('cajero_puede_devolver')
+      v.estado !== 'devuelta' && puede('devoluciones')
         ? { texto: 'Devolución', clase: 'peligro', accion: () => devolver(v, () => { m.cerrar(); alCambiar(); verVenta(id, alCambiar); }) }
         : null,
       { texto: 'Cerrar', clase: 'primario', accion: (mm) => mm.cerrar() },

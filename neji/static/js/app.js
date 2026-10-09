@@ -1,7 +1,7 @@
 // Arranque, navegación entre pantallas y atajos de teclado globales.
 
 import { api, cuandoSeCierreSesion } from './api.js';
-import { cargarSesion, esAdmin, esFarmacia, estado, nombreCaja } from './estado.js';
+import { cargarSesion, esFarmacia, estado, nombreCaja, puede } from './estado.js';
 import { aviso, avisoError, cerrarModales, h, teclaEnModal, vaciar } from './ui.js';
 import * as caja from './vistas/caja.js';
 import * as clientes from './vistas/clientes.js';
@@ -19,14 +19,14 @@ const VISTAS = [
   { clave: 'ventas', titulo: 'Ventas', tecla: 'F1', modulo: ventas },
   { clave: 'clientes', titulo: 'Clientes', tecla: 'F2', modulo: clientes },
   { clave: 'productos', titulo: 'Productos', tecla: 'F3', modulo: productos },
-  { clave: 'inventario', titulo: 'Inventario', tecla: 'F4', modulo: inventario, admin: true },
+  { clave: 'inventario', titulo: 'Inventario', tecla: 'F4', modulo: inventario, permiso: 'inventario' },
   { clave: 'vademecum', titulo: 'Vademécum', modulo: vademecum, farmacia: true },
   { clave: 'recetario', titulo: 'Recetario', modulo: recetario, farmacia: true },
   { clave: 'caja', titulo: 'Caja', modulo: caja },
   { clave: 'historial', titulo: 'Historial', modulo: historial },
-  { clave: 'cotizaciones', titulo: 'Cotizaciones', modulo: cotizaciones },
-  { clave: 'reportes', titulo: 'Reportes', modulo: reportes, admin: true },
-  { clave: 'config', titulo: 'Configuración', modulo: config },
+  { clave: 'cotizaciones', titulo: 'Cotizaciones', corto: 'Cotiz.', modulo: cotizaciones },
+  { clave: 'reportes', titulo: 'Reportes', modulo: reportes, permiso: 'reportes' },
+  { clave: 'config', titulo: 'Configuración', corto: 'Config.', modulo: config },
 ];
 
 const raiz = document.getElementById('app');
@@ -47,7 +47,7 @@ function tomarParametros() {
 }
 
 function vistasPermitidas() {
-  return VISTAS.filter((v) => (!v.admin || esAdmin()) && (!v.farmacia || esFarmacia()));
+  return VISTAS.filter((v) => (!v.permiso || puede(v.permiso)) && (!v.farmacia || esFarmacia()));
 }
 
 async function mostrarVista() {
@@ -71,8 +71,9 @@ async function mostrarVista() {
 }
 
 function dibujarAplicacion() {
-  nav = h('nav.nav', vistasPermitidas().map((v) => h('button', { type: 'button', dataset: { vista: v.clave }, onclick: () => ir(v.clave) },
-    v.tecla ? h('kbd', v.tecla) : null, v.titulo)));
+  // En pantallas angostas (Windows al 125 %) los nombres largos se abrevian para que el menú quepa entero.
+  nav = h('nav.nav', vistasPermitidas().map((v) => h('button', { type: 'button', title: v.titulo, dataset: { vista: v.clave }, onclick: () => ir(v.clave) },
+    v.tecla ? h('kbd', v.tecla) : null, h('span.nombre-largo', v.titulo), v.corto ? h('span.nombre-corto', v.corto) : null)));
   principal = h('main');
   vaciar(raiz,
     h('header.barra',

@@ -3,8 +3,9 @@
 import json
 from decimal import Decimal
 
+from ..auth import tiene_permiso
 from ..chile import desglosar_iva, redondear, redondear_efectivo
-from ..db import ahora, config_activa, fila, filas, leer_config, transaccion
+from ..db import ahora, fila, filas, leer_config, transaccion
 from ..validar import ErrorNegocio, cantidad, entero, texto
 from .caja import exigir_caja, exigir_turno, resumen_turno
 from .clientes import exigir_cliente, mover_saldo
@@ -26,7 +27,7 @@ def pesos(monto):
 
 
 def puede(usuario, con, permiso):
-    return usuario["rol"] == "admin" or config_activa(con, permiso)
+    return tiene_permiso(usuario, permiso)
 
 
 def precio_para(producto, cant, tipo_precio):
@@ -149,7 +150,7 @@ def calcular_totales(lineas, descuento, tasa_iva):
 
 def leer_descuento(con, datos, usuario):
     descuento = entero(datos.get("descuento") or 0, "descuento", minimo=0)
-    if descuento and not puede(usuario, con, "cajero_puede_cambiar_precio"):
+    if descuento and not puede(usuario, con, "cambiar_precio"):
         raise ErrorNegocio("No tienes permiso para aplicar descuentos.", status=403)
     return descuento
 
@@ -165,7 +166,7 @@ def registrar_venta(con, datos, usuario):
         turno = exigir_turno(con, caja_id)
         config = leer_config(con)
         lineas = calcular_lineas(con, datos.get("items"),
-                                 puede(usuario, con, "cajero_puede_cambiar_precio"))
+                                 puede(usuario, con, "cambiar_precio"))
         t = calcular_totales(lineas, leer_descuento(con, datos, usuario),
                              int(config["iva_porcentaje"]))
 
@@ -264,7 +265,8 @@ def registrar_venta(con, datos, usuario):
 
 def obtener_venta(con, venta_id):
     venta = fila(con.execute(
-        """SELECT v.*, c.nombre AS caja, u.nombre AS usuario, cl.nombre AS cliente,
+        """SELECT v.*, c.nombre AS caja, u.nombre AS usuario,
+                  COALESCE(NULLIF(u.nombre_ticket, ''), u.nombre) AS atendio, cl.nombre AS cliente,
                   cl.rut AS cliente_rut, cl.saldo AS cliente_saldo
            FROM ventas v
            JOIN cajas c ON c.id = v.caja_id
@@ -396,7 +398,7 @@ def devolver(con, venta_id, datos, usuario):
 def crear_cotizacion(con, datos, usuario):
     with transaccion(con):
         lineas = calcular_lineas(con, datos.get("items"),
-                                 puede(usuario, con, "cajero_puede_cambiar_precio"),
+                                 puede(usuario, con, "cambiar_precio"),
                                  permitir_recetas=False)
         config = leer_config(con)
         t = calcular_totales(lineas, leer_descuento(con, datos, usuario),

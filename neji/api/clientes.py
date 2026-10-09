@@ -2,7 +2,7 @@
 
 from flask import jsonify, request
 
-from ..auth import usuario_actual
+from ..auth import tiene_permiso, usuario_actual
 from ..chile import formatear_rut, validar_rut
 from ..db import ahora, filas, get_db, sin_acentos, transaccion
 from ..servicios.caja import exigir_turno
@@ -81,8 +81,8 @@ def crear_cliente():
     con = get_db()
     with transaccion(con):
         c = _leer_cliente(con, datos)
-        # Solo un administrador define el crédito; el cajero crea clientes sin fiado.
-        c["limite_credito"] = _leer_limite(datos) if usuario_actual()["rol"] == "admin" else 0
+        # Solo quien tiene el permiso de crédito lo define; los demás crean clientes sin fiado.
+        c["limite_credito"] = _leer_limite(datos) if tiene_permiso(usuario_actual(), "clientes_credito") else 0
         c["creado"] = ahora()
         cliente_id = con.execute(
             f"INSERT INTO clientes ({', '.join(c)}) VALUES ({', '.join('?' for _ in c)})",
@@ -97,7 +97,7 @@ def editar_cliente(cliente_id):
     with transaccion(con):
         exigir_cliente(con, cliente_id)
         c = _leer_cliente(con, datos, cliente_id)
-        if usuario_actual()["rol"] == "admin" and ("limite_credito" in datos or "sin_limite" in datos):
+        if tiene_permiso(usuario_actual(), "clientes_credito") and ("limite_credito" in datos or "sin_limite" in datos):
             c["limite_credito"] = _leer_limite(datos)
         con.execute(f"UPDATE clientes SET {', '.join(f'{k} = ?' for k in c)} WHERE id = ?",
                     list(c.values()) + [cliente_id])
@@ -106,8 +106,8 @@ def editar_cliente(cliente_id):
 
 @bp.delete("/clientes/<int:cliente_id>")
 def borrar_cliente(cliente_id):
-    if usuario_actual()["rol"] != "admin":
-        raise ErrorNegocio("Solo un administrador puede eliminar clientes.", status=403)
+    if not tiene_permiso(usuario_actual(), "clientes_credito"):
+        raise ErrorNegocio("No tienes permiso para eliminar clientes.", status=403)
     con = get_db()
     with transaccion(con):
         cliente = exigir_cliente(con, cliente_id)
