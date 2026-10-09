@@ -108,8 +108,9 @@ otras cajas vendan. Cada caja tiene su propio turno y su propio corte.
 - Captura por código de barras, con la sintaxis `3*código` para varias unidades.
 - **Buscador en vivo**: al escribir un nombre en el mismo campo del código aparece la
   lista de productos con su código, nombre, precio y existencia. Se elige con `↑` `↓` y
-  `Enter`, o con un clic. Si el texto calza con un solo producto, `Enter` lo agrega
-  directo. `3*nombre` también funciona.
+  `Enter`, o con un clic. Si el nombre calza con un solo producto, `Enter` lo agrega
+  directo; si lo escrito solo se parece a un código (o son solo números), pide
+  confirmar con `Enter`. `3*nombre` también funciona.
 - Los atajos (`INS` Varios, `Ctrl+P` Art. común, `F10` Buscar, `F11` Mayoreo,
   `F9` Verificador, `F7` Entrada, `F8` Salida) van en una fila bajo el buscador, como en
   eleventa, y **Cancelar ticket** queda justo encima de **Cobrar**.
@@ -143,7 +144,9 @@ Se activa en **Configuración → Opciones → Farmacia**, o al configurar Neji 
   qué sirve, efectos adversos, contraindicaciones y notas de cada principio activo.
   Sigue al producto marcado en el buscador o a la línea elegida del ticket.
 - Lo que se escribe en el vademécum se ve igual en la venta. El administrador puede
-  **editar la ficha desde la misma venta** (botón Editar) y el cambio aparece al tiro.
+  **editar la ficha desde la misma venta** (botón Editar, también en la ficha de `F10`) y
+  el cambio aparece al tiro. Los textos largos se ven resumidos: un clic los abre
+  completos, y el botón Ficha muestra todo.
 - **Búsqueda por componente**: en el buscador (o en `F10`) escribe `%paracetamol` para
   ver todos los productos que lo contienen.
 - **Alternativas** (`Ctrl+B`): productos con el mismo principio activo (bioequivalentes
@@ -273,7 +276,7 @@ El detalle del análisis del programa anterior está en
 | `F1` `F2` `F3` `F4` | Ventas · Clientes · Productos · Inventario |
 | `Enter` | Agregar el código escrito (`3*código` = 3 unidades) o el producto elegido en la lista |
 | `↑` `↓` con texto escrito | Moverse por la lista del buscador (la ficha del vademécum la sigue) |
-| `Esc` | Cerrar la lista del buscador |
+| `Esc` | Cerrar la lista del buscador y borrar lo escrito (o cancelar un `Enter` que espera al servidor) |
 | `F10` | Buscar producto en una ventana grande (`%paracetamol` busca por principio activo) |
 | `INS` | Varios (cantidad + código) |
 | `Ctrl+P` | Artículo común |

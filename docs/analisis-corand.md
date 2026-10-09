@@ -65,9 +65,9 @@ inventario.
 | CORAND.ERP | Neji POS |
 |---|---|
 | Un texto de principio activo por producto | Varios principios activos por producto con concentración (`PARACETAMOL 500 mg + CAFEINA 65 mg`), unidos a su ficha. |
-| Aviso en la venta solo con coincidencia exacta | Aviso con uso, efectos adversos y botones «Ficha» y «Alternativas». |
+| Aviso en la venta solo con coincidencia exacta | Ficha del vademécum a la izquierda de la venta (sigue al producto buscado o a la línea del ticket), con «Ficha», «Editar» y «Alternativas». |
 | Búsqueda `%componente` | Igual, en `F10` y en Productos. |
-| — | **Alternativas** con el mismo principio activo (`Ctrl+B`), separadas en misma dosis, otra dosis o que solo comparten un principio. Si no hay stock, el aviso lo recuerda. |
+| — | **Alternativas** con el mismo principio activo (`Ctrl+B`), separadas en misma dosis, otra dosis o que solo comparten un principio. Si no hay stock, la ficha lo marca. |
 | Fichas sin efectos adversos visibles | Ficha completa: acción terapéutica, efectos adversos, contraindicaciones y notas, más los productos en stock y un botón «Vender». |
 | Vademécum y precios del recetario en tablas separadas | Un solo principio activo con ficha clínica y precio de recetario. |
 | Dosis solo en la unidad del precio | Conversión mg/mcg/g y porcentajes en cremas y lociones. |

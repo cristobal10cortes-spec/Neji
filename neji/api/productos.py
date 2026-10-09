@@ -26,7 +26,7 @@ SELECT_PRODUCTO = f"""
 
 
 def _con_principios(con, producto):
-    """Agrega la ficha de cada principio activo (para el aviso del vademécum en la venta)."""
+    """Agrega la ficha de cada principio activo (para la ficha del vademécum en la venta)."""
     if producto is not None:
         producto["principios_detalle"] = principios_de_producto(con, producto["id"])
     return producto

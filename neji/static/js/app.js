@@ -2,7 +2,7 @@
 
 import { api, cuandoSeCierreSesion } from './api.js';
 import { cargarSesion, esAdmin, esFarmacia, estado, nombreCaja } from './estado.js';
-import { aviso, avisoError, h, teclaEnModal, vaciar } from './ui.js';
+import { aviso, avisoError, cerrarModales, h, teclaEnModal, vaciar } from './ui.js';
 import * as caja from './vistas/caja.js';
 import * as clientes from './vistas/clientes.js';
 import * as config from './vistas/config.js';
@@ -54,6 +54,9 @@ async function mostrarVista() {
   if (!estado.usuario) return;
   const clave = location.hash.slice(1) || 'ventas';
   const vista = vistasPermitidas().find((v) => v.clave === clave) || VISTAS[0];
+  // Una ventana que queda abierta seguiría trabajando con la pantalla anterior (p. ej. «Vender» desde la ficha
+  // de un principio abierta en F10): se cierran todas antes de montar la nueva.
+  cerrarModales();
   vistaActual?.desmontar?.();
   vistaActual = null;
   for (const b of nav.querySelectorAll('button')) b.classList.toggle('activo', b.dataset.vista === vista.clave);

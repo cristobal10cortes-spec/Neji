@@ -163,6 +163,11 @@ export function modalAbierto() {
   return pila.length > 0;
 }
 
+/** Cierra todas las ventanas abiertas, de arriba hacia abajo (al cambiar de pantalla). */
+export function cerrarModales() {
+  while (pila.length) pila[pila.length - 1].cerrar();
+}
+
 /** Abre un modal. `alTeclear(e)` recibe las teclas mientras es el modal de arriba. */
 export function modal({ titulo, cuerpo, botones = [], ancho = '', alCerrar, alTeclear }) {
   const errorEl = h('div.error-modal.oculto', { role: 'alert' });

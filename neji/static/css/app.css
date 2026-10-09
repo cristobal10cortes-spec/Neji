@@ -33,6 +33,7 @@ h1, h2, h3 { margin: 0 0 .6rem; line-height: 1.2; }
 h2 { font-size: 1.25rem; }
 h3 { font-size: 1.05rem; }
 .oculto { display: none !important; }
+.solo-lector { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .suave { color: var(--suave); }
 .rojo { color: var(--peligro); }
@@ -161,10 +162,13 @@ main:has(> div > .ventas) { max-width: none; }
 .captura input { flex: 1; min-width: 0; font-size: 1.25rem; min-height: 48px; font-family: var(--mono); }
 .captura input::placeholder { font: 1rem system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
 .captura > .btn { min-height: 48px; }
-/* Los 7 crecen parejo y ninguno se achica más que su texto; si no caben en una fila, van en dos filas de 4. */
+/* Los 7 crecen parejo y ninguno se achica más que su texto. Si así no quedan parejos (ventas.js lo mide, porque
+   depende de la fuente), la tecla va sobre el texto; más angosto aún, van en dos filas de 4. */
 .teclas { display: flex; gap: .4rem; }
 .teclas .btn { flex: 1 1 0; min-width: max-content; padding: .4rem .3rem; gap: .3rem; font-size: .88rem; }
-.teclas .btn span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.teclas .btn span { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.teclas.apiladas { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.teclas.apiladas .btn { min-width: 0; flex-direction: column; gap: .1rem; padding: .25rem .2rem; line-height: 1.15; }
 @container (max-width: 780px) {
   .teclas { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .teclas .btn { min-width: 0; }
@@ -174,24 +178,28 @@ main:has(> div > .ventas) { max-width: none; }
 }
 .atajos { display: flex; gap: .35rem; flex-wrap: wrap; }
 
-/* Resultados del buscador: celdas de código, nombre, precio y existencia. */
+/* Resultados del buscador: celdas de código, nombre, precio y existencia. Solo la lista se desplaza: el pie queda
+   debajo y el encabezado fijo deja espacio (scroll-padding) para que la fila marcada con ↑ ↓ se vea completa. */
 .resultados {
-  position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; right: 0;
+  position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; right: 0; display: flex; flex-direction: column;
   background: var(--panel); border: 1px solid var(--borde); border-radius: 10px; box-shadow: var(--sombra);
-  max-height: min(62vh, 520px); overflow: auto;
+  max-height: min(62vh, 520px); overflow: hidden;
 }
+.resultados-lista { flex: 1 1 auto; min-height: 0; overflow: auto; scroll-padding-top: 2.4rem; }
 .tabla-resultados td { padding: .4rem .65rem; }
 .tabla-resultados td.mono { white-space: nowrap; }
 .resultados-pie {
-  position: sticky; bottom: 0; display: flex; justify-content: space-between; gap: .75rem; flex-wrap: wrap;
+  flex: none; display: flex; justify-content: space-between; gap: .75rem; flex-wrap: wrap;
   padding: .45rem .75rem; background: #f7f9fa; border-top: 1px solid var(--borde); font-size: .82rem; color: var(--suave);
 }
 .resultados-pie b { color: var(--texto); }
 .resultados .vacio { padding: 1.2rem; margin: 0; }
 
-.tickets { display: flex; gap: .3rem; align-items: center; flex-wrap: wrap; }
+/* Las pestañas van en una sola fila junto a «Nuevo ticket» (si no caben, se desplazan): así no le quitan alto al ticket. */
+.venta-principal > .fila.entre { flex-wrap: nowrap; }
+.tickets { display: flex; gap: .3rem; align-items: center; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
 .tickets button {
-  border: 1px solid var(--borde); background: #e9edf1; padding: .35rem .8rem; border-radius: 8px 8px 0 0;
+  flex: none; border: 1px solid var(--borde); background: #e9edf1; padding: .35rem .8rem; border-radius: 8px 8px 0 0;
   cursor: pointer; color: var(--suave);
 }
 .tickets button.activo { background: var(--panel); color: var(--texto); font-weight: 700; border-bottom-color: var(--panel); }
@@ -207,8 +215,9 @@ main:has(> div > .ventas) { max-width: none; }
 .total-grande { text-align: right; }
 .total-grande .etq { font-size: .85rem; color: var(--suave); text-transform: uppercase; }
 .total-grande .monto { font-size: 2.6rem; font-weight: 800; color: var(--primario); line-height: 1; font-variant-numeric: tabular-nums; }
-.cliente-ticket { display: flex; align-items: center; gap: .4rem; }
+.cliente-ticket { display: flex; align-items: center; gap: .4rem; min-width: 0; white-space: nowrap; }
 .cliente-ticket:empty { display: none; }
+.cliente-ticket .cliente-nombre { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* Cancelar ticket va justo encima de Cobrar. */
 .cobrar { display: flex; flex-direction: column; gap: .4rem; min-width: 190px; }
 .cobrar .btn { width: 100%; }
@@ -229,7 +238,13 @@ main:has(> div > .ventas) { max-width: none; }
 .ficha-cuerpo { flex: 1; min-height: 0; overflow: auto; padding: .75rem .8rem; display: flex; flex-direction: column; gap: .75rem; font-size: .9rem; }
 .ficha-cuerpo > p, .ficha-vacia p { margin: 0; }
 .ficha-vacia { color: var(--suave); display: flex; flex-direction: column; gap: .5rem; }
-.ficha-nombre { font-weight: 700; font-size: 1rem; line-height: 1.25; margin-bottom: .45rem; }
+.ficha-nombre { font-weight: 700; font-size: 1rem; line-height: 1.25; margin-bottom: .45rem; overflow-wrap: anywhere; }
+/* Nombres y textos largos se ven en unas líneas; el texto completo, con un clic o en «Ficha». */
+.ficha-nombre, .ficha-pa dd { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+.ficha-nombre { -webkit-line-clamp: 3; }
+.ficha-pa dd { -webkit-line-clamp: 6; }
+.ficha-pa dd.abierto { display: block; }
+.ficha-pa dd.cortado, .ficha-pa dd.abierto { cursor: pointer; }
 .celdas { display: grid; grid-template-columns: 1fr 1fr; gap: .35rem; }
 .celda { display: flex; flex-direction: column; min-width: 0; background: #f7f9fa; border: 1px solid #edf0f3; border-radius: 8px; padding: .3rem .5rem; }
 .celda.ancha { grid-column: 1 / -1; }
@@ -245,7 +260,7 @@ main:has(> div > .ventas) { max-width: none; }
 .ficha-pa dt { font-size: .72rem; text-transform: uppercase; letter-spacing: .3px; color: var(--suave); font-weight: 600; margin-top: .4rem; }
 .ficha-pa dd { margin: .1rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ficha-pie { padding: .5rem .6rem; border-top: 1px solid var(--borde); display: flex; }
-.ficha-pie .btn { flex: 1; }
+.ficha-pie .btn { flex: 1; min-width: 0; white-space: normal; }
 .ayuda.pa { color: #0b5953; }
 
 /* F10: buscador grande con la ficha al lado */
@@ -272,6 +287,8 @@ main:has(> div > .ventas) { max-width: none; }
 .error-modal { background: var(--peligro-claro); color: var(--peligro); padding: .55rem .75rem; border-radius: 8px; }
 
 #avisos { position: fixed; right: 16px; top: 64px; z-index: 80; display: flex; flex-direction: column; gap: .5rem; max-width: min(420px, calc(100vw - 32px)); pointer-events: none; }
+/* En la venta, arriba está el buscador con sus resultados: los avisos salen abajo, sobre el pie. */
+body:has(.ventas) #avisos { top: auto; bottom: 160px; }
 .toast { background: var(--barra); color: #fff; padding: .7rem 1rem; border-radius: 10px; box-shadow: var(--sombra); animation: entra .2s ease-out; }
 .toast.error { background: var(--peligro); }
 .toast.ok { background: var(--ok); }
@@ -291,7 +308,7 @@ main:has(> div > .ventas) { max-width: none; }
 .resultado-venta .cambio { font-size: 3.4rem; color: var(--ok); }
 
 /* Búsqueda */
-.lista-busqueda { max-height: 50vh; overflow: auto; }
+.lista-busqueda { max-height: 50vh; overflow: auto; scroll-padding-top: 2.4rem; }
 .lista-busqueda .tabla-resultados th { background: #f7f9fa; }
 
 /* Login */
@@ -355,6 +372,9 @@ main:has(> div > .ventas) { max-width: none; }
   .cobrar .btn.grande { min-height: 44px; padding: .45rem 1rem; }
   .cobrar .btn.peligro { min-height: 30px; }
   .ficha-cuerpo { padding: .6rem .7rem; gap: .55rem; }
+  .ventas > .panel { padding: .45rem .8rem; }
+  .ticket-tabla { min-height: 110px; }
+  body:has(.ventas) #avisos { bottom: 130px; }
 }
 @media (max-width: 860px) {
   .busqueda-con-ficha { grid-template-columns: minmax(0, 1fr); }

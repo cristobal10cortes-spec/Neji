@@ -111,19 +111,31 @@ const celda = (titulo, valor, clase = '') => h(`div.celda${clase}`, h('span.t', 
 /**
  * Panel con la ficha del vademécum del producto en foco (al buscar o al elegir una línea del ticket).
  * Muestra lo mismo que la pantalla Vademécum para cada principio activo, y quien es administrador
- * puede editarlo desde aquí. `fichas` guarda los productos ya leídos del servidor (id -> producto).
+ * puede editarlo desde aquí. `fichas` guarda los productos ya leídos del servidor (id -> producto) y puede
+ * compartirse entre paneles: si otro panel lo renueva al editar, este se vuelve a pintar al mostrarla.
+ * Mientras `retenerFoco()` sea verdadero, un clic en el panel no le quita el foco al buscador.
  * Devuelve { el, mostrar(producto, contexto), recordar(producto), producto }.
  */
-export function panelVademecum({ fichas = new Map(), alternativas = null, alTerminar = () => {} } = {}) {
+export function panelVademecum({ fichas = new Map(), alternativas = null, alTerminar = () => {}, retenerFoco = () => false } = {}) {
   const contexto = h('span.etiqueta.oculto');
+  const anuncio = h('span.solo-lector', { role: 'status' }); // el lector de pantalla anuncia el producto en foco
   const cuerpo = h('div.ficha-cuerpo');
   const pie = h('div.ficha-pie.oculto');
-  // Los botones no le quitan el foco al buscador: así su lista de resultados no se cierra al hacer clic.
-  const el = h('aside.vademecum', { 'aria-label': 'Vademécum', onmousedown: (e) => { if (e.target.closest('button')) e.preventDefault(); } },
-    h('div.ficha-titulo', h('span', 'Vademécum'), contexto),
+  // Los botones no le quitan el foco al buscador, y con su lista abierta tampoco leer o desplazar la ficha:
+  // así la lista no se cierra ni la ficha cambia de producto.
+  const el = h('aside.vademecum', {
+    'aria-label': 'Vademécum',
+    onmousedown: (e) => {
+      if (e.target.closest('button') || (retenerFoco() && !e.target.closest('input, textarea, select'))) e.preventDefault();
+    },
+  },
+    h('div.ficha-titulo', h('span', 'Vademécum'), contexto, anuncio),
     cuerpo, pie);
   let producto = null;
   let clave = null;
+  let alerta = false; // sin stock o no alcanza: Ctrl+B se destaca
+  let pintado = null; // con qué datos se pintó: si el caché cambió (otro panel editó), se vuelve a pintar
+  const cargando = new Set();
 
   const actual = () => (producto && fichas.get(producto.id)) || producto;
 
@@ -133,20 +145,26 @@ export function panelVademecum({ fichas = new Map(), alternativas = null, alTerm
 
   function mostrar(p, texto = '') {
     const nueva = p ? `${p.id}|${texto}` : null;
-    if (nueva === clave) return;
+    if (nueva === clave && (!p || (fichas.get(p.id) || p) === pintado)) return;
     clave = nueva;
     producto = p;
+    alerta = texto === 'sin stock' || texto === 'no alcanza';
     contexto.textContent = texto;
-    contexto.className = `etiqueta${texto ? '' : ' oculto'}${texto === 'sin stock' ? ' mal' : ''}`;
+    contexto.className = `etiqueta${texto ? '' : ' oculto'}${alerta ? ' mal' : ''}`;
     pintar();
     if (p?.id && !fichas.has(p.id)) cargar(p.id);
   }
 
   async function cargar(id) {
+    if (cargando.has(id)) return;
+    cargando.add(id);
     try {
       fichas.set(id, await api.get(`/api/productos/${id}`));
     } catch {
-      return; // se queda con lo que traía el ticket
+      fichas.set(id, null); // se queda con lo que traía el ticket, sin volver a pedirlo a cada rato
+      return;
+    } finally {
+      cargando.delete(id);
     }
     if (producto?.id === id) pintar();
   }
@@ -190,12 +208,33 @@ export function panelVademecum({ fichas = new Map(), alternativas = null, alTerm
           h('button.btn.chico', { type: 'button', title: 'Ficha completa y productos que lo contienen', onclick: () => fichaPrincipio(pa.id, refrescar) }, 'Ficha'),
           esAdmin() ? h('button.btn.chico', { type: 'button', title: `Editar lo que dice el vademécum de ${pa.nombre}`, onclick: () => editar(pa.id) }, 'Editar') : null)),
       textos.length
-        ? h('dl', textos.map(([k, titulo]) => [h('dt', titulo), h('dd', pa[k])]))
+        ? h('dl', textos.map(([k, titulo]) => [h('dt', titulo), h('dd', { onclick: (e) => alternarTexto(e.currentTarget) }, pa[k])]))
         : h('p.suave', esAdmin() ? 'Sin ficha en el vademécum. Usa Editar para escribirla.' : 'Sin ficha en el vademécum.'));
+  }
+
+  // Cada texto largo se muestra en unas líneas; con un clic se ve completo (y la ficha completa está en «Ficha»).
+  function marcarCortados() {
+    for (const dd of cuerpo.querySelectorAll('dd:not(.abierto)')) {
+      const cortado = dd.scrollHeight > dd.clientHeight + 1;
+      dd.classList.toggle('cortado', cortado);
+      dd.title = cortado ? 'Clic para ver el texto completo' : '';
+    }
+  }
+
+  function alternarTexto(dd) {
+    if (dd.classList.contains('abierto')) {
+      dd.classList.remove('abierto');
+      marcarCortados();
+    } else if (dd.classList.contains('cortado')) {
+      dd.classList.replace('cortado', 'abierto');
+      dd.title = 'Clic para acortar';
+    }
   }
 
   function pintar() {
     const p = actual();
+    pintado = p;
+    anuncio.textContent = p ? `Ficha de ${p.descripcion}` : '';
     if (!p) {
       pie.classList.add('oculto');
       vaciar(cuerpo, h('div.ficha-vacia',
@@ -207,7 +246,7 @@ export function panelVademecum({ fichas = new Map(), alternativas = null, alTerm
     const sinStock = p.usa_inventario && p.existencia <= 0;
     vaciar(cuerpo,
       h('div.ficha-producto',
-        h('div.ficha-nombre', p.descripcion),
+        h('div.ficha-nombre', { title: p.descripcion }, p.descripcion),
         h('div.celdas',
           celda('Código', p.codigo, '.ancha.mono'),
           celda('Precio', pesos(p.precio_venta)),
@@ -221,9 +260,10 @@ export function panelVademecum({ fichas = new Map(), alternativas = null, alTerm
     const conAlternativas = alternativas && detalle.length && p.id;
     pie.classList.toggle('oculto', !conAlternativas);
     if (conAlternativas) {
-      vaciar(pie, h(`button.btn.chico${sinStock ? '.primario' : ''}`, { type: 'button', onclick: () => alternativas(p) },
+      vaciar(pie, h(`button.btn.chico${sinStock || alerta ? '.primario' : ''}`, { type: 'button', onclick: () => alternativas(p) },
         h('kbd', 'Ctrl+B'), sinStock ? 'Sin stock: ver alternativas' : 'Alternativas'));
     }
+    requestAnimationFrame(marcarCortados);
   }
 
   pintar();
