@@ -237,7 +237,11 @@ El análisis del programa anterior (CORAND.ERP) está en
   También muestra las ventas por forma de pago y por departamento.
 - **Corte general** desde la caja principal: se cuenta el efectivo de cada caja y se cierran
   todas juntas. El ticket suma todas las cajas y muestra lo vendido por cada cajero. La caja
-  principal se elige en **Configuración → Cajas**.
+  principal se elige en **Configuración → Cajas**. Cada caja muestra su propio faltante o
+  sobrante, y si otra terminal ya cerró una caja, el corte se recarga sin ella. Con una sola
+  caja basta el corte normal.
+- Un cajero corta el turno que abrió; el turno de otro cajero lo corta quien lo abrió o
+  alguien con permiso de corte general.
 - Historial de cortes y de cortes generales.
 
 ### Devoluciones
@@ -259,9 +263,11 @@ El análisis del programa anterior (CORAND.ERP) está en
 
 - En **Configuración → Usuarios** se agregan y modifican usuarios.
 - Roles **administrador** (puede todo) y **cajero**.
-- Cada cajero tiene **sus propios permisos**: cambiar precios y descuentos, devoluciones,
-  entradas y salidas de efectivo, corte de su caja, corte general, crédito a clientes,
-  productos, inventario, reportes y costos, y vademécum.
+- Cada cajero tiene **sus propios permisos**: cambiar precios y descuentos, vender artículos
+  comunes, devoluciones, entradas y salidas de efectivo, corte de su caja, corte general,
+  crédito a clientes, productos, inventario, reportes y vademécum. Los costos los ve quien
+  tiene productos, inventario o reportes; la ganancia, solo quien tiene reportes.
+- Los cambios de permisos se aplican sin que el cajero vuelva a entrar (al cambiar de pantalla).
 - **Nombre en el ticket**: cómo aparece cada usuario en «Atendió:» (por ejemplo
   «Cajero 1 · Cristóbal Araya Cortés»), con una vista previa del ticket al lado.
 - **Respaldo automático diario**, que guarda los últimos 10 (configurable),

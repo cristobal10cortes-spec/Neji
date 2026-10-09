@@ -184,8 +184,9 @@ async function vistaUsuarios(zona) {
   }
 
   async function editar(u = null) {
+    // Un administrador muestra lo que tendría como cajero: pasarlo a cajero restringe, no le da todo.
     const casillas = Object.fromEntries(catalogo.map((p) => [p.clave,
-      h('input', { type: 'checkbox', checked: u ? u.permisos[p.clave] : p.por_defecto })]));
+      h('input', { type: 'checkbox', checked: u ? (u.permisos_cajero || u.permisos)[p.clave] : p.por_defecto })]));
     const nota = h('p.ayuda');
     const permisos = h('fieldset.permisos',
       h('legend', 'Permisos del cajero'),

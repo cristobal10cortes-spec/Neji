@@ -5,7 +5,7 @@ import io
 
 from flask import Response, jsonify, request
 
-from ..auth import con_permiso, usuario_actual
+from ..auth import con_permiso, tiene_permiso, usuario_actual
 from ..db import ahora, fila, filas, get_db, sin_acentos, transaccion
 from ..servicios.farmacia import (SQL_PRINCIPIOS_TEXTO, alternativas, guardar_principios_producto,
                                   principios_de_producto, principios_de_productos)
@@ -348,8 +348,10 @@ def importar_productos():
 
     con = get_db()
     usuario_id = usuario_actual()["id"]
+    # Cambiar el stock de lo que ya existe es un ajuste o una entrada de inventario.
+    puede_inventario = tiene_permiso(usuario_actual(), "inventario")
     creados = actualizados = 0
-    errores = []
+    errores, avisos = [], []
     for n, registro in enumerate(lector, start=2):
         registro = {k: leer_celda_csv((v or "").strip()) for k, v in registro.items() if k}
         if not any(registro.values()):
@@ -369,7 +371,9 @@ def importar_productos():
                     con.execute(
                         f"UPDATE productos SET {', '.join(f'{c} = ?' for c in p)}, actualizado = ? "
                         "WHERE id = ?", list(p.values()) + [ahora(), existente["id"]])
-                    if registro.get("existencia") and existente["usa_inventario"]:
+                    if registro.get("existencia") and existente["usa_inventario"] and not puede_inventario:
+                        avisos.append({"fila": n, "error": "La existencia no se cambió: falta el permiso de inventario."})
+                    elif registro.get("existencia") and existente["usa_inventario"]:
                         valor = cantidad(registro["existencia"], "existencia", minimo=0 if sumar else None)
                         if sumar:
                             if valor:
@@ -392,4 +396,4 @@ def importar_productos():
                     creados += 1
         except ErrorNegocio as e:
             errores.append({"fila": n, "error": e.mensaje})
-    return jsonify(creados=creados, actualizados=actualizados, errores=errores[:200])
+    return jsonify(creados=creados, actualizados=actualizados, errores=(errores + avisos)[:200])

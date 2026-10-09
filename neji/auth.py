@@ -14,19 +14,20 @@ from .validar import ErrorNegocio, booleano
 # clave, qué permite, si un cajero nuevo lo tiene, solo con el módulo farmacia
 PERMISOS = [
     ("cambiar_precio", "Cambiar precios y aplicar descuentos en la venta", False, False),
+    ("articulo_comun", "Vender artículos comunes (sin registrar, con precio libre)", True, False),
     ("devoluciones", "Hacer devoluciones", False, False),
     ("movimientos_caja", "Registrar entradas y salidas de efectivo", True, False),
-    ("corte", "Hacer el corte de su caja", True, False),
-    ("corte_general", "Corte general de todas las cajas e historial de cortes", False, False),
+    ("corte", "Hacer el corte de su caja (el turno que abrió)", True, False),
+    ("corte_general", "Corte general de todas las cajas, cortes de otros cajeros e historial", False, False),
     ("clientes_credito", "Dar crédito (límite) a clientes y borrarlos", False, False),
-    ("productos", "Crear, editar e importar productos", False, False),
-    ("inventario", "Inventario: entradas, ajustes y compras sugeridas", False, False),
+    ("productos", "Crear, editar e importar productos (ve los costos)", False, False),
+    ("inventario", "Inventario: entradas, ajustes y compras sugeridas (ve los costos)", False, False),
     ("reportes", "Ver reportes, costos y ganancias", False, False),
     ("vademecum", "Editar el vademécum y los precios del recetario", False, True),
 ]
 CLAVES_PERMISOS = [p[0] for p in PERMISOS]
 PERMISOS_POR_DEFECTO = {clave: defecto for clave, _, defecto, _ in PERMISOS}
-# Quien maneja productos, inventario o reportes necesita ver los costos.
+# Quien maneja productos, inventario o reportes necesita ver los costos; la ganancia, solo reportes.
 PERMISOS_CON_COSTOS = ("reportes", "productos", "inventario")
 
 

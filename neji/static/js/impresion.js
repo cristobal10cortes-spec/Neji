@@ -279,6 +279,7 @@ export function ticketCorteGeneral(g) {
     t.redondeo ? ln('Redondeo', pesos(t.redondeo)) : null,
     ln('Total ventas', pesos(t.total_ventas), 'g'),
     t.devoluciones ? ln('Devoluciones', pesos(t.devoluciones)) : null,
+    t.abonos_otros ? ln('Abonos con tarjeta/transf.', pesos(t.abonos_otros)) : null,
     t.ganancia != null ? ln('Ganancia estimada', pesos(t.ganancia)) : null,
     g.por_cajero.length ? [h('hr'), h('div.g', 'Por cajero'), g.por_cajero.map((c) => ln(`${c.cajero} (${c.n_ventas})`, pesos(c.total)))] : null,
     t.departamentos.length ? [h('hr'), h('div.g', 'Por departamento'), t.departamentos.map((d) => ln(d.departamento, pesos(d.total)))] : null,

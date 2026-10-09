@@ -292,6 +292,8 @@ main:has(> div > .ventas) { max-width: none; }
 .modal header { padding: .9rem 1.1rem; border-bottom: 1px solid var(--borde); display: flex; align-items: center; gap: .5rem; }
 .modal header h3 { margin: 0; flex: 1; }
 .modal .cuerpo { padding: 1rem 1.1rem; overflow: auto; display: flex; flex-direction: column; gap: .75rem; }
+/* Una tabla en una ventana no se encoge con barra propia: se desplaza la ventana entera (todas las filas a la vista). */
+.modal .cuerpo > .tabla-caja { flex-shrink: 0; }
 .modal footer { padding: .75rem 1.1rem; border-top: 1px solid var(--borde); display: flex; gap: .5rem; justify-content: flex-end; flex-wrap: wrap; }
 .cerrar { border: 0; background: none; font-size: 1.4rem; cursor: pointer; color: var(--suave); line-height: 1; }
 .error-modal { background: var(--peligro-claro); color: var(--peligro); padding: .55rem .75rem; border-radius: 8px; }
@@ -316,6 +318,7 @@ body:has(.ventas) #avisos { top: auto; bottom: 160px; }
 .paga-con input { font-size: 1.6rem; text-align: right; min-height: 56px; font-variant-numeric: tabular-nums; }
 .resultado-venta { text-align: center; }
 .resultado-venta .cambio { font-size: 3.4rem; color: var(--ok); }
+.resultado-venta .cambio.rojo { color: var(--peligro); }
 
 /* Búsqueda */
 .lista-busqueda { max-height: 50vh; overflow: auto; scroll-padding-top: 2.4rem; }

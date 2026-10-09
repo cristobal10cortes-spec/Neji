@@ -197,7 +197,7 @@ def corte_general(con, caja_id, usuario_id, cortes, nota=None):
     for c in cortes:
         turno = fila(con.execute("SELECT * FROM turnos WHERE id = ?", (c["turno_id"],)).fetchone())
         if turno is None or turno["estado"] != "abierto":
-            raise ErrorNegocio(f"El turno #{c['turno_id']} ya no está abierto: vuelve a cargar la caja.")
+            raise ErrorNegocio(f"El turno #{c['turno_id']} ya se cerró en otra terminal.", codigo="turno_cerrado")
         cerrar_turno(con, turno["caja_id"], usuario_id, c["efectivo_contado"], nota)
         con.execute("UPDATE turnos SET corte_general_id = ? WHERE id = ?", (corte_id, turno["id"]))
     return corte_id

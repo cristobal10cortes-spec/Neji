@@ -141,10 +141,12 @@ export function importadorCsv({ alTerminar = () => {} } = {}) {
       h('button.btn.chico', { type: 'button', onclick: () => descargar('/api/productos/exportar') }, 'Exportar mi catálogo actual')),
     error,
     archivo,
-    h('fieldset.opciones-csv',
-      h('legend', 'La columna existencia de los productos que ya tienes'),
-      h('label.check', reemplazar, 'Reemplaza el stock (conteo de inventario)'),
-      h('label.check', sumar, 'Se suma al stock (entrada de mercadería)')),
+    puede('inventario')
+      ? h('fieldset.opciones-csv',
+        h('legend', 'La columna existencia de los productos que ya tienes'),
+        h('label.check', reemplazar, 'Reemplaza el stock (conteo de inventario)'),
+        h('label.check', sumar, 'Se suma al stock (entrada de mercadería)'))
+      : h('p.ayuda', 'Sin permiso de inventario, la existencia solo se usa en los productos nuevos: la de los que ya tienes no cambia.'),
     resultado);
   return { el, importar };
 }

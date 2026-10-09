@@ -101,8 +101,9 @@ def inicializar(ruta):
         for clave, valor in CONFIG_POR_DEFECTO.items():
             con.execute("INSERT OR IGNORE INTO config (clave, valor) VALUES (?, ?)", (clave, valor))
         con.execute("INSERT OR IGNORE INTO cajas (id, nombre) VALUES (1, 'Caja 1')")
-        # Siempre hay una caja principal (la del corte general): la primera, si nadie eligió otra.
-        con.execute("UPDATE cajas SET principal = 1 WHERE id = (SELECT MIN(id) FROM cajas) "
+        # Siempre hay una caja principal activa (la del corte general): la primera activa, si nadie eligió otra.
+        con.execute("UPDATE cajas SET principal = 0 WHERE activa = 0")
+        con.execute("UPDATE cajas SET principal = 1 WHERE id = (SELECT MIN(id) FROM cajas WHERE activa = 1) "
                     "AND NOT EXISTS (SELECT 1 FROM cajas WHERE principal = 1)")
         sembrar_recetario(con)
     finally:

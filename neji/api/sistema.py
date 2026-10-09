@@ -136,6 +136,8 @@ def guardar_config():
 def _usuario_publico(u):
     u = dict(u)
     u["permisos"] = permisos_de(u)
+    # Lo que tendría como cajero (para el formulario: pasar un administrador a cajero restringe, no da todo).
+    u["permisos_cajero"] = permisos_de({**u, "rol": "cajero"})
     u.pop("password_hash", None)
     return u
 

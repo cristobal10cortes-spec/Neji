@@ -149,14 +149,16 @@ export async function montar(contenedor, parametros = {}) {
   // Fila de atajos bajo el buscador, como en eleventa.
   const tecla = (teclaTexto, texto, accion, extra = {}) =>
     h('button.btn', { type: 'button', title: `${texto} (${teclaTexto})`, onclick: () => { accion(); }, ...extra }, h('kbd', teclaTexto), h('span', texto));
+  // Lo que el usuario no tiene permitido queda a la vista (la fila es la misma en todas las cajas) pero apagado.
+  const sinPermiso = (permiso) => (puede(permiso) ? {} : { disabled: true, title: 'No tienes permiso (Configuración → Usuarios)' });
   const filaTeclas = h('div.teclas',
     tecla('INS', 'Varios', varios),
-    tecla('Ctrl+P', 'Art. común', articuloComun),
+    tecla('Ctrl+P', 'Art. común', articuloComun, sinPermiso('articulo_comun')),
     tecla('F10', 'Buscar', buscarProducto),
     tecla('F11', 'Mayoreo', alternarMayoreo, { title: 'Mayoreo (F11 o Ctrl+M)' }),
     tecla('F9', 'Verificador', verificador),
-    tecla('F7', 'Entrada', () => movimiento('entrada'), { title: 'Entrada de efectivo (F7)' }),
-    tecla('F8', 'Salida', () => movimiento('salida'), { title: 'Salida de efectivo (F8)' }));
+    tecla('F7', 'Entrada', () => movimiento('entrada'), { title: 'Entrada de efectivo (F7)', ...sinPermiso('movimientos_caja') }),
+    tecla('F8', 'Salida', () => movimiento('salida'), { title: 'Salida de efectivo (F8)', ...sinPermiso('movimientos_caja') }));
   // Si con la tecla al lado del texto los 7 no quedan del mismo ancho (depende del ancho y de la fuente), la tecla va
   // sobre el texto.
   const ajusteTeclas = new ResizeObserver(() => {
@@ -187,8 +189,8 @@ export async function montar(contenedor, parametros = {}) {
         h('div.atajos',
           boton('Supr', 'Borrar', borrarLinea),
           boton('*', 'Cantidad', editarCantidad),
-          boton('Ctrl+D', 'Descuento', descuento),
-          boton('', 'Precio', cambiarPrecio),
+          boton('Ctrl+D', 'Descuento', descuento, sinPermiso('cambiar_precio')),
+          boton('', 'Precio', cambiarPrecio, sinPermiso('cambiar_precio')),
           boton('F5', 'Cliente', asignarCliente),
           boton('', 'Cotizar', guardarCotizacion)),
         lblCliente),
@@ -638,6 +640,10 @@ export async function montar(contenedor, parametros = {}) {
   }
 
   async function articuloComun() {
+    if (!puede('articulo_comun')) {
+      aviso('No tienes permiso para vender artículos comunes.', 'error');
+      return;
+    }
     const r = await formulario({
       titulo: 'Artículo común (sin registrar)',
       aceptar: 'Agregar',

@@ -9,11 +9,24 @@ from ..validar import ErrorNegocio, entero, texto
 from . import bp, datos_json, rango_fechas, sin_costos
 
 
+def _turno_ajeno(turno):
+    """El turno lo abrió otro cajero y quien consulta no tiene corte general."""
+    usuario = usuario_actual()
+    return turno["usuario_id"] != usuario["id"] and not tiene_permiso(usuario, "corte_general")
+
+
 @bp.get("/caja/<int:caja_id>/turno")
 def turno_actual(caja_id):
     con = get_db()
     turno = svc.turno_abierto(con, caja_id)
-    return jsonify(turno=sin_costos(svc.resumen_turno(con, turno["id"])) if turno else None)
+    if turno is None:
+        return jsonify(turno=None)
+    resumen = svc.resumen_turno(con, turno["id"])
+    if _turno_ajeno(turno):
+        # Se puede vender en él (relevo en la misma caja), pero el dinero lo ve quien lo abrió o el corte general.
+        return jsonify(turno={k: resumen[k] for k in ("id", "caja_id", "caja", "usuario_id", "usuario", "abierto", "estado")}
+                       | {"ajeno": True})
+    return jsonify(turno=sin_costos(resumen))
 
 
 @bp.post("/caja/<int:caja_id>/abrir")
@@ -46,6 +59,9 @@ def cerrar(caja_id):
     contado = entero(datos.get("efectivo_contado"), "efectivo contado", minimo=0)
     con = get_db()
     with transaccion(con):
+        if _turno_ajeno(svc.exigir_turno(con, caja_id)):
+            raise ErrorNegocio("Este turno lo abrió otro cajero: el corte lo hace él o alguien con permiso de "
+                               "corte general.", status=403)
         turno_id = svc.cerrar_turno(con, caja_id, usuario_actual()["id"], contado, texto(datos, "nota"))
     return jsonify(turno=sin_costos(svc.resumen_turno(con, turno_id)))
 
@@ -107,6 +123,7 @@ def historial_cortes_generales():
     return jsonify(filas(get_db().execute(
         """SELECT g.*, c.nombre AS caja, u.nombre AS usuario,
                   (SELECT COUNT(*) FROM turnos WHERE corte_general_id = g.id) AS n_turnos,
+                  (SELECT COUNT(*) FROM turnos WHERE corte_general_id = g.id AND diferencia <> 0) AS con_diferencia,
                   (SELECT COALESCE(SUM(diferencia), 0) FROM turnos WHERE corte_general_id = g.id) AS diferencia,
                   (SELECT COALESCE(SUM(total), 0) FROM ventas
                     WHERE turno_id IN (SELECT id FROM turnos WHERE corte_general_id = g.id)) AS total_ventas

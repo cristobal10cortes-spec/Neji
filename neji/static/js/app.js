@@ -50,8 +50,29 @@ function vistasPermitidas() {
   return VISTAS.filter((v) => (!v.permiso || puede(v.permiso)) && (!v.farmacia || esFarmacia()));
 }
 
+/**
+ * Vuelve a leer el usuario: el administrador puede cambiar sus permisos mientras la sesión está abierta.
+ * Devuelve true si cambiaron (hay que rearmar el menú).
+ */
+async function refrescarUsuario() {
+  try {
+    const { usuario } = await api.get('/api/estado');
+    if (!usuario) return false;
+    const huella = (u) => JSON.stringify([u.rol, u.permisos]);
+    const cambio = huella(usuario) !== huella(estado.usuario);
+    estado.usuario = usuario;
+    return cambio;
+  } catch {
+    return false; // sin conexión: se sigue con lo que había
+  }
+}
+
 async function mostrarVista() {
   if (!estado.usuario) return;
+  if (await refrescarUsuario()) {
+    dibujarAplicacion(); // el menú cambia según los permisos; vuelve a llamar a mostrarVista
+    return;
+  }
   const clave = location.hash.slice(1) || 'ventas';
   const vista = vistasPermitidas().find((v) => v.clave === clave) || VISTAS[0];
   // Una ventana que queda abierta seguiría trabajando con la pantalla anterior (p. ej. «Vender» desde la ficha
