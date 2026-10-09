@@ -2,7 +2,7 @@
 
 from flask import jsonify, request
 
-from ..auth import solo_admin
+from ..auth import con_permiso
 from ..db import ahora, fila, filas, get_db, sin_acentos, transaccion
 from ..servicios.farmacia import SQL_PRINCIPIOS_TEXTO, normalizar_nombre
 from ..servicios.recetario import MAX_PRECIO, UNIDADES_PRINCIPIO, numero
@@ -83,7 +83,7 @@ def ver_principio(principio_id):
 
 
 @bp.post("/principios")
-@solo_admin
+@con_permiso("vademecum")
 def crear_principio():
     datos = _leer_principio(datos_json())
     con = get_db()
@@ -101,7 +101,7 @@ def crear_principio():
 
 
 @bp.put("/principios/<int:principio_id>")
-@solo_admin
+@con_permiso("vademecum")
 def editar_principio(principio_id):
     datos = _leer_principio(datos_json())
     con = get_db()
@@ -120,7 +120,7 @@ def editar_principio(principio_id):
 
 
 @bp.delete("/principios/<int:principio_id>")
-@solo_admin
+@con_permiso("vademecum")
 def borrar_principio(principio_id):
     con = get_db()
     with transaccion(con):

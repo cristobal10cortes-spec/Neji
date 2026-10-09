@@ -5,7 +5,7 @@ from datetime import date, timedelta
 
 from flask import jsonify, request
 
-from ..auth import solo_admin, usuario_actual
+from ..auth import con_permiso, usuario_actual
 from ..db import ahora, config_activa, filas, get_db, transaccion
 from ..validar import ErrorNegocio, booleano, cantidad, entero, texto
 from ..servicios.inventario import mover_existencia
@@ -13,7 +13,7 @@ from . import bp, datos_json, rango_fechas
 
 
 @bp.post("/inventario/movimiento")
-@solo_admin
+@con_permiso("inventario")
 def movimiento_inventario():
     datos = datos_json()
     tipo = datos.get("tipo")
@@ -55,7 +55,7 @@ def movimiento_inventario():
 
 
 @bp.get("/inventario/sugeridos")
-@solo_admin
+@con_permiso("inventario")
 def compras_sugeridas():
     """Productos en o bajo el mínimo, con lo vendido en 30 días y cuánto conviene comprar."""
     desde = (date.today() - timedelta(days=30)).isoformat() + " 00:00:00"
@@ -98,7 +98,7 @@ def vencimientos():
 
 
 @bp.get("/inventario/movimientos")
-@solo_admin
+@con_permiso("inventario")
 def movimientos_inventario():
     _, _, inicio, fin = rango_fechas()
     condiciones, params = ["m.fecha BETWEEN ? AND ?"], [inicio, fin]
@@ -117,7 +117,7 @@ def movimientos_inventario():
 
 
 @bp.get("/inventario/resumen")
-@solo_admin
+@con_permiso("inventario")
 def resumen_inventario():
     r = get_db().execute(
         """SELECT COUNT(*) AS productos,

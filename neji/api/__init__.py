@@ -16,19 +16,23 @@ def _proteger():
         exigir_login()
 
 
-CAMPOS_PRIVADOS = {"precio_costo", "costo_unitario", "ganancia", "costo_estimado"}
+CAMPOS_COSTO = {"precio_costo", "costo_unitario", "costo_estimado"}
+CAMPOS_GANANCIA = {"ganancia"}
 
 
 def sin_costos(datos):
-    """Quita costos y ganancias de la respuesta si quien consulta es cajero."""
-    from ..auth import usuario_actual
+    """Quita costos (sin permiso de productos, inventario o reportes) y ganancias (sin permiso de reportes)."""
+    from ..auth import tiene_permiso, usuario_actual, ve_costos
 
-    if usuario_actual()["rol"] == "admin":
+    usuario = usuario_actual()
+    privados = (set() if ve_costos(usuario) else CAMPOS_COSTO) | \
+        (set() if tiene_permiso(usuario, "reportes") else CAMPOS_GANANCIA)
+    if not privados:
         return datos
 
     def limpiar(valor):
         if isinstance(valor, dict):
-            return {k: limpiar(v) for k, v in valor.items() if k not in CAMPOS_PRIVADOS}
+            return {k: limpiar(v) for k, v in valor.items() if k not in privados}
         if isinstance(valor, list):
             return [limpiar(v) for v in valor]
         return valor
@@ -57,5 +61,5 @@ def rango_fechas():
     return desde, hasta, f"{desde} 00:00:00", f"{hasta} 23:59:59"
 
 
-from . import (caja, clientes, farmacia, importar, inventario, productos, recetario,  # noqa: E402,F401
-               reportes, sistema, ventas)
+from . import (caja, clientes, farmacia, inventario, productos, recetario, reportes,  # noqa: E402,F401
+               sistema, ventas)

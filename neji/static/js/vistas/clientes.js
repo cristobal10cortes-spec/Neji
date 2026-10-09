@@ -1,7 +1,7 @@
 // Clientes, crédito (fiado), abonos y estado de cuenta.
 
 import { api, qs } from '../api.js';
-import { esAdmin, estado } from '../estado.js';
+import { estado, puede } from '../estado.js';
 import { imprimir, nombreMetodo } from '../impresion.js';
 import { aviso, avisoError, confirmar, debounce, fecha, formulario, h, modal, pesos, tabla, vaciar } from '../ui.js';
 
@@ -17,7 +17,7 @@ export function formCliente(cliente = null) {
     { nombre: 'direccion', etiqueta: 'Dirección', valor: cliente?.direccion },
     { nombre: 'giro', etiqueta: 'Giro', valor: cliente?.giro },
   ];
-  if (esAdmin()) {
+  if (puede('clientes_credito')) {
     campos.push(
       { nombre: 'limite_credito', etiqueta: 'Límite de crédito (fiado)', tipo: 'monto', valor: cliente?.limite_credito ?? 0, ayuda: '0 = no se le fía' },
       { nombre: 'sin_limite', etiqueta: 'Crédito sin límite', tipo: 'check', valor: cliente ? cliente.limite_credito == null : false },
@@ -169,7 +169,7 @@ export async function montar(contenedor) {
         titulo: '',
         valor: (c) => h('div.fila.fin',
           c.saldo > 0 ? h('button.btn.chico', { type: 'button', onclick: async (e) => { e.stopPropagation(); if (await abonar(c)) { aviso('Abono registrado.', 'ok'); cargar(); } } }, 'Abonar') : null,
-          esAdmin() ? h('button.btn.chico.peligro', {
+          puede('clientes_credito') ? h('button.btn.chico.peligro', {
             type: 'button',
             onclick: async (e) => {
               e.stopPropagation();

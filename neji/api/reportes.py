@@ -5,7 +5,7 @@ import io
 
 from flask import Response, jsonify
 
-from ..auth import solo_admin
+from ..auth import con_permiso
 from ..db import filas, get_db
 from ..servicios.caja import SQL_DEPARTAMENTO_ITEM, SQL_GANANCIA_ITEM
 from ..validar import celda_csv, numero_texto
@@ -19,7 +19,7 @@ SQL_IMPORTE_ITEM = """
 
 
 @bp.get("/reportes/ventas")
-@solo_admin
+@con_permiso("reportes")
 def reporte_ventas():
     desde, hasta, inicio, fin = rango_fechas()
     con = get_db()
@@ -79,7 +79,7 @@ def reporte_ventas():
 
 
 @bp.get("/reportes/ventas.csv")
-@solo_admin
+@con_permiso("reportes")
 def exportar_ventas():
     desde, hasta, inicio, fin = rango_fechas()
     salida = io.StringIO()

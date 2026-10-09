@@ -59,7 +59,7 @@ def venta_por_folio(folio):
 
 
 @bp.post("/ventas/<int:venta_id>/devolucion")
-@con_permiso("cajero_puede_devolver")
+@con_permiso("devoluciones")
 def devolver_venta(venta_id):
     con = get_db()
     svc.devolver(con, venta_id, datos_json(), usuario_actual())

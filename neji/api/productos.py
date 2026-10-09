@@ -5,7 +5,7 @@ import io
 
 from flask import Response, jsonify, request
 
-from ..auth import solo_admin, usuario_actual
+from ..auth import con_permiso, tiene_permiso, usuario_actual
 from ..db import ahora, fila, filas, get_db, sin_acentos, transaccion
 from ..servicios.farmacia import (SQL_PRINCIPIOS_TEXTO, alternativas, guardar_principios_producto,
                                   principios_de_producto, principios_de_productos)
@@ -26,7 +26,7 @@ SELECT_PRODUCTO = f"""
 
 
 def _con_principios(con, producto):
-    """Agrega la ficha de cada principio activo (para el aviso del vademécum en la venta)."""
+    """Agrega la ficha de cada principio activo (para la ficha del vademécum en la venta)."""
     if producto is not None:
         producto["principios_detalle"] = principios_de_producto(con, producto["id"])
     return producto
@@ -175,7 +175,7 @@ def alternativas_producto(producto_id):
 
 
 @bp.get("/productos/siguiente-codigo")
-@solo_admin
+@con_permiso("productos")
 def siguiente_codigo():
     """Código interno EAN-13 que empieza con 200 (rango de uso interno)."""
     con = get_db()
@@ -193,7 +193,7 @@ def siguiente_codigo():
 
 
 @bp.post("/productos")
-@solo_admin
+@con_permiso("productos")
 def crear_producto():
     datos = datos_json()
     con = get_db()
@@ -208,7 +208,7 @@ def crear_producto():
 
 
 @bp.put("/productos/<int:producto_id>")
-@solo_admin
+@con_permiso("productos")
 def editar_producto(producto_id):
     datos = datos_json()
     con = get_db()
@@ -230,17 +230,15 @@ def editar_producto(producto_id):
 
 
 @bp.delete("/productos/<int:producto_id>")
-@solo_admin
+@con_permiso("productos")
 def borrar_producto(producto_id):
+    # Siempre se desactiva (no se borra la fila): así su id no se reutiliza, y una línea que quedó en el
+    # ticket de otra terminal nunca termina cobrando otro producto. Volver a crear el código lo reactiva.
     con = get_db()
     with transaccion(con):
-        vendido = con.execute("SELECT 1 FROM venta_items WHERE producto_id = ? LIMIT 1",
-                              (producto_id,)).fetchone()
-        if vendido:
-            con.execute("UPDATE productos SET activo = 0, actualizado = ? WHERE id = ?",
-                        (ahora(), producto_id))
-        else:
-            con.execute("DELETE FROM productos WHERE id = ?", (producto_id,))
+        if con.execute("UPDATE productos SET activo = 0, actualizado = ? WHERE id = ?",
+                       (ahora(), producto_id)).rowcount == 0:
+            raise ErrorNegocio("Producto no encontrado.", status=404)
     return jsonify(ok=True)
 
 
@@ -263,7 +261,7 @@ def _numero_csv(valor):
 
 
 @bp.get("/productos/exportar")
-@solo_admin
+@con_permiso("productos")
 def exportar_productos():
     salida = io.StringIO()
     escritor = csv.writer(salida, delimiter=";")
@@ -302,15 +300,36 @@ class _PuntoYComa(csv.excel):
     delimiter = ";"
 
 
+@bp.get("/productos/plantilla.csv")
+@con_permiso("productos")
+def plantilla_csv():
+    """Planilla de ejemplo para importar el inventario: las columnas y dos filas."""
+    salida = io.StringIO()
+    escritor = csv.writer(salida, delimiter=";")
+    escritor.writerow(COLUMNAS_CSV)
+    escritor.writerow(["7800000000017", "PARACETAMOL 500MG X 16 COMP", "Farmacia", "unidad", "450", "990", "",
+                       "", "si", "24", "5", "", "no", "PARACETAMOL 500 mg", "LABORATORIO CHILE", "2027-06-30"])
+    escritor.writerow(["PAN", "Pan batido (kg)", "Panadería", "granel", "1200", "2290", "", "", "si", "15,5",
+                       "3", "", "no", "", "", ""])
+    return Response("\ufeff" + salida.getvalue(), mimetype="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": "attachment; filename=plantilla_inventario.csv"})
+
+
 @bp.post("/productos/importar")
-@solo_admin
+@con_permiso("productos")
 def importar_productos():
-    """Crea o actualiza productos desde CSV (separado por ; o ,). Clave: el código."""
+    """Crea o actualiza productos desde CSV (separado por ; o ,). Clave: el código.
+
+    Con existencias=sumar, la columna existencia de los productos que ya existen se suma al stock (entrada de
+    mercadería); si no, lo reemplaza (conteo de inventario).
+    """
     archivo = request.files.get("archivo")
     if archivo is None:
         raise ErrorNegocio("Adjunta un archivo CSV.")
+    sumar = request.form.get("existencias") == "sumar"
     contenido = archivo.read()
-    for codificacion in ("utf-8-sig", "latin-1"):
+    # Excel en Windows guarda en cp1252 (comillas “ ”, guiones –, €); latin-1 queda para lo que cp1252 no define.
+    for codificacion in ("utf-8-sig", "cp1252", "latin-1"):
         try:
             texto_csv = contenido.decode(codificacion)
             break
@@ -330,8 +349,10 @@ def importar_productos():
 
     con = get_db()
     usuario_id = usuario_actual()["id"]
+    # Cambiar el stock de lo que ya existe es un ajuste o una entrada de inventario.
+    puede_inventario = tiene_permiso(usuario_actual(), "inventario")
     creados = actualizados = 0
-    errores = []
+    errores, avisos = [], []
     for n, registro in enumerate(lector, start=2):
         registro = {k: leer_celda_csv((v or "").strip()) for k, v in registro.items() if k}
         if not any(registro.values()):
@@ -351,10 +372,16 @@ def importar_productos():
                     con.execute(
                         f"UPDATE productos SET {', '.join(f'{c} = ?' for c in p)}, actualizado = ? "
                         "WHERE id = ?", list(p.values()) + [ahora(), existente["id"]])
-                    if registro.get("existencia") and existente["usa_inventario"]:
-                        nueva = cantidad(registro["existencia"], "existencia")
-                        if nueva != existente["existencia"]:
-                            mover_existencia(con, existente, nueva - existente["existencia"], "ajuste",
+                    if registro.get("existencia") and existente["usa_inventario"] and not puede_inventario:
+                        avisos.append({"fila": n, "error": "La existencia no se cambió: falta el permiso de inventario."})
+                    elif registro.get("existencia") and existente["usa_inventario"]:
+                        valor = cantidad(registro["existencia"], "existencia", minimo=0 if sumar else None)
+                        if sumar:
+                            if valor:
+                                mover_existencia(con, existente, valor, "entrada", usuario_id,
+                                                 nota="Importación CSV (entrada)")
+                        elif valor != existente["existencia"]:
+                            mover_existencia(con, existente, valor - existente["existencia"], "ajuste",
                                              usuario_id, nota="Importación CSV")
                     if registro.get("principio_activo"):
                         guardar_principios_producto(con, existente["id"], registro["principio_activo"])
@@ -370,4 +397,4 @@ def importar_productos():
                     creados += 1
         except ErrorNegocio as e:
             errores.append({"fila": n, "error": e.mensaje})
-    return jsonify(creados=creados, actualizados=actualizados, errores=errores[:200])
+    return jsonify(creados=creados, actualizados=actualizados, errores=(errores + avisos)[:200])

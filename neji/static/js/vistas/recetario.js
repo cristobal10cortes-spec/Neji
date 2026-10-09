@@ -2,7 +2,7 @@
 
 import { api, descargar, qs } from '../api.js';
 import { ir } from '../app.js';
-import { esAdmin, estado } from '../estado.js';
+import { estado, puede } from '../estado.js';
 import { cantidadLegible, imprimir, ticketReceta } from '../impresion.js';
 import {
   aviso, avisoError, confirmar, debounce, decimalTexto, fecha, formulario, h, hoy, kpi, modal, numero, pesos, pestanas,
@@ -87,7 +87,7 @@ async function vistaCalculadora(zona) {
   }
   if (!formas.length) {
     vaciar(zona, h('div.panel', h('p', 'No hay formas farmacéuticas activas.'),
-      esAdmin() ? h('p.suave', 'Créalas en la pestaña Configuración.') : null));
+      puede('vademecum') ? h('p.suave', 'Créalas en la pestaña Configuración.') : null));
     return {};
   }
   const porId = new Map(principios.map((p) => [String(p.id), p]));
@@ -376,7 +376,7 @@ async function vistaLibro(zona) {
 
   vaciar(zona, h('div.panel',
     h('div.fila.entre', selectorFechas(filtro, (f) => { filtro = f; cargar(); }),
-      esAdmin() ? h('button.btn', { type: 'button', onclick: () => descargar(`/api/recetario/recetas.csv${qs({ ...filtro, q: buscar.value.trim(), estado: estadoSel.value })}`) }, 'Exportar libro CSV') : null),
+      puede('reportes') ? h('button.btn', { type: 'button', onclick: () => descargar(`/api/recetario/recetas.csv${qs({ ...filtro, q: buscar.value.trim(), estado: estadoSel.value })}`) }, 'Exportar libro CSV') : null),
     h('div.fila', { style: { margin: '.75rem 0' } }, buscar, estadoSel),
     lista));
 
@@ -449,7 +449,7 @@ async function vistaConfiguracion(zona) {
         { titulo: 'Cantidad sugerida', valor: (f) => numero(f.cantidad_sugerida), clase: 'num' },
         { titulo: 'Estado', valor: (f) => h(`span.etiqueta.${f.activa ? 'ok' : 'mal'}`, f.activa ? 'Activa' : 'Inactiva') },
       ], formas, { alClic: async (f) => { if (await formForma(f)) recargar(); } }),
-      h('p.ayuda', 'Precios netos (sin IVA), igual que en CORAND.ERP. El IVA se suma al calcular.'),
+      h('p.ayuda', 'Precios netos (sin IVA). El IVA se suma al calcular.'),
       h('div.fila', h('span', 'Redondear el total de las recetas:'), redondeo)),
     h('div.panel',
       h('div.fila.entre', h('h3', 'Precio de los principios activos'),
@@ -468,7 +468,7 @@ async function vistaConfiguracion(zona) {
 
 export async function montar(contenedor) {
   const opciones = [['calculadora', 'Calculadora magistral'], ['libro', 'Libro de recetas']];
-  if (esAdmin()) opciones.push(['configuracion', 'Configuración']);
+  if (puede('vademecum')) opciones.push(['configuracion', 'Configuración']);
   const barra = h('div');
   const zona = h('div');
   let actual = null;

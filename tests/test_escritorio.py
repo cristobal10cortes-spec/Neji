@@ -108,3 +108,58 @@ def test_busca_webview2_en_el_disco(tmp_path, monkeypatch):
 def test_fuera_de_windows_el_motor_no_necesita_preparacion():
     if sys.platform != "win32":
         assert escritorio.preparar_motor() == ("ok", "", {})
+
+
+def test_la_ventana_le_da_a_la_interfaz_las_impresoras_de_este_computador(monkeypatch):
+    creadas = {}
+
+    class WebviewFalso:
+        def create_window(self, *args, **kwargs):
+            creadas.update(kwargs)
+            return object()
+
+    escritorio.crear_ventana(WebviewFalso(), "http://127.0.0.1:5000/")
+    api = creadas["js_api"]
+    assert isinstance(api, escritorio.ApiEscritorio)
+    # Los errores vuelven como {ok: False, error} para mostrarlos en la caja, nunca como excepción.
+    assert api.imprimir({"impresora": ""}) == {"ok": False, "error": "No hay una impresora elegida."}
+    if sys.platform != "win32":
+        r = api.impresoras()
+        assert r["ok"] is False and "Windows" in r["error"]
+
+
+def test_imprimir_arma_escpos_y_lo_manda_a_la_impresora(monkeypatch):
+    from neji import impresoras
+    enviados = []
+    monkeypatch.setattr(impresoras, "imprimir_crudo", lambda nombre, datos, *a: enviados.append((nombre, datos)))
+    r = escritorio.ApiEscritorio().imprimir({"impresora": "POS-80", "papel": "80", "cajon": True, "copias": 2,
+                                             "bloques": escritorio.TICKET_PRUEBA})
+    assert r == {"ok": True}
+    assert [n for n, _ in enviados] == ["POS-80", "POS-80"]
+    primero, segundo = enviados[0][1], enviados[1][1]
+    assert impresoras.ABRIR_CAJON in primero and impresoras.ABRIR_CAJON not in segundo   # cajón solo una vez
+    assert "Tildes y eñes".encode("cp850") in primero and primero.endswith(impresoras.CORTAR)
+    # Sin bloques: solo abre el cajón.
+    enviados.clear()
+    escritorio.ApiEscritorio().imprimir({"impresora": "POS-80", "cajon": True, "bloques": []})
+    assert enviados == [("POS-80", impresoras.INICIAR + impresoras.SIN_CHINO + b"\x1bt\x02" + impresoras.ABRIR_CAJON)]
+
+
+def test_sin_consola_las_pruebas_de_impresora_se_muestran_en_un_cuadro(monkeypatch, tmp_path):
+    """NejiPOS.exe no tiene consola (sys.stdout es None): --listar-impresoras debe mostrar algo."""
+    from neji import impresoras
+    vistos = []
+    monkeypatch.setattr(escritorio, "mensaje", lambda texto, error=False, **k: vistos.append((texto, error)))
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(impresoras, "listar", lambda: [
+        {"nombre": "POS-80C", "conexion": "USB", "termica": True, "predeterminada": True, "sin_conexion": False}])
+    assert escritorio.listar_impresoras() == 0
+    assert vistos == [("Impresoras de este computador:\n\n• POS-80C (USB) · de tickets · predeterminada", False)]
+    vistos.clear()
+    monkeypatch.setattr(impresoras, "listar", lambda: (_ for _ in ()).throw(RuntimeError("se cayó")))
+    assert escritorio.listar_impresoras() == 1
+    assert vistos and vistos[0][1] is True and "se cayó" in vistos[0][0]
+    # Con --salida no se abre ningún cuadro (lo usan las pruebas automáticas).
+    vistos.clear()
+    assert escritorio.probar_impresora("", salida=tmp_path / "r.json") == 1
+    assert vistos == [] and "No hay una impresora elegida" in (tmp_path / "r.json").read_text(encoding="utf-8")

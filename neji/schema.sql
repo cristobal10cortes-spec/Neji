@@ -15,13 +15,16 @@ CREATE TABLE IF NOT EXISTS usuarios (
     password_hash TEXT NOT NULL,
     rol           TEXT NOT NULL CHECK (rol IN ('admin', 'cajero')),
     activo        INTEGER NOT NULL DEFAULT 1,
-    creado        TEXT NOT NULL
+    creado        TEXT NOT NULL,
+    nombre_ticket TEXT,              -- cómo aparece en «Atendió:» del ticket (vacío = el nombre)
+    permisos      TEXT               -- JSON {permiso: true/false} del cajero (ver auth.PERMISOS)
 );
 
 CREATE TABLE IF NOT EXISTS cajas (
-    id     INTEGER PRIMARY KEY,
-    nombre TEXT NOT NULL UNIQUE,
-    activa INTEGER NOT NULL DEFAULT 1
+    id        INTEGER PRIMARY KEY,
+    nombre    TEXT NOT NULL UNIQUE,
+    activa    INTEGER NOT NULL DEFAULT 1,
+    principal INTEGER NOT NULL DEFAULT 0   -- desde aquí se hace el corte general de todas las cajas
 );
 
 CREATE TABLE IF NOT EXISTS departamentos (
@@ -86,6 +89,15 @@ CREATE TABLE IF NOT EXISTS clientes (
 );
 CREATE INDEX IF NOT EXISTS idx_clientes_nombre ON clientes(nombre);
 
+-- Corte general: desde la caja principal se cierran juntos los turnos de todas las cajas.
+CREATE TABLE IF NOT EXISTS cortes_generales (
+    id         INTEGER PRIMARY KEY,
+    fecha      TEXT NOT NULL,
+    caja_id    INTEGER NOT NULL REFERENCES cajas(id),
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    nota       TEXT
+);
+
 CREATE TABLE IF NOT EXISTS turnos (
     id                INTEGER PRIMARY KEY,
     caja_id           INTEGER NOT NULL REFERENCES cajas(id),
@@ -98,7 +110,8 @@ CREATE TABLE IF NOT EXISTS turnos (
     diferencia        INTEGER,
     estado            TEXT NOT NULL DEFAULT 'abierto' CHECK (estado IN ('abierto', 'cerrado')),
     usuario_cierre_id INTEGER REFERENCES usuarios(id),
-    nota              TEXT
+    nota              TEXT,
+    corte_general_id  INTEGER REFERENCES cortes_generales(id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_turno_abierto_por_caja ON turnos(caja_id) WHERE estado = 'abierto';
 CREATE INDEX IF NOT EXISTS idx_turnos_abierto ON turnos(abierto);

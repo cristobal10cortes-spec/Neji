@@ -2,18 +2,31 @@
 
 from flask import jsonify
 
-from ..auth import solo_admin, usuario_actual
+from ..auth import con_permiso, tiene_permiso, usuario_actual
 from ..db import filas, get_db, transaccion
 from ..servicios import caja as svc
 from ..validar import ErrorNegocio, entero, texto
 from . import bp, datos_json, rango_fechas, sin_costos
 
 
+def _turno_ajeno(turno):
+    """El turno lo abrió otro cajero y quien consulta no tiene corte general."""
+    usuario = usuario_actual()
+    return turno["usuario_id"] != usuario["id"] and not tiene_permiso(usuario, "corte_general")
+
+
 @bp.get("/caja/<int:caja_id>/turno")
 def turno_actual(caja_id):
     con = get_db()
     turno = svc.turno_abierto(con, caja_id)
-    return jsonify(turno=sin_costos(svc.resumen_turno(con, turno["id"])) if turno else None)
+    if turno is None:
+        return jsonify(turno=None)
+    resumen = svc.resumen_turno(con, turno["id"])
+    if _turno_ajeno(turno):
+        # Se puede vender en él (relevo en la misma caja), pero el dinero lo ve quien lo abrió o el corte general.
+        return jsonify(turno={k: resumen[k] for k in ("id", "caja_id", "caja", "usuario_id", "usuario", "abierto", "estado")}
+                       | {"ajeno": True})
+    return jsonify(turno=sin_costos(resumen))
 
 
 @bp.post("/caja/<int:caja_id>/abrir")
@@ -26,6 +39,7 @@ def abrir(caja_id):
 
 
 @bp.post("/caja/<int:caja_id>/movimiento")
+@con_permiso("movimientos_caja")
 def movimiento(caja_id):
     datos = datos_json()
     con = get_db()
@@ -39,17 +53,21 @@ def movimiento(caja_id):
 
 
 @bp.post("/caja/<int:caja_id>/cerrar")
+@con_permiso("corte")
 def cerrar(caja_id):
     datos = datos_json()
     contado = entero(datos.get("efectivo_contado"), "efectivo contado", minimo=0)
     con = get_db()
     with transaccion(con):
+        if _turno_ajeno(svc.exigir_turno(con, caja_id)):
+            raise ErrorNegocio("Este turno lo abrió otro cajero: el corte lo hace él o alguien con permiso de "
+                               "corte general.", status=403)
         turno_id = svc.cerrar_turno(con, caja_id, usuario_actual()["id"], contado, texto(datos, "nota"))
     return jsonify(turno=sin_costos(svc.resumen_turno(con, turno_id)))
 
 
 @bp.get("/turnos")
-@solo_admin
+@con_permiso("corte_general")
 def historial_turnos():
     _, _, inicio, fin = rango_fechas()
     return jsonify(filas(get_db().execute(
@@ -65,6 +83,55 @@ def ver_turno(turno_id):
     con = get_db()
     resumen = svc.resumen_turno(con, turno_id)
     usuario = usuario_actual()
-    if usuario["rol"] != "admin" and resumen["usuario_id"] != usuario["id"]:
+    if not tiene_permiso(usuario, "corte_general") and resumen["usuario_id"] != usuario["id"]:
         raise ErrorNegocio("Solo puedes ver tus propios turnos.", status=403)
     return jsonify(sin_costos(resumen))
+
+
+# --- Corte general (desde la caja principal) ----------------------------------------------------
+
+@bp.get("/caja/turnos-abiertos")
+@con_permiso("corte_general")
+def turnos_abiertos():
+    return jsonify(sin_costos(svc.turnos_abiertos(get_db())))
+
+
+@bp.post("/caja/<int:caja_id>/corte-general")
+@con_permiso("corte_general")
+def corte_general(caja_id):
+    datos = datos_json()
+    cortes = datos.get("cortes")
+    if not isinstance(cortes, list):
+        raise ErrorNegocio("Indica los turnos a cortar.")
+    leidos = []
+    for c in cortes:
+        if not isinstance(c, dict):
+            raise ErrorNegocio("Indica los turnos a cortar.")
+        leidos.append({"turno_id": entero(c.get("turno_id"), "turno", minimo=1),
+                       "efectivo_contado": entero(c.get("efectivo_contado"), "efectivo contado", minimo=0)})
+    con = get_db()
+    with transaccion(con):
+        corte_id = svc.corte_general(con, caja_id, usuario_actual()["id"], leidos,
+                                     texto(datos, "nota", max_largo=500))
+    return jsonify(sin_costos(svc.resumen_corte_general(con, corte_id))), 201
+
+
+@bp.get("/cortes-generales")
+@con_permiso("corte_general")
+def historial_cortes_generales():
+    _, _, inicio, fin = rango_fechas()
+    return jsonify(filas(get_db().execute(
+        """SELECT g.*, c.nombre AS caja, u.nombre AS usuario,
+                  (SELECT COUNT(*) FROM turnos WHERE corte_general_id = g.id) AS n_turnos,
+                  (SELECT COUNT(*) FROM turnos WHERE corte_general_id = g.id AND diferencia <> 0) AS con_diferencia,
+                  (SELECT COALESCE(SUM(diferencia), 0) FROM turnos WHERE corte_general_id = g.id) AS diferencia,
+                  (SELECT COALESCE(SUM(total), 0) FROM ventas
+                    WHERE turno_id IN (SELECT id FROM turnos WHERE corte_general_id = g.id)) AS total_ventas
+           FROM cortes_generales g JOIN cajas c ON c.id = g.caja_id JOIN usuarios u ON u.id = g.usuario_id
+           WHERE g.fecha BETWEEN ? AND ? ORDER BY g.id DESC""", (inicio, fin))))
+
+
+@bp.get("/cortes-generales/<int:corte_id>")
+@con_permiso("corte_general")
+def ver_corte_general(corte_id):
+    return jsonify(sin_costos(svc.resumen_corte_general(get_db(), corte_id)))

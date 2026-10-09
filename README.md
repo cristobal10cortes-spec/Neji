@@ -49,9 +49,22 @@ Neji POS se abre en **su propia ventana**, sin navegador ni ventana negra:
 - F5 y F12 no hacen nada fuera de la venta: son atajos de Neji (cliente, cobrar).
   Para recargar la pantalla usa `Ctrl+Shift+R`.
 
-**Imprimir el ticket sin el cuadro de impresión:** deja tu impresora térmica (58 u
-80 mm) como predeterminada en Windows y marca **Configuración → Negocio y ticket →
-Imprimir directo**. Se aplica al volver a abrir Neji POS.
+**Impresora de tickets:** NejiPOS.exe encuentra sola las impresoras instaladas en el
+computador (USB, red o serie: POS-80, POS-58, XP-80, SLK, Epson TM, Bixolon…) y manda
+el ticket directo a la de tickets, sin cuadro de impresión. Basta con tener instalado
+el controlador de la impresora. En **Configuración → Impresora de tickets** se ve cuál
+encontró y se puede elegir otra, el papel (80 o 58 mm), cortar el papel, abrir el cajón
+de dinero al cobrar en efectivo e imprimir una prueba. Cada caja usa su propia impresora,
+también las que se conectan a otro equipo con `--conectar`.
+
+- Solo elige sola impresoras de tickets, y prefiere una que esté en línea. Las de tinta,
+  láser o etiquetas nunca se eligen solas.
+- Si el nombre dice 58 (POS-58, XP-58) usa papel de 58 mm; si no, el ancho de
+  **Negocio y ticket**.
+- A las POS-58/POS-80 genéricas les apaga el «modo chino» para que las tildes y la ñ no
+  salgan como letras chinas (se puede cambiar en **Avanzado**).
+- Para soporte: `NejiPOS.exe --listar-impresoras` muestra las impresoras que ve y
+  `NejiPOS.exe --prueba-impresora "POS-80"` imprime un ticket de prueba.
 
 ### Con Python (para quien prefiera el navegador)
 
@@ -108,8 +121,9 @@ otras cajas vendan. Cada caja tiene su propio turno y su propio corte.
 - Captura por código de barras, con la sintaxis `3*código` para varias unidades.
 - **Buscador en vivo**: al escribir un nombre en el mismo campo del código aparece la
   lista de productos con su código, nombre, precio y existencia. Se elige con `↑` `↓` y
-  `Enter`, o con un clic. Si el texto calza con un solo producto, `Enter` lo agrega
-  directo. `3*nombre` también funciona.
+  `Enter`, o con un clic. Si el nombre calza con un solo producto, `Enter` lo agrega
+  directo; si lo escrito solo se parece a un código (o son solo números), pide
+  confirmar con `Enter`. `3*nombre` también funciona.
 - Los atajos (`INS` Varios, `Ctrl+P` Art. común, `F10` Buscar, `F11` Mayoreo,
   `F9` Verificador, `F7` Entrada, `F8` Salida) van en una fila bajo el buscador, como en
   eleventa, y **Cancelar ticket** queda justo encima de **Cobrar**.
@@ -143,7 +157,9 @@ Se activa en **Configuración → Opciones → Farmacia**, o al configurar Neji 
   qué sirve, efectos adversos, contraindicaciones y notas de cada principio activo.
   Sigue al producto marcado en el buscador o a la línea elegida del ticket.
 - Lo que se escribe en el vademécum se ve igual en la venta. El administrador puede
-  **editar la ficha desde la misma venta** (botón Editar) y el cambio aparece al tiro.
+  **editar la ficha desde la misma venta** (botón Editar, también en la ficha de `F10`) y
+  el cambio aparece al tiro. Los textos largos se ven resumidos: un clic los abre
+  completos, y el botón Ficha muestra todo.
 - **Búsqueda por componente**: en el buscador (o en `F10`) escribe `%paracetamol` para
   ver todos los productos que lo contienen.
 - **Alternativas** (`Ctrl+B`): productos con el mismo principio activo (bioequivalentes
@@ -160,7 +176,7 @@ Se activa en **Configuración → Opciones → Farmacia**, o al configurar Neji 
 **Recetario magistral**
 
 - **Calculadora** para cápsulas, cremas, lociones o cualquier forma que crees.
-  Usa la misma fórmula que CORAND.ERP:
+  La fórmula:
   - Cada principio activo suma: precio × dosis por unidad × cantidad.
   - A eso se agrega el precio por cápsula/gramo/ml × cantidad, más el valor base.
   - Al final se suma el IVA.
@@ -186,30 +202,17 @@ Se activa en **Configuración → Opciones → Farmacia**, o al configurar Neji 
 - Cada producto puede tener **proveedor/distribuidor** y **fecha de vencimiento**.
 - **Inventario → Vencimientos** lista lo que vence pronto.
 
-**Importar desde CORAND.ERP / Easy Pharma**
+**Importar el inventario desde CSV**
 
-En **Configuración → Importar**, elige el archivo `corand_erp_pro.db` y Neji trae:
+En **Configuración → Importar inventario (CSV)** (o en Productos → Importar CSV) se sube
+una planilla guardada como CSV desde Excel, eleventa u otro sistema:
 
-- Productos con su principio activo, distribuidor y vencimiento.
-- El stock.
-- El vademécum.
-- Los precios de los principios activos del recetario y las fórmulas magistrales.
-- Los datos del ticket.
-
-Cómo funciona:
-
-- Antes de importar hace un respaldo.
-- No modifica el archivo original.
-- No duplica si importas dos veces.
-
-También se puede desde la línea de comandos:
-
-```
-python importar_corand.py ruta/a/corand_erp_pro.db
-```
-
-El detalle del análisis del programa anterior está en
-[`docs/analisis-corand.md`](docs/analisis-corand.md).
+- Crea los productos nuevos y actualiza los que ya existen (por código), con su
+  principio activo, distribuidor, vencimiento y stock.
+- La existencia puede **reemplazar** el stock (conteo de inventario) o **sumarse**
+  (entrada de mercadería). Cada cambio queda en el kardex.
+- Trae una **planilla de ejemplo** para descargar con todas las columnas.
+- Entiende planillas guardadas por Excel en Windows (con tildes, comillas y €).
 
 ### Productos e inventario
 
@@ -239,7 +242,14 @@ El detalle del análisis del programa anterior está en
 - **Estado de caja en vivo**: cuánto debería haber en el cajón.
 - **Corte de caja**: se compara lo contado con lo esperado y se indica el faltante o sobrante.
   También muestra las ventas por forma de pago y por departamento.
-- Historial de cortes.
+- **Corte general** desde la caja principal: se cuenta el efectivo de cada caja y se cierran
+  todas juntas. El ticket suma todas las cajas y muestra lo vendido por cada cajero. La caja
+  principal se elige en **Configuración → Cajas**. Cada caja muestra su propio faltante o
+  sobrante, y si otra terminal ya cerró una caja, el corte se recarga sin ella. Con una sola
+  caja basta el corte normal.
+- Un cajero corta el turno que abrió; el turno de otro cajero lo corta quien lo abrió o
+  alguien con permiso de corte general.
+- Historial de cortes y de cortes generales.
 
 ### Devoluciones
 
@@ -258,9 +268,15 @@ El detalle del análisis del programa anterior está en
 
 ### Usuarios y seguridad
 
-- Roles **administrador** y **cajero**.
-- Los cajeros no ven costos, reportes ni configuración.
-- Se puede permitir o no que un cajero cambie precios o haga devoluciones.
+- En **Configuración → Usuarios** se agregan y modifican usuarios.
+- Roles **administrador** (puede todo) y **cajero**.
+- Cada cajero tiene **sus propios permisos**: cambiar precios y descuentos, vender artículos
+  comunes, devoluciones, entradas y salidas de efectivo, corte de su caja, corte general,
+  crédito a clientes, productos, inventario, reportes y vademécum. Los costos los ve quien
+  tiene productos, inventario o reportes; la ganancia, solo quien tiene reportes.
+- Los cambios de permisos se aplican sin que el cajero vuelva a entrar (al cambiar de pantalla).
+- **Nombre en el ticket**: cómo aparece cada usuario en «Atendió:» (por ejemplo
+  «Cajero 1 · Cristóbal Araya Cortés»), con una vista previa del ticket al lado.
 - **Respaldo automático diario**, que guarda los últimos 10 (configurable),
   más respaldo y descarga manual.
 
@@ -273,7 +289,7 @@ El detalle del análisis del programa anterior está en
 | `F1` `F2` `F3` `F4` | Ventas · Clientes · Productos · Inventario |
 | `Enter` | Agregar el código escrito (`3*código` = 3 unidades) o el producto elegido en la lista |
 | `↑` `↓` con texto escrito | Moverse por la lista del buscador (la ficha del vademécum la sigue) |
-| `Esc` | Cerrar la lista del buscador |
+| `Esc` | Cerrar la lista del buscador y borrar lo escrito (o cancelar un `Enter` que espera al servidor) |
 | `F10` | Buscar producto en una ventana grande (`%paracetamol` busca por principio activo) |
 | `INS` | Varios (cantidad + código) |
 | `Ctrl+P` | Artículo común |
@@ -315,9 +331,10 @@ Para restaurar un respaldo:
 1. En eleventa: **Productos → Exportar a Excel**. En otros sistemas, usa su
    exportación de productos.
 2. Abre el archivo en Excel y guárdalo como **CSV (delimitado por punto y coma)**.
-3. En Neji: **Productos → Importar CSV**.
+3. En Neji: **Configuración → Importar inventario (CSV)** (o **Productos → Importar CSV**).
    - Si el código ya existe, el producto se actualiza.
    - Si no existe, se crea.
+   - Elige si la existencia reemplaza el stock o se suma a él.
 
 ---
 
@@ -344,7 +361,6 @@ tests/                 pruebas con pytest
 run.py                 inicia el servidor y abre el navegador
 escritorio.py          NejiPOS.exe: servidor + ventana propia (pywebview / WebView2)
 empaquetado/           receta de PyInstaller, instalador (Inno Setup) e ícono
-importar_corand.py     importación desde CORAND.ERP por línea de comandos
 docs/investigacion.md  lo mejor de cada POS y qué se tomó de cada uno
 ```
 
@@ -394,9 +410,16 @@ Para agregar una función nueva:
 
 ## El programa anterior: CORAND.ERP / Easy Pharma (`corand_erp.py`)
 
-Este repositorio también guarda el programa original de la farmacia, para seguir usándolo
-mientras se pasa a Neji POS. Sus datos se traen a Neji desde **Configuración → Importar**
-(ver «Farmacia: vademécum y recetario magistral»).
+Este repositorio también guarda el programa original de la farmacia, como referencia. Su
+análisis está en [`docs/analisis-corand.md`](docs/analisis-corand.md).
+
+Para pasar su inventario a Neji POS (el programa no tiene una opción para exportarlo):
+
+1. Abre `corand_erp_pro.db` con [DB Browser for SQLite](https://sqlitebrowser.org/) (gratis).
+2. **Archivo → Exportar → Tabla(s) como archivo CSV…**, elige la tabla `inventario` y guárdala.
+3. En Neji POS, súbela en **Configuración → Importar inventario (CSV)**. Neji reconoce sus
+   columnas (código, nombre, costo, precio de venta, stock, distribuidor, departamento,
+   vencimiento y principio activo).
 
 Sistema de punto de venta e inventario para farmacia, escrito en **Python** con **PyQt6**.
 

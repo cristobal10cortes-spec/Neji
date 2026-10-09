@@ -163,6 +163,11 @@ export function modalAbierto() {
   return pila.length > 0;
 }
 
+/** Cierra todas las ventanas abiertas, de arriba hacia abajo (al cambiar de pantalla). */
+export function cerrarModales() {
+  while (pila.length) pila[pila.length - 1].cerrar();
+}
+
 /** Abre un modal. `alTeclear(e)` recibe las teclas mientras es el modal de arriba. */
 export function modal({ titulo, cuerpo, botones = [], ancho = '', alCerrar, alTeclear }) {
   const errorEl = h('div.error-modal.oculto', { role: 'alert' });
@@ -217,6 +222,17 @@ export function teclaEnModal(e) {
     e.preventDefault();
     arriba.cerrar();
     return true;
+  }
+  if (e.key === 'Tab' && !e.defaultPrevented) {
+    // Tab da la vuelta dentro de la ventana: no se va al menú ni a la pantalla de atrás.
+    const enfocables = [...arriba.el.querySelectorAll('button, [href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])')]
+      .filter((x) => !x.disabled && x.getClientRects().length);
+    const dentro = arriba.el.contains(document.activeElement);
+    if (enfocables.length && (!dentro || document.activeElement === (e.shiftKey ? enfocables[0] : enfocables.at(-1)))) {
+      e.preventDefault();
+      (e.shiftKey ? enfocables.at(-1) : enfocables[0]).focus();
+      return true;
+    }
   }
   arriba.alTeclear?.(e);
   if (/^F\d+$/.test(e.key)) e.preventDefault();

@@ -1,5 +1,6 @@
 """Conexión a SQLite y utilidades de transacción."""
 
+import json
 import sqlite3
 import unicodedata
 from contextlib import contextmanager
@@ -100,6 +101,10 @@ def inicializar(ruta):
         for clave, valor in CONFIG_POR_DEFECTO.items():
             con.execute("INSERT OR IGNORE INTO config (clave, valor) VALUES (?, ?)", (clave, valor))
         con.execute("INSERT OR IGNORE INTO cajas (id, nombre) VALUES (1, 'Caja 1')")
+        # Siempre hay una caja principal activa (la del corte general): la primera activa, si nadie eligió otra.
+        con.execute("UPDATE cajas SET principal = 0 WHERE activa = 0")
+        con.execute("UPDATE cajas SET principal = 1 WHERE id = (SELECT MIN(id) FROM cajas WHERE activa = 1) "
+                    "AND NOT EXISTS (SELECT 1 FROM cajas WHERE principal = 1)")
         sembrar_recetario(con)
     finally:
         con.close()
@@ -120,6 +125,23 @@ def migrar(con):
             con.execute(f"ALTER TABLE productos ADD COLUMN {columna} TEXT")
     con.execute("CREATE INDEX IF NOT EXISTS idx_venta_items_receta ON venta_items(receta_id)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_productos_vencimiento ON productos(vencimiento)")
+    if "principal" not in _columnas(con, "cajas"):
+        con.execute("ALTER TABLE cajas ADD COLUMN principal INTEGER NOT NULL DEFAULT 0")
+    if "corte_general_id" not in _columnas(con, "turnos"):
+        con.execute("ALTER TABLE turnos ADD COLUMN corte_general_id INTEGER REFERENCES cortes_generales(id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_turnos_corte_general ON turnos(corte_general_id)")
+    usuarios = _columnas(con, "usuarios")
+    if "nombre_ticket" not in usuarios:
+        con.execute("ALTER TABLE usuarios ADD COLUMN nombre_ticket TEXT")
+    if "permisos" not in usuarios:
+        con.execute("ALTER TABLE usuarios ADD COLUMN permisos TEXT")
+        # Antes los permisos de los cajeros eran opciones generales: cada cajero parte con lo mismo que tenía.
+        opcion = dict(con.execute("SELECT clave, valor FROM config WHERE clave IN "
+                                  "('cajero_puede_cambiar_precio', 'cajero_puede_devolver')").fetchall())
+        permisos = {"cambiar_precio": opcion.get("cajero_puede_cambiar_precio") == "1",
+                    "devoluciones": opcion.get("cajero_puede_devolver") == "1",
+                    "movimientos_caja": True, "corte": True}
+        con.execute("UPDATE usuarios SET permisos = ? WHERE rol = 'cajero'", (json.dumps(permisos),))
 
 
 def sembrar_recetario(con):

@@ -2,7 +2,7 @@
 
 import { api, qs } from '../api.js';
 import { esFarmacia, estado, guardarTickets, leerTickets, nuevoTicket, opcion, puede } from '../estado.js';
-import { imprimir, ticketCotizacion, ticketVenta } from '../impresion.js';
+import { abrirCajon, imprimir, ticketCotizacion, ticketVenta } from '../impresion.js';
 import {
   aviso, avisoError, confirmar, formulario, h, importe, leerCantidad, leerMonto, modal, modalAbierto, numero, pesos, pitido,
   redondeoEfectivo, vaciar,
@@ -51,13 +51,21 @@ function snapshot(p) {
   return { id, codigo, descripcion, precio_venta, precio_mayoreo, cantidad_mayoreo, tipo_venta, existencia, usa_inventario, departamento, principios, principios_detalle };
 }
 
-/** Resultados del buscador en celdas: código, nombre, precio y existencia. */
-function tablaResultados(lista, sel, { alElegir, alMarcar = null }) {
-  return h('table.tabla-resultados',
+// Al elegir de una lista con un clic, la lista se cierra y el segundo clic de un doble clic caería en lo que estaba
+// debajo (una línea del ticket, un atajo): ese clic se descarta (ver montar).
+let ultimoClicLista = -Infinity; // performance.now() parte en 0 al cargar la página
+const marcarClicLista = () => { ultimoClicLista = performance.now(); };
+const clicRecienEnLista = () => performance.now() - ultimoClicLista < 500;
+
+/** Resultados del buscador en celdas: código, nombre, precio y existencia. `idFila(i)` da el id de cada fila (combobox). */
+function tablaResultados(lista, sel, { alElegir, alMarcar = null, idFila = null }) {
+  return h('table.tabla-resultados', { role: 'grid', 'aria-label': 'Resultados de la búsqueda' },
     h('thead', h('tr', h('th', 'Código'), h('th', 'Nombre'), h('th.num', 'Precio'), h('th.num', 'Existencia'))),
     h('tbody', lista.map((p, i) => h('tr.clic', {
+      id: idFila ? idFila(i) : null,
+      'aria-selected': String(i === sel),
       class: i === sel ? 'sel' : null,
-      onclick: () => alElegir(i),
+      onclick: () => { marcarClicLista(); alElegir(i); },
       onmousemove: alMarcar ? () => alMarcar(i) : null,
     },
     h('td.mono', p.codigo),
@@ -83,6 +91,7 @@ const sinTildes = (t) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLo
  */
 function calzaPorNombre(p, consulta) {
   if (consulta.startsWith('%')) return true;
+  if (!/\p{L}/u.test(consulta)) return false; // solo números: es un código que no existe, aunque el nombre diga «60ML»
   const descripcion = sinTildes(p.descripcion);
   return sinTildes(consulta).split(/\s+/).every((palabra) => descripcion.includes(palabra));
 }
@@ -107,20 +116,30 @@ export async function montar(contenedor, parametros = {}) {
     id: 'codigo-producto',
     placeholder: farmacia ? 'Escanea o escribe código, nombre o %principio activo' : 'Escanea o escribe el código o el nombre del producto',
     autocomplete: 'off', spellcheck: 'false', 'aria-label': 'Código del producto',
-    role: 'combobox', 'aria-autocomplete': 'list', 'aria-expanded': 'false', 'aria-controls': 'resultados-busqueda',
+    role: 'combobox', 'aria-autocomplete': 'list', 'aria-haspopup': 'grid', 'aria-expanded': 'false', 'aria-controls': 'resultados-busqueda',
   });
   // Lista del buscador. No le quita el foco al campo: se elige con el mouse o con ↑ ↓ y Enter.
   const listaBusqueda = h('div.resultados.oculto', { id: 'resultados-busqueda', onmousedown: (e) => e.preventDefault() });
-  const busqueda = { lista: [], total: 0, sel: 0, texto: '', abierta: false, suspendida: false, elegida: false, mensaje: '', pedido: 0, espera: null };
+  const busqueda = {
+    lista: [], total: 0, sel: 0, texto: '', abierta: false, suspendida: false, elegida: false, mensaje: '', pedido: 0, espera: null,
+    cancelados: 0, // sube con Esc: el Enter que esperaba al servidor ya no agrega ni abre nada
+  };
   const fichas = new Map(); // productos leídos del servidor con su ficha del vademécum
   const ficha = farmacia
-    ? panelVademecum({ fichas, alternativas: (p) => alternativas(p, textoBuscado()), alTerminar: () => enfocar() })
+    ? panelVademecum({
+      fichas,
+      alternativas: (p) => alternativas(p, textoBuscado()),
+      alTerminar: () => enfocar(),
+      retenerFoco: () => busqueda.abierta,
+      alActualizar: (p) => refrescarProducto(p),
+      alVender: (c) => venderCodigo(c),
+    })
     : null;
   let productoSinStock = null; // último producto que no se pudo agregar por falta de stock (Ctrl+B)
   const avisoTurno = h('div.panel.oculto', { style: { background: '#fff7e0', borderColor: '#f3d27a' } });
   const pestanasTickets = h('div.tickets');
   const cuerpoTabla = h('tbody');
-  const lblCliente = h('span');
+  const lblCliente = h('div.cliente-ticket');
   const lblArticulos = h('div.suave');
   const lblTotal = h('div.monto', '$0');
   const lblDescuento = h('div.suave');
@@ -130,6 +149,23 @@ export async function montar(contenedor, parametros = {}) {
   // Fila de atajos bajo el buscador, como en eleventa.
   const tecla = (teclaTexto, texto, accion, extra = {}) =>
     h('button.btn', { type: 'button', title: `${texto} (${teclaTexto})`, onclick: () => { accion(); }, ...extra }, h('kbd', teclaTexto), h('span', texto));
+  // Lo que el usuario no tiene permitido queda a la vista (la fila es la misma en todas las cajas) pero apagado.
+  const sinPermiso = (permiso) => (puede(permiso) ? {} : { disabled: true, title: 'No tienes permiso (Configuración → Usuarios)' });
+  const filaTeclas = h('div.teclas',
+    tecla('INS', 'Varios', varios),
+    tecla('Ctrl+P', 'Art. común', articuloComun, sinPermiso('articulo_comun')),
+    tecla('F10', 'Buscar', buscarProducto),
+    tecla('F11', 'Mayoreo', alternarMayoreo, { title: 'Mayoreo (F11 o Ctrl+M)' }),
+    tecla('F9', 'Verificador', verificador),
+    tecla('F7', 'Entrada', () => movimiento('entrada'), { title: 'Entrada de efectivo (F7)', ...sinPermiso('movimientos_caja') }),
+    tecla('F8', 'Salida', () => movimiento('salida'), { title: 'Salida de efectivo (F8)', ...sinPermiso('movimientos_caja') }));
+  // Si con la tecla al lado del texto los 7 no quedan del mismo ancho (depende del ancho y de la fuente), la tecla va
+  // sobre el texto.
+  const ajusteTeclas = new ResizeObserver(() => {
+    filaTeclas.classList.remove('apiladas');
+    const anchos = [...filaTeclas.children].map((b) => b.getBoundingClientRect().width);
+    filaTeclas.classList.toggle('apiladas', Math.max(...anchos) - Math.min(...anchos) > 1);
+  });
 
   vaciar(contenedor, h('div.ventas',
     avisoTurno,
@@ -141,14 +177,7 @@ export async function montar(contenedor, parametros = {}) {
           codigo,
           boton('Enter', 'Agregar producto', () => enterEnCodigo(), { class: 'primario', onmousedown: (e) => e.preventDefault() }),
           listaBusqueda),
-        h('div.teclas',
-          tecla('INS', 'Varios', varios),
-          tecla('Ctrl+P', 'Art. común', articuloComun),
-          tecla('F10', 'Buscar', buscarProducto),
-          tecla('F11', 'Mayoreo', alternarMayoreo, { title: 'Mayoreo (F11 o Ctrl+M)' }),
-          tecla('F9', 'Verificador', verificador),
-          tecla('F7', 'Entrada', () => movimiento('entrada'), { title: 'Entrada de efectivo (F7)' }),
-          tecla('F8', 'Salida', () => movimiento('salida'), { title: 'Salida de efectivo (F8)' })),
+        filaTeclas,
         h('div.fila.entre', pestanasTickets, boton('F6', 'Nuevo ticket', nuevo)),
         h('div.tabla-caja.ticket-tabla', h('table',
           h('thead', h('tr',
@@ -160,15 +189,26 @@ export async function montar(contenedor, parametros = {}) {
         h('div.atajos',
           boton('Supr', 'Borrar', borrarLinea),
           boton('*', 'Cantidad', editarCantidad),
-          boton('Ctrl+D', 'Descuento', descuento),
-          boton('', 'Precio', cambiarPrecio),
+          boton('Ctrl+D', 'Descuento', descuento, sinPermiso('cambiar_precio')),
+          boton('', 'Precio', cambiarPrecio, sinPermiso('cambiar_precio')),
           boton('F5', 'Cliente', asignarCliente),
           boton('', 'Cotizar', guardarCotizacion)),
-        h('div.cliente-ticket', lblCliente)),
+        lblCliente),
       h('div.total-grande', lblArticulos, lblDescuento, h('div.etq', 'Total'), lblTotal),
       h('div.cobrar',
         boton('', 'Cancelar ticket', cancelarTicket, { class: 'peligro' }),
         h('button.btn.primario.grande', { type: 'button', onclick: cobrar }, h('kbd', 'F12'), 'Cobrar')))));
+
+  ajusteTeclas.observe(filaTeclas.parentElement);
+
+  for (const tipo of ['mousedown', 'click', 'dblclick']) {
+    contenedor.addEventListener(tipo, (e) => {
+      if (clicRecienEnLista() && !listaBusqueda.contains(e.target)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, true);
+  }
 
   codigo.addEventListener('input', alEscribir);
   codigo.addEventListener('keydown', (e) => {
@@ -182,7 +222,9 @@ export async function montar(contenedor, parametros = {}) {
       e.stopPropagation();
       if (busqueda.abierta) moverResultado(e.key === 'ArrowDown' ? 1 : -1);
       else reabrirBusqueda();
-    } else if (e.key === 'Escape' && (busqueda.abierta || codigo.value)) {
+    } else if (e.key === 'Escape') {
+      busqueda.cancelados++;
+      if (!busqueda.abierta && !codigo.value) return;
       e.preventDefault();
       e.stopPropagation();
       codigo.value = '';
@@ -214,6 +256,7 @@ export async function montar(contenedor, parametros = {}) {
       return h('button', { type: 'button', class: i === tickets.activo ? 'activo' : null, onclick: () => { cambiarA(i); } },
         `Ticket ${tk.numero}`, tk.items.length ? h('span.suave', ` · ${pesos(tot)}`) : null);
     }));
+    pestanasTickets.querySelector('.activo')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 
     if (!t.items.length) {
       vaciar(cuerpoTabla, h('tr', h('td.vacio', { colspan: 7 }, 'Escanea un producto o escribe su nombre en el buscador. 3*código agrega 3 unidades.')));
@@ -240,7 +283,6 @@ export async function montar(contenedor, parametros = {}) {
         h('td.num.negrita', pesos(importe(it.cantidad, precio))),
         h('td.num.ocultar-movil', { class: sinStock ? 'rojo' : 'suave' }, p?.usa_inventario ? numero(p.existencia) : '—'));
       }));
-      cuerpoTabla.querySelector('tr.sel')?.scrollIntoView({ block: 'nearest' });
     }
 
     const tot = totalesTicket(t);
@@ -251,9 +293,12 @@ export async function montar(contenedor, parametros = {}) {
     productoSinStock = null;
     actualizarFicha();
     vaciar(lblCliente, t.cliente
-      ? [h('span.etiqueta.ok', 'Cliente'), ` ${t.cliente.nombre}`, t.cliente.saldo ? h('span.suave', ` (debe ${pesos(t.cliente.saldo)})`) : null,
+      ? [h('span.etiqueta.ok', 'Cliente'),
+        h('span.cliente-nombre', { title: t.cliente.nombre }, t.cliente.nombre, t.cliente.saldo ? h('span.suave', ` (debe ${pesos(t.cliente.saldo)})`) : null),
         h('button.btn.chico', { type: 'button', onclick: () => { t.cliente = null; guardar(); dibujar(); } }, 'Quitar')]
       : t.cotizacionId ? h('span.etiqueta', `Desde cotización`) : '');
+    // Al final, con el pie ya armado (el cliente o el descuento lo agrandan y achican la tabla).
+    cuerpoTabla.querySelector('tr.sel')?.scrollIntoView({ block: 'nearest' });
     guardar();
   }
 
@@ -275,6 +320,7 @@ export async function montar(contenedor, parametros = {}) {
     vaciar(avisoTurno, h('div.fila.entre',
       h('span', h('b', 'La caja está cerrada. '), 'Abre el turno indicando con cuánto dinero inicia la caja.'),
       h('button.btn.primario', { type: 'button', onclick: pedirAbrirTurno }, 'Abrir caja')));
+    cuerpoTabla.querySelector('tr.sel')?.scrollIntoView({ block: 'nearest' }); // el aviso le quita alto al ticket
   }
 
   async function pedirAbrirTurno() {
@@ -342,6 +388,7 @@ export async function montar(contenedor, parametros = {}) {
     const escrito = codigo.value.trim();
     if (!escrito) return;
     const { cantidad, consulta: texto } = separarCantidad(escrito); // '3*código', '0,755*código'
+    const turno = busqueda.cancelados;
     codigo.value = '';
     cerrarBusqueda();
     let producto;
@@ -349,12 +396,15 @@ export async function montar(contenedor, parametros = {}) {
       producto = await api.get(`/api/productos/codigo/${encodeURIComponent(texto)}`);
     } catch (e) {
       // No es un código: si el nombre calza con un solo producto se agrega; si no, se elige de la lista.
-      const r = e.status === 404 && consultaValida(texto) ? await buscarEnVivo(texto) : null;
+      // Es una búsqueda aparte de la del buscador en vivo: lo que se escriba mientras tanto no la anula.
+      const r = e.status === 404 && consultaValida(texto) ? await api.get(urlBusqueda(texto)).catch(() => null) : null;
+      if (turno !== busqueda.cancelados) return;
       const n = r?.productos.length || 0;
       if (n === 1 && calzaPorNombre(r.productos[0], texto)) {
         producto = r.productos[0];
       } else if (n && codigo.value === '') {
         if (n === 1) pitido(); // parecido a un código, pero no igual
+        cargarResultados(r, texto);
         codigo.value = escrito;
         busqueda.elegida = true;
         busqueda.mensaje = n === 1
@@ -369,7 +419,50 @@ export async function montar(contenedor, parametros = {}) {
         return;
       }
     }
+    if (turno !== busqueda.cancelados) return;
     await agregarConCantidad(producto, cantidad);
+  }
+
+  /** «Vender» desde la ficha de un principio: agrega al ticket a la vista, sin volver a montar la venta. */
+  async function venderCodigo(c) {
+    let producto;
+    try {
+      producto = await api.get(`/api/productos/codigo/${encodeURIComponent(c)}`);
+    } catch (e) {
+      pitido();
+      avisoError(e);
+      enfocar();
+      return;
+    }
+    await agregarConCantidad(producto, null);
+  }
+
+  /**
+   * Datos frescos de un producto (leídos por la ficha o recién editados): las líneas de los tickets y los
+   * resultados del buscador los toman, así lo que se ve coincide con lo que el servidor va a cobrar.
+   */
+  function refrescarProducto(p) {
+    let cambio = false;
+    for (const tk of tickets.lista) {
+      for (const it of tk.items) {
+        if (it.producto?.id === p.id && it.producto.codigo === p.codigo) {
+          it.producto = snapshot(p);
+          cambio = true;
+        }
+      }
+    }
+    if (busqueda.lista.some((x) => x.id === p.id)) {
+      busqueda.lista = busqueda.lista.map((x) => (x.id === p.id ? { ...x, ...p } : x));
+      if (busqueda.abierta) pintarBusqueda();
+    }
+    if (cambio) {
+      const sinStock = productoSinStock; // dibujar() vuelve la ficha a la línea elegida
+      dibujar();
+      if (sinStock) {
+        productoSinStock = sinStock;
+        actualizarFicha();
+      }
+    }
   }
 
   async function agregarConCantidad(producto, cantidad) {
@@ -385,8 +478,11 @@ export async function montar(contenedor, parametros = {}) {
   // Al escribir un nombre aparecen los productos en celdas y la ficha del vademécum del marcado.
   const textoBuscado = () => (busqueda.abierta ? codigo.value : null);
 
+  const urlBusqueda = (q) => `/api/productos${qs({ q, por_pagina: 30, vademecum: farmacia ? 1 : '' })}`;
+
   function alEscribir() {
     clearTimeout(busqueda.espera);
+    busqueda.pedido++; // lo que venía en camino era de otro texto (aunque se vuelva a él con Retroceso)
     const { consulta } = separarCantidad(codigo.value.trim());
     if (!consultaValida(consulta)) {
       cerrarBusqueda();
@@ -394,7 +490,8 @@ export async function montar(contenedor, parametros = {}) {
     }
     if (busqueda.abierta && consulta === busqueda.texto) return;
     busqueda.espera = setTimeout(async () => {
-      if (await buscarEnVivo(consulta) && document.activeElement === codigo) abrirBusqueda();
+      const r = await buscarEnVivo(consulta);
+      if (r && document.activeElement === codigo && separarCantidad(codigo.value.trim()).consulta === consulta) abrirBusqueda();
     }, 200);
   }
 
@@ -403,15 +500,19 @@ export async function montar(contenedor, parametros = {}) {
     const n = ++busqueda.pedido;
     let r;
     try {
-      r = await api.get(`/api/productos${qs({ q: consulta, por_pagina: 30, vademecum: farmacia ? 1 : '' })}`);
+      r = await api.get(urlBusqueda(consulta));
     } catch (e) {
       if (n === busqueda.pedido) avisoError(e);
       return null;
     }
     if (n !== busqueda.pedido) return null; // llegó tarde: ya se escribió o escaneó otra cosa
+    cargarResultados(r, consulta);
+    return r;
+  }
+
+  function cargarResultados(r, consulta) {
     r.productos.forEach((p) => ficha?.recordar(p));
     Object.assign(busqueda, { lista: r.productos, total: r.total, sel: 0, texto: consulta, elegida: false, mensaje: '' });
-    return r;
   }
 
   async function reabrirBusqueda() {
@@ -438,25 +539,38 @@ export async function montar(contenedor, parametros = {}) {
     busqueda.abierta = false;
     listaBusqueda.classList.add('oculto');
     codigo.setAttribute('aria-expanded', 'false');
+    codigo.removeAttribute('aria-activedescendant');
     actualizarFicha();
   }
 
   function pintarBusqueda() {
     const { lista, sel, total, texto, mensaje } = busqueda;
     vaciar(listaBusqueda,
-      lista.length
-        ? tablaResultados(lista, sel, { alElegir: elegirResultado, alMarcar: (i) => { if (i !== busqueda.sel) marcarResultado(i); } })
-        : h('p.vacio', `Sin resultados para «${texto}». Enter busca el código exacto.`),
+      h('div.resultados-lista', lista.length
+        ? tablaResultados(lista, sel, { alElegir: elegirResultado, alMarcar: (i) => { if (i !== busqueda.sel) marcarResultado(i); }, idFila: idResultado })
+        : h('p.vacio', `Sin resultados para «${texto}». Enter busca el código exacto.`)),
       h('div.resultados-pie',
         mensaje ? h('b', mensaje) : h('span', '↑ ↓ elegir · Enter agregar · Esc cerrar', farmacia ? ' · Ctrl+B alternativas' : ''),
         total > lista.length ? h('span', `Primeros ${lista.length} de ${numero(total)}: escribe más para afinar`) : null));
     listaBusqueda.querySelector('tr.sel')?.scrollIntoView({ block: 'nearest' });
+    anunciarMarcado();
+  }
+
+  // El lector de pantalla anuncia la fila marcada aunque el foco siga en el campo.
+  const idResultado = (i) => `resultado-${i}`;
+  function anunciarMarcado() {
+    if (busqueda.lista.length) codigo.setAttribute('aria-activedescendant', idResultado(busqueda.sel));
+    else codigo.removeAttribute('aria-activedescendant');
   }
 
   function marcarResultado(i, desplazar = false) {
     busqueda.sel = i;
     const filas = listaBusqueda.querySelectorAll('tbody tr');
-    filas.forEach((tr, j) => tr.classList.toggle('sel', j === i));
+    filas.forEach((tr, j) => {
+      tr.classList.toggle('sel', j === i);
+      tr.setAttribute('aria-selected', String(j === i));
+    });
+    anunciarMarcado();
     if (desplazar) filas[i]?.scrollIntoView({ block: 'nearest' });
     actualizarFicha();
   }
@@ -484,6 +598,7 @@ export async function montar(contenedor, parametros = {}) {
     const elegido = busqueda.lista[i];
     if (!elegido) return;
     const { cantidad } = separarCantidad(codigo.value.trim());
+    const turno = busqueda.cancelados;
     codigo.value = '';
     cerrarBusqueda();
     let producto;
@@ -495,6 +610,7 @@ export async function montar(contenedor, parametros = {}) {
       enfocar();
       return;
     }
+    if (turno !== busqueda.cancelados) return;
     await agregarConCantidad(producto, cantidad);
   }
 
@@ -505,7 +621,7 @@ export async function montar(contenedor, parametros = {}) {
     const t = actual();
     const linea = t.items[t.sel]?.producto;
     if (enBusqueda) ficha.mostrar(enBusqueda, 'búsqueda');
-    else if (productoSinStock) ficha.mostrar(productoSinStock, 'sin stock');
+    else if (productoSinStock) ficha.mostrar(productoSinStock, productoSinStock.existencia > 0 ? 'no alcanza' : 'sin stock');
     else ficha.mostrar(linea || null, linea ? `línea ${t.sel + 1}` : '');
   }
 
@@ -524,6 +640,10 @@ export async function montar(contenedor, parametros = {}) {
   }
 
   async function articuloComun() {
+    if (!puede('articulo_comun')) {
+      aviso('No tienes permiso para vender artículos comunes.', 'error');
+      return;
+    }
     const r = await formulario({
       titulo: 'Artículo común (sin registrar)',
       aceptar: 'Agregar',
@@ -553,7 +673,14 @@ export async function montar(contenedor, parametros = {}) {
         autocomplete: 'off', autofocus: true,
       });
       const lista = h('div.lista-busqueda');
-      const fichaBusqueda = farmacia ? panelVademecum({ fichas, alTerminar: () => entrada.focus() }) : null;
+      const fichaBusqueda = farmacia
+        ? panelVademecum({
+          fichas,
+          alTerminar: () => entrada.focus(),
+          alActualizar: (p) => refrescarProducto(p),
+          alVender: (c) => { elegido = { codigo: c }; m.cerrar(); },
+        })
+        : null;
       let resultados = [];
       let sel = 0;
       let elegido = null;
@@ -600,9 +727,23 @@ export async function montar(contenedor, parametros = {}) {
       }
       pintar();
     }).then(async (elegido) => {
-      const producto = elegido && await api.get(`/api/productos/codigo/${encodeURIComponent(elegido.codigo)}`).catch(() => elegido);
-      if (producto) await agregarConCantidad(producto, null);
-      else enfocar();
+      actualizarFicha();
+      if (!elegido) {
+        enfocar();
+        return;
+      }
+      let producto = elegido;
+      try {
+        producto = await api.get(`/api/productos/codigo/${encodeURIComponent(elegido.codigo)}`);
+      } catch (e) {
+        if (!elegido.id) { // «Vender» desde la ficha solo trae el código
+          pitido();
+          avisoError(e);
+          enfocar();
+          return;
+        }
+      }
+      await agregarConCantidad(producto, null);
     });
   }
 
@@ -620,6 +761,7 @@ export async function montar(contenedor, parametros = {}) {
             p.precio_mayoreo != null ? h('p', `Mayoreo: ${pesos(p.precio_mayoreo)}${p.cantidad_mayoreo ? ` desde ${numero(p.cantidad_mayoreo)}` : ''}`) : null,
             h('p', `Código: ${p.codigo}`, p.usa_inventario ? ` · Existencia: ${numero(p.existencia)}` : '')),
           botones: [{ texto: 'Cerrar', clase: 'primario', accion: (mm) => mm.cerrar() }],
+          alCerrar: () => enfocar(),
         });
       },
     });
@@ -651,7 +793,7 @@ export async function montar(contenedor, parametros = {}) {
     const pintar = () => {
       vaciar(cuerpo, h('table', h('tbody', lista.map((a, i) => h('tr.clic', {
         class: i === sel ? 'sel' : null,
-        onclick: () => { sel = i; elegir(); },
+        onclick: () => { marcarClicLista(); sel = i; elegir(); },
       },
       h('td.mono', a.codigo),
       h('td', a.descripcion, h('div.ayuda.pa', a.principios || '')),
@@ -812,7 +954,7 @@ export async function montar(contenedor, parametros = {}) {
   async function cambiarPrecio() {
     const it = lineaEditable();
     if (!it) return;
-    if (!puede('cajero_puede_cambiar_precio')) {
+    if (!puede('cambiar_precio')) {
       aviso('No tienes permiso para cambiar precios.', 'error');
       return;
     }
@@ -832,7 +974,7 @@ export async function montar(contenedor, parametros = {}) {
   async function descuento() {
     const t = actual();
     if (!t.items.length) return;
-    if (!puede('cajero_puede_cambiar_precio')) {
+    if (!puede('cambiar_precio')) {
       aviso('No tienes permiso para aplicar descuentos.', 'error');
       return;
     }
@@ -877,6 +1019,8 @@ export async function montar(contenedor, parametros = {}) {
   }
 
   function cerrarTicketActual() {
+    codigo.value = ''; // el cliente siguiente parte con el buscador vacío
+    cerrarBusqueda();
     if (tickets.lista.length > 1) {
       tickets.lista.splice(tickets.activo, 1);
       tickets.activo = Math.min(tickets.activo, tickets.lista.length - 1);
@@ -1066,8 +1210,8 @@ export async function montar(contenedor, parametros = {}) {
           efectivo_recibido: total - noEfectivo > 0 ? recibido : null,
         });
         const imprimirlo = imprimirTicket.checked;
-        m.cerrar();
         cerrarTicketActual();
+        m.cerrar();
         mostrarResultado(venta, imprimirlo);
       } catch (e) {
         if (e.codigo === 'sin_turno') {
@@ -1085,8 +1229,10 @@ export async function montar(contenedor, parametros = {}) {
   }
 
   function mostrarResultado(venta, imprimirlo) {
-    if (imprimirlo) imprimir(ticketVenta(venta));
     const efectivo = venta.pagos.some((p) => p.metodo === 'efectivo');
+    // Con efectivo se abre el cajón de dinero (si está conectado a la impresora de tickets).
+    if (imprimirlo) imprimir(ticketVenta(venta), { abrirCajon: efectivo });
+    else if (efectivo) abrirCajon();
     const m = modal({
       titulo: `Venta registrada · Folio ${venta.folio}`,
       cuerpo: h('div.resultado-venta',
@@ -1149,6 +1295,9 @@ export async function montar(contenedor, parametros = {}) {
   enfocar();
 
   return {
+    desmontar() {
+      ajusteTeclas.disconnect();
+    },
     alTeclear(e) {
       const enCodigo = document.activeElement === codigo;
       const codigoVacio = codigo.value === '';

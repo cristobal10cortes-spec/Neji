@@ -9,6 +9,9 @@
                                         activa en Configuración → Negocio y ticket)
     NejiPOS.exe --prueba                prueba sin ventana: servidor con una base temporal,
                                         pide /, /static/... y /api/..., y sale con 0 o 1
+    NejiPOS.exe --listar-impresoras     muestra las impresoras que ve Neji POS en este computador
+    NejiPOS.exe --prueba-impresora "POS-80"  imprime un ticket de prueba (con --modo windows: por el
+                                        controlador de Windows en vez de ESC/POS)
     NejiPOS.exe --prueba-ventana        prueba con la ventana real (WebView2), para la compilación
     python escritorio.py                lo mismo sin compilar (necesita pywebview)
 
@@ -347,10 +350,44 @@ def configurar_webview():
     return webview
 
 
+class ApiEscritorio:
+    """Lo que la interfaz le pide a este computador (window.pywebview.api): sus impresoras de tickets.
+
+    Siempre se usan las impresoras del equipo donde está la ventana, aunque el servidor sea otro (--conectar).
+    Devuelve {ok, ...} en vez de lanzar errores, para que la caja muestre un mensaje claro.
+    """
+
+    def impresoras(self):
+        from neji import impresoras
+        try:
+            return {"ok": True, "impresoras": impresoras.listar()}
+        except impresoras.ErrorImpresora as e:
+            return {"ok": False, "error": str(e)}
+        except Exception as e:  # noqa: BLE001
+            registro.exception("No se pudieron leer las impresoras")
+            return {"ok": False, "error": f"No se pudieron leer las impresoras: {e}"}
+
+    def imprimir(self, trabajo):
+        from neji import impresoras
+        try:
+            aviso = impresoras.imprimir_trabajo(trabajo)
+            if aviso:
+                registro.warning("%s", aviso)
+                return {"ok": True, "aviso": aviso}
+            return {"ok": True}
+        except impresoras.ErrorImpresora as e:
+            registro.warning("No se pudo imprimir: %s", e)
+            return {"ok": False, "error": str(e)}
+        except Exception as e:  # noqa: BLE001
+            registro.exception("Error al imprimir")
+            return {"ok": False, "error": f"Error al imprimir: {e}"}
+
+
 def crear_ventana(webview, url, confirmar_cierre=True):
     return webview.create_window(
         TITULO, url, width=1366, height=800, min_size=(1024, 640), maximized=True,
-        confirm_close=confirmar_cierre, text_select=True, zoomable=True, background_color="#F3F5F7")
+        confirm_close=confirmar_cierre, text_select=True, zoomable=True, background_color="#F3F5F7",
+        js_api=ApiEscritorio())
 
 
 def abrir_ventana(url, red=False):
@@ -483,12 +520,53 @@ def prueba_ventana(carpeta, salida=None):
     return informar(salida, resultado)
 
 
-def informar(salida, resultado):
+# Ticket de prueba (el mismo formato que arma la interfaz con impresion.js → bloquesTicket).
+TICKET_PRUEBA = [
+    {"tipo": "texto", "texto": "Neji POS", "alinear": "centro", "negrita": True, "grande": True},
+    {"tipo": "texto", "texto": "Prueba de impresión", "alinear": "centro"},
+    {"tipo": "linea"},
+    {"tipo": "texto", "texto": "Tildes y eñes: áéíóú ÁÉÍÓÚ ñ Ñ ü ¿? ¡! °"},
+    {"tipo": "par", "izq": "Izquierda", "der": "Derecha"},
+    {"tipo": "par", "izq": "TOTAL", "der": "$12.345", "negrita": True, "grande": True},
+    {"tipo": "linea"},
+    {"tipo": "texto", "texto": "Si ves esto bien, la impresora está lista.", "alinear": "centro"},
+]
+
+
+def listar_impresoras(salida=None):
+    resultado = ApiEscritorio().impresoras()
+
+    def resumen(r):
+        if not r.get("ok"):
+            return r.get("error", "No se pudieron leer las impresoras.")
+        if not r["impresoras"]:
+            return "No hay impresoras instaladas en este computador."
+        return "Impresoras de este computador:\n\n" + "\n".join(
+            f"• {i['nombre']} ({i['conexion']}){' · de tickets' if i['termica'] else ''}"
+            f"{' · predeterminada' if i['predeterminada'] else ''}{' · sin conexión' if i['sin_conexion'] else ''}"
+            for i in r["impresoras"])
+    return informar(salida, resultado, resumen)
+
+
+def probar_impresora(nombre, modo="escpos", salida=None):
+    resultado = ApiEscritorio().imprimir({"impresora": nombre, "modo": modo, "papel": "80", "bloques": TICKET_PRUEBA})
+
+    def resumen(r):
+        if not r.get("ok"):
+            return r.get("error", "No se pudo imprimir.")
+        return f"Se mandó el ticket de prueba a «{nombre}».{chr(10) * 2 + r['aviso'] if r.get('aviso') else ''}"
+    return informar(salida, {**resultado, "impresora": nombre, "modo": modo}, resumen)
+
+
+def informar(salida, resultado, resumen=None):
+    """Deja el resultado en --salida (JSON) y lo muestra: en la consola o, en NejiPOS.exe, en un cuadro."""
     texto = json.dumps(resultado, ensure_ascii=False, indent=2)
     if salida:
         Path(salida).write_text(texto, encoding="utf-8")
     if sys.stdout:  # sin consola sys.stdout es None
         print(texto)
+    elif resumen and not salida:   # NejiPOS.exe no tiene consola: se ve en un cuadro de mensaje
+        mensaje(resumen(resultado), error=not resultado.get("ok"))
     return 0 if resultado.get("ok") else 1
 
 
@@ -521,10 +599,18 @@ def main(argv=None):
     parser.add_argument("--prueba", action="store_true", help="prueba sin ventana")
     parser.add_argument("--prueba-ventana", metavar="CARPETA", help="prueba con la ventana real")
     parser.add_argument("--salida", help="con --prueba: escribir el informe JSON en este archivo")
+    parser.add_argument("--listar-impresoras", action="store_true", help="mostrar las impresoras de este computador")
+    parser.add_argument("--prueba-impresora", metavar="IMPRESORA", help="imprimir un ticket de prueba")
+    parser.add_argument("--modo", choices=["escpos", "windows"], default="escpos",
+                        help="con --prueba-impresora: ESC/POS directo o controlador de Windows")
     args = parser.parse_args(argv)
 
     if args.prueba:
         return prueba_de_humo(args.salida)
+    if args.listar_impresoras:
+        return listar_impresoras(args.salida)
+    if args.prueba_impresora:
+        return probar_impresora(args.prueba_impresora, args.modo, args.salida)
     if args.prueba_ventana:
         return prueba_ventana(args.prueba_ventana, args.salida)
 

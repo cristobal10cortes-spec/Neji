@@ -33,6 +33,7 @@ h1, h2, h3 { margin: 0 0 .6rem; line-height: 1.2; }
 h2 { font-size: 1.25rem; }
 h3 { font-size: 1.05rem; }
 .oculto { display: none !important; }
+.solo-lector { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .suave { color: var(--suave); }
 .rojo { color: var(--peligro); }
@@ -49,7 +50,8 @@ h3 { font-size: 1.05rem; }
 }
 .marca { font-weight: 800; letter-spacing: .5px; margin-right: .4rem; white-space: nowrap; }
 .marca span { color: #5eead4; }
-.nav { display: flex; gap: .25rem; overflow-x: auto; flex: 1; scrollbar-width: thin; }
+/* El menú no se encoge: si falta espacio se achican el nombre de la caja y el del usuario (con «…»). */
+.nav { display: flex; gap: .25rem; overflow-x: auto; flex: 1 0 auto; scrollbar-width: thin; }
 .nav button {
   background: transparent; border: 1px solid transparent; color: #d7e4e6;
   padding: .4rem .5rem; border-radius: 6px; cursor: pointer; white-space: nowrap; font-size: .93rem;
@@ -57,7 +59,21 @@ h3 { font-size: 1.05rem; }
 .nav button:hover { background: rgba(255,255,255,.08); }
 .nav button.activo { background: #fff; color: var(--barra); font-weight: 600; }
 .nav kbd { margin-right: .3rem; }
-.sesion { display: flex; align-items: center; gap: .6rem; white-space: nowrap; font-size: .9rem; }
+.nav .nombre-corto { display: none; }
+@media (max-width: 1340px) {
+  .nav { gap: 0; }
+  .nav kbd { display: none; }
+  .nav button { padding: .4rem .42rem; font-size: .86rem; }
+}
+@media (max-width: 1120px) {
+  .nav button:has(.nombre-corto) .nombre-largo { display: none; }
+  .nav .nombre-corto { display: inline; }
+}
+.sesion { display: flex; align-items: center; gap: .6rem; white-space: nowrap; font-size: .9rem; min-width: 0; flex: 0 1 auto; }
+.sesion .caja, .sesion .nombre-usuario { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sesion .caja { max-width: 12rem; flex: 0 1 auto; min-width: 3.2rem; }
+.sesion .nombre-usuario { max-width: 16rem; flex: 0 100 auto; }
+.sesion .btn { flex: none; }
 .barra .btn { background: transparent; color: #fff; border-color: rgba(255,255,255,.35); }
 .barra .btn:hover { background: rgba(255,255,255,.1); }
 .sesion .caja { background: var(--acento); color: #1d1300; padding: .1rem .5rem; border-radius: 99px; font-weight: 700; }
@@ -98,7 +114,7 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible {
 textarea { min-height: 70px; resize: vertical; }
 label.campo { display: flex; flex-direction: column; gap: .25rem; font-size: .9rem; color: var(--suave); }
 label.check { display: flex; align-items: center; gap: .5rem; cursor: pointer; }
-label.check input { width: 18px; height: 18px; }
+label.check input, input.radio { width: 18px; height: 18px; flex: none; }
 .ayuda { font-size: .82rem; color: var(--suave); }
 
 .fila { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
@@ -161,10 +177,13 @@ main:has(> div > .ventas) { max-width: none; }
 .captura input { flex: 1; min-width: 0; font-size: 1.25rem; min-height: 48px; font-family: var(--mono); }
 .captura input::placeholder { font: 1rem system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
 .captura > .btn { min-height: 48px; }
-/* Los 7 crecen parejo y ninguno se achica más que su texto; si no caben en una fila, van en dos filas de 4. */
+/* Los 7 crecen parejo y ninguno se achica más que su texto. Si así no quedan parejos (ventas.js lo mide, porque
+   depende de la fuente), la tecla va sobre el texto; más angosto aún, van en dos filas de 4. */
 .teclas { display: flex; gap: .4rem; }
 .teclas .btn { flex: 1 1 0; min-width: max-content; padding: .4rem .3rem; gap: .3rem; font-size: .88rem; }
-.teclas .btn span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.teclas .btn span { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.teclas.apiladas { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.teclas.apiladas .btn { min-width: 0; flex-direction: column; gap: .1rem; padding: .25rem .2rem; line-height: 1.15; }
 @container (max-width: 780px) {
   .teclas { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .teclas .btn { min-width: 0; }
@@ -174,24 +193,28 @@ main:has(> div > .ventas) { max-width: none; }
 }
 .atajos { display: flex; gap: .35rem; flex-wrap: wrap; }
 
-/* Resultados del buscador: celdas de código, nombre, precio y existencia. */
+/* Resultados del buscador: celdas de código, nombre, precio y existencia. Solo la lista se desplaza: el pie queda
+   debajo y el encabezado fijo deja espacio (scroll-padding) para que la fila marcada con ↑ ↓ se vea completa. */
 .resultados {
-  position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; right: 0;
+  position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; right: 0; display: flex; flex-direction: column;
   background: var(--panel); border: 1px solid var(--borde); border-radius: 10px; box-shadow: var(--sombra);
-  max-height: min(62vh, 520px); overflow: auto;
+  max-height: min(62vh, 520px); overflow: hidden;
 }
+.resultados-lista { flex: 1 1 auto; min-height: 0; overflow: auto; scroll-padding-top: 2.4rem; }
 .tabla-resultados td { padding: .4rem .65rem; }
 .tabla-resultados td.mono { white-space: nowrap; }
 .resultados-pie {
-  position: sticky; bottom: 0; display: flex; justify-content: space-between; gap: .75rem; flex-wrap: wrap;
+  flex: none; display: flex; justify-content: space-between; gap: .75rem; flex-wrap: wrap;
   padding: .45rem .75rem; background: #f7f9fa; border-top: 1px solid var(--borde); font-size: .82rem; color: var(--suave);
 }
 .resultados-pie b { color: var(--texto); }
 .resultados .vacio { padding: 1.2rem; margin: 0; }
 
-.tickets { display: flex; gap: .3rem; align-items: center; flex-wrap: wrap; }
+/* Las pestañas van en una sola fila junto a «Nuevo ticket» (si no caben, se desplazan): así no le quitan alto al ticket. */
+.venta-principal > .fila.entre { flex-wrap: nowrap; }
+.tickets { display: flex; gap: .3rem; align-items: center; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
 .tickets button {
-  border: 1px solid var(--borde); background: #e9edf1; padding: .35rem .8rem; border-radius: 8px 8px 0 0;
+  flex: none; border: 1px solid var(--borde); background: #e9edf1; padding: .35rem .8rem; border-radius: 8px 8px 0 0;
   cursor: pointer; color: var(--suave);
 }
 .tickets button.activo { background: var(--panel); color: var(--texto); font-weight: 700; border-bottom-color: var(--panel); }
@@ -207,8 +230,9 @@ main:has(> div > .ventas) { max-width: none; }
 .total-grande { text-align: right; }
 .total-grande .etq { font-size: .85rem; color: var(--suave); text-transform: uppercase; }
 .total-grande .monto { font-size: 2.6rem; font-weight: 800; color: var(--primario); line-height: 1; font-variant-numeric: tabular-nums; }
-.cliente-ticket { display: flex; align-items: center; gap: .4rem; }
+.cliente-ticket { display: flex; align-items: center; gap: .4rem; min-width: 0; white-space: nowrap; }
 .cliente-ticket:empty { display: none; }
+.cliente-ticket .cliente-nombre { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* Cancelar ticket va justo encima de Cobrar. */
 .cobrar { display: flex; flex-direction: column; gap: .4rem; min-width: 190px; }
 .cobrar .btn { width: 100%; }
@@ -229,7 +253,13 @@ main:has(> div > .ventas) { max-width: none; }
 .ficha-cuerpo { flex: 1; min-height: 0; overflow: auto; padding: .75rem .8rem; display: flex; flex-direction: column; gap: .75rem; font-size: .9rem; }
 .ficha-cuerpo > p, .ficha-vacia p { margin: 0; }
 .ficha-vacia { color: var(--suave); display: flex; flex-direction: column; gap: .5rem; }
-.ficha-nombre { font-weight: 700; font-size: 1rem; line-height: 1.25; margin-bottom: .45rem; }
+.ficha-nombre { font-weight: 700; font-size: 1rem; line-height: 1.25; margin-bottom: .45rem; overflow-wrap: anywhere; }
+/* Nombres y textos largos se ven en unas líneas; el texto completo, con un clic o en «Ficha». */
+.ficha-nombre, .ficha-pa dd { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+.ficha-nombre { -webkit-line-clamp: 3; }
+.ficha-pa dd { -webkit-line-clamp: 6; }
+.ficha-pa dd.abierto { display: block; }
+.ficha-pa dd.cortado, .ficha-pa dd.abierto { cursor: pointer; }
 .celdas { display: grid; grid-template-columns: 1fr 1fr; gap: .35rem; }
 .celda { display: flex; flex-direction: column; min-width: 0; background: #f7f9fa; border: 1px solid #edf0f3; border-radius: 8px; padding: .3rem .5rem; }
 .celda.ancha { grid-column: 1 / -1; }
@@ -245,7 +275,7 @@ main:has(> div > .ventas) { max-width: none; }
 .ficha-pa dt { font-size: .72rem; text-transform: uppercase; letter-spacing: .3px; color: var(--suave); font-weight: 600; margin-top: .4rem; }
 .ficha-pa dd { margin: .1rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ficha-pie { padding: .5rem .6rem; border-top: 1px solid var(--borde); display: flex; }
-.ficha-pie .btn { flex: 1; }
+.ficha-pie .btn { flex: 1; min-width: 0; white-space: normal; }
 .ayuda.pa { color: #0b5953; }
 
 /* F10: buscador grande con la ficha al lado */
@@ -267,11 +297,15 @@ main:has(> div > .ventas) { max-width: none; }
 .modal header { padding: .9rem 1.1rem; border-bottom: 1px solid var(--borde); display: flex; align-items: center; gap: .5rem; }
 .modal header h3 { margin: 0; flex: 1; }
 .modal .cuerpo { padding: 1rem 1.1rem; overflow: auto; display: flex; flex-direction: column; gap: .75rem; }
+/* Una tabla en una ventana no se encoge con barra propia: se desplaza la ventana entera (todas las filas a la vista). */
+.modal .cuerpo > .tabla-caja { flex-shrink: 0; }
 .modal footer { padding: .75rem 1.1rem; border-top: 1px solid var(--borde); display: flex; gap: .5rem; justify-content: flex-end; flex-wrap: wrap; }
 .cerrar { border: 0; background: none; font-size: 1.4rem; cursor: pointer; color: var(--suave); line-height: 1; }
 .error-modal { background: var(--peligro-claro); color: var(--peligro); padding: .55rem .75rem; border-radius: 8px; }
 
 #avisos { position: fixed; right: 16px; top: 64px; z-index: 80; display: flex; flex-direction: column; gap: .5rem; max-width: min(420px, calc(100vw - 32px)); pointer-events: none; }
+/* En la venta, arriba está el buscador con sus resultados: los avisos salen abajo, sobre el pie. */
+body:has(.ventas) #avisos { top: auto; bottom: 160px; }
 .toast { background: var(--barra); color: #fff; padding: .7rem 1rem; border-radius: 10px; box-shadow: var(--sombra); animation: entra .2s ease-out; }
 .toast.error { background: var(--peligro); }
 .toast.ok { background: var(--ok); }
@@ -289,9 +323,31 @@ main:has(> div > .ventas) { max-width: none; }
 .paga-con input { font-size: 1.6rem; text-align: right; min-height: 56px; font-variant-numeric: tabular-nums; }
 .resultado-venta { text-align: center; }
 .resultado-venta .cambio { font-size: 3.4rem; color: var(--ok); }
+.resultado-venta .cambio.rojo { color: var(--peligro); }
 
 /* Búsqueda */
-.lista-busqueda { max-height: 50vh; overflow: auto; }
+.lista-busqueda { max-height: 50vh; overflow: auto; scroll-padding-top: 2.4rem; }
+/* Configuración → Usuarios: la lista y, al lado, cómo sale en el ticket. */
+.usuarios { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); gap: 1rem; align-items: start; }
+.usuarios .tabla-caja tr.sel td { background: var(--primario-claro); }
+.previa-ticket { display: flex; flex-direction: column; gap: .6rem; position: sticky; top: .5rem; }
+.papel-ticket { background: #fff; border: 1px solid var(--borde); border-radius: 6px; box-shadow: var(--sombra); padding: .6rem 0; overflow: auto; }
+.papel-ticket .ticket { max-width: 100%; }
+.papel-ticket .atendio { background: #fff3b0; outline: 2px solid #f3d27a; border-radius: 2px; }
+.permisos { border: 1px solid var(--borde); border-radius: 8px; padding: .6rem .9rem; margin-top: .9rem; display: flex; flex-direction: column; gap: .35rem; }
+.permisos legend { font-weight: 600; padding: 0 .3rem; }
+.permisos.apagado label { opacity: .7; }
+.permisos .nota-admin { color: var(--primario); font-weight: 600; margin: 0; }
+tbody tr.clic:focus-visible { outline: 2px solid var(--primario); outline-offset: -2px; }
+@media (max-width: 980px) { .usuarios { grid-template-columns: minmax(0, 1fr); } }
+.aviso-suave { background: #fff7e0; border: 1px solid #f3d27a; border-radius: 8px; padding: .6rem .9rem; }
+.aviso-suave p { margin: .2rem 0; }
+.impresora .tabla-caja { margin: .4rem 0 .6rem; }
+.total-corte { display: flex; justify-content: flex-end; gap: 1.2rem; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+.importador-csv { display: flex; flex-direction: column; gap: .6rem; }
+.importador-csv > p { margin: 0; }
+.opciones-csv { border: 1px solid var(--borde); border-radius: 8px; padding: .5rem .8rem; display: flex; flex-direction: column; gap: .3rem; }
+.opciones-csv legend { font-weight: 600; padding: 0 .3rem; }
 .lista-busqueda .tabla-resultados th { background: #f7f9fa; }
 
 /* Login */
@@ -337,6 +393,9 @@ main:has(> div > .ventas) { max-width: none; }
 @media (max-width: 1500px) {
   .sesion .nombre-usuario { display: none; }
 }
+@media (max-width: 1023px) {
+  .nav { flex: 1 1 auto; min-width: 0; }   /* ya no cabe entero: se desplaza dentro de la barra */
+}
 @media (max-width: 900px) {
   .ventas { height: auto; }
   .venta-cuerpo.con-ficha { grid-template-columns: minmax(0, 1fr); }
@@ -355,6 +414,9 @@ main:has(> div > .ventas) { max-width: none; }
   .cobrar .btn.grande { min-height: 44px; padding: .45rem 1rem; }
   .cobrar .btn.peligro { min-height: 30px; }
   .ficha-cuerpo { padding: .6rem .7rem; gap: .55rem; }
+  .ventas > .panel { padding: .45rem .8rem; }
+  .ticket-tabla { min-height: 110px; }
+  body:has(.ventas) #avisos { bottom: 130px; }
 }
 @media (max-width: 860px) {
   .busqueda-con-ficha { grid-template-columns: minmax(0, 1fr); }

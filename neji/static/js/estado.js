@@ -24,7 +24,8 @@ export function fijarCaja(id) {
 
 export const esAdmin = () => estado.usuario?.rol === 'admin';
 export const opcion = (clave) => estado.config[clave] === '1';
-export const puede = (permiso) => esAdmin() || opcion(permiso);
+/** Permisos de cada usuario (Configuración → Usuarios). El administrador los tiene todos. */
+export const puede = (permiso) => esAdmin() || Boolean(estado.usuario?.permisos?.[permiso]);
 export const esFarmacia = () => opcion('modulo_farmacia');
 
 export function nombreCaja() {

@@ -3,8 +3,9 @@
 import json
 from decimal import Decimal
 
+from ..auth import tiene_permiso
 from ..chile import desglosar_iva, redondear, redondear_efectivo
-from ..db import ahora, config_activa, fila, filas, leer_config, transaccion
+from ..db import ahora, fila, filas, leer_config, transaccion
 from ..validar import ErrorNegocio, cantidad, entero, texto
 from .caja import exigir_caja, exigir_turno, resumen_turno
 from .clientes import exigir_cliente, mover_saldo
@@ -26,7 +27,7 @@ def pesos(monto):
 
 
 def puede(usuario, con, permiso):
-    return usuario["rol"] == "admin" or config_activa(con, permiso)
+    return tiene_permiso(usuario, permiso)
 
 
 def precio_para(producto, cant, tipo_precio):
@@ -69,8 +70,12 @@ def linea_receta(con, item, n, cant, recetas_vistas):
     }
 
 
-def calcular_lineas(con, items, puede_cambiar_precio, permitir_recetas=True):
-    """Arma las líneas con precios tomados de la base de datos (no del navegador)."""
+def calcular_lineas(con, items, puede_cambiar_precio, permitir_recetas=True, puede_comun=True, comunes_permitidos=()):
+    """Arma las líneas con precios tomados de la base de datos (no del navegador).
+
+    Un artículo común lleva el precio que escribe la caja: sin el permiso solo se aceptan los de la
+    cotización que se está vendiendo (`comunes_permitidos`: pares descripción, precio).
+    """
     if not isinstance(items, list) or not items:
         raise ErrorNegocio("El ticket está vacío.")
     if len(items) > 1000:
@@ -90,6 +95,8 @@ def calcular_lineas(con, items, puede_cambiar_precio, permitir_recetas=True):
                                    "(ahí puedes imprimir la receta con su precio).")
             linea = linea_receta(con, item, n, cant, recetas_vistas)
         elif item.get("producto_id") in (None, "") or tipo == "comun":
+            if item.get("producto_id") not in (None, ""):
+                raise ErrorNegocio(f"La línea {n} no puede ser un producto del catálogo y un artículo común a la vez.")
             linea = {
                 "producto": None,
                 "producto_id": None,
@@ -102,6 +109,8 @@ def calcular_lineas(con, items, puede_cambiar_precio, permitir_recetas=True):
                 "tipo_precio": "comun",
                 "exento": 0,
             }
+            if not puede_comun and (linea["descripcion"], linea["precio_unitario"]) not in comunes_permitidos:
+                raise ErrorNegocio("No tienes permiso para vender artículos comunes (precio libre).", status=403)
         else:
             producto = con.execute(
                 "SELECT * FROM productos WHERE id = ? AND activo = 1", (item.get("producto_id"),)
@@ -147,11 +156,29 @@ def calcular_totales(lineas, descuento, tasa_iva):
             "exento": exento, "neto": neto, "iva": iva}
 
 
-def leer_descuento(con, datos, usuario):
+def leer_descuento(con, datos, usuario, cotizacion=None):
     descuento = entero(datos.get("descuento") or 0, "descuento", minimo=0)
-    if descuento and not puede(usuario, con, "cajero_puede_cambiar_precio"):
+    # Al vender una cotización, su descuento ya lo autorizó quien la hizo: se acepta hasta ese monto.
+    autorizado = cotizacion["descuento"] if cotizacion is not None else 0
+    if descuento > autorizado and not puede(usuario, con, "cambiar_precio"):
         raise ErrorNegocio("No tienes permiso para aplicar descuentos.", status=403)
     return descuento
+
+
+def cotizacion_vigente(con, datos):
+    """La cotización vigente que se está vendiendo (cotizacion_id), o None."""
+    if not datos.get("cotizacion_id"):
+        return None
+    return con.execute("SELECT * FROM cotizaciones WHERE id = ? AND estado = 'vigente'",
+                       (entero(datos["cotizacion_id"], "cotización", minimo=1),)).fetchone()
+
+
+def comunes_de(cotizacion):
+    """Artículos comunes (descripción, precio) de una cotización."""
+    if cotizacion is None:
+        return set()
+    return {(l["descripcion"], l["precio_unitario"]) for l in json.loads(cotizacion["items"])
+            if l.get("producto_id") is None and l.get("receta_id") is None}
 
 
 def siguiente_folio(con, tabla):
@@ -164,9 +191,12 @@ def registrar_venta(con, datos, usuario):
         exigir_caja(con, caja_id)
         turno = exigir_turno(con, caja_id)
         config = leer_config(con)
+        cotizacion = cotizacion_vigente(con, datos)
         lineas = calcular_lineas(con, datos.get("items"),
-                                 puede(usuario, con, "cajero_puede_cambiar_precio"))
-        t = calcular_totales(lineas, leer_descuento(con, datos, usuario),
+                                 puede(usuario, con, "cambiar_precio"),
+                                 puede_comun=puede(usuario, con, "articulo_comun"),
+                                 comunes_permitidos=comunes_de(cotizacion))
+        t = calcular_totales(lineas, leer_descuento(con, datos, usuario, cotizacion),
                              int(config["iva_porcentaje"]))
 
         cliente = None
@@ -264,7 +294,8 @@ def registrar_venta(con, datos, usuario):
 
 def obtener_venta(con, venta_id):
     venta = fila(con.execute(
-        """SELECT v.*, c.nombre AS caja, u.nombre AS usuario, cl.nombre AS cliente,
+        """SELECT v.*, c.nombre AS caja, u.nombre AS usuario,
+                  COALESCE(NULLIF(u.nombre_ticket, ''), u.nombre) AS atendio, cl.nombre AS cliente,
                   cl.rut AS cliente_rut, cl.saldo AS cliente_saldo
            FROM ventas v
            JOIN cajas c ON c.id = v.caja_id
@@ -396,8 +427,9 @@ def devolver(con, venta_id, datos, usuario):
 def crear_cotizacion(con, datos, usuario):
     with transaccion(con):
         lineas = calcular_lineas(con, datos.get("items"),
-                                 puede(usuario, con, "cajero_puede_cambiar_precio"),
-                                 permitir_recetas=False)
+                                 puede(usuario, con, "cambiar_precio"),
+                                 permitir_recetas=False,
+                                 puede_comun=puede(usuario, con, "articulo_comun"))
         config = leer_config(con)
         t = calcular_totales(lineas, leer_descuento(con, datos, usuario),
                              int(config["iva_porcentaje"]))
