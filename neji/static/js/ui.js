@@ -223,6 +223,17 @@ export function teclaEnModal(e) {
     arriba.cerrar();
     return true;
   }
+  if (e.key === 'Tab' && !e.defaultPrevented) {
+    // Tab da la vuelta dentro de la ventana: no se va al menú ni a la pantalla de atrás.
+    const enfocables = [...arriba.el.querySelectorAll('button, [href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])')]
+      .filter((x) => !x.disabled && x.getClientRects().length);
+    const dentro = arriba.el.contains(document.activeElement);
+    if (enfocables.length && (!dentro || document.activeElement === (e.shiftKey ? enfocables[0] : enfocables.at(-1)))) {
+      e.preventDefault();
+      (e.shiftKey ? enfocables.at(-1) : enfocables[0]).focus();
+      return true;
+    }
+  }
   arriba.alTeclear?.(e);
   if (/^F\d+$/.test(e.key)) e.preventDefault();
   return true;

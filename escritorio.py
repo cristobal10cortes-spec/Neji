@@ -370,7 +370,10 @@ class ApiEscritorio:
     def imprimir(self, trabajo):
         from neji import impresoras
         try:
-            impresoras.imprimir_trabajo(trabajo)
+            aviso = impresoras.imprimir_trabajo(trabajo)
+            if aviso:
+                registro.warning("%s", aviso)
+                return {"ok": True, "aviso": aviso}
             return {"ok": True}
         except impresoras.ErrorImpresora as e:
             registro.warning("No se pudo imprimir: %s", e)
@@ -531,25 +534,39 @@ TICKET_PRUEBA = [
 
 
 def listar_impresoras(salida=None):
-    from neji import impresoras
-    try:
-        resultado = {"ok": True, "impresoras": impresoras.listar()}
-    except impresoras.ErrorImpresora as e:
-        resultado = {"ok": False, "error": str(e)}
-    return informar(salida, resultado)
+    resultado = ApiEscritorio().impresoras()
+
+    def resumen(r):
+        if not r.get("ok"):
+            return r.get("error", "No se pudieron leer las impresoras.")
+        if not r["impresoras"]:
+            return "No hay impresoras instaladas en este computador."
+        return "Impresoras de este computador:\n\n" + "\n".join(
+            f"• {i['nombre']} ({i['conexion']}){' · de tickets' if i['termica'] else ''}"
+            f"{' · predeterminada' if i['predeterminada'] else ''}{' · sin conexión' if i['sin_conexion'] else ''}"
+            for i in r["impresoras"])
+    return informar(salida, resultado, resumen)
 
 
 def probar_impresora(nombre, modo="escpos", salida=None):
     resultado = ApiEscritorio().imprimir({"impresora": nombre, "modo": modo, "papel": "80", "bloques": TICKET_PRUEBA})
-    return informar(salida, {**resultado, "impresora": nombre, "modo": modo})
+
+    def resumen(r):
+        if not r.get("ok"):
+            return r.get("error", "No se pudo imprimir.")
+        return f"Se mandó el ticket de prueba a «{nombre}».{chr(10) * 2 + r['aviso'] if r.get('aviso') else ''}"
+    return informar(salida, {**resultado, "impresora": nombre, "modo": modo}, resumen)
 
 
-def informar(salida, resultado):
+def informar(salida, resultado, resumen=None):
+    """Deja el resultado en --salida (JSON) y lo muestra: en la consola o, en NejiPOS.exe, en un cuadro."""
     texto = json.dumps(resultado, ensure_ascii=False, indent=2)
     if salida:
         Path(salida).write_text(texto, encoding="utf-8")
     if sys.stdout:  # sin consola sys.stdout es None
         print(texto)
+    elif resumen and not salida:   # NejiPOS.exe no tiene consola: se ve en un cuadro de mensaje
+        mensaje(resumen(resultado), error=not resultado.get("ok"))
     return 0 if resultado.get("ok") else 1
 
 

@@ -153,6 +153,17 @@ def test_importar_csv_reemplaza_o_suma_existencias(api):
     assert tipos[:2] == ["ajuste", "entrada"]
 
 
+def test_importar_csv_de_excel_en_cp1252(api):
+    """Excel en Windows guarda «CSV (delimitado por punto y coma)» en cp1252: comillas, guiones y € legibles."""
+    import io
+    contenido = "codigo;descripcion;precio_venta;existencia\nW1;Crema “Nivea” 50 ml – oferta €;1500;2\nW2;Pañal Ñuñoa;990;1\n"
+    r = api.http.post("/api/productos/importar", data={"archivo": (io.BytesIO(contenido.encode("cp1252")), "excel.csv")},
+                      content_type="multipart/form-data")
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert api.get("/api/productos/codigo/W1")["descripcion"] == "Crema “Nivea” 50 ml – oferta €"
+    assert api.get("/api/productos/codigo/W2")["descripcion"] == "Pañal Ñuñoa"
+
+
 def test_plantilla_csv_se_puede_importar_tal_cual(api):
     import io
     plantilla = api.http.get("/api/productos/plantilla.csv").get_data()

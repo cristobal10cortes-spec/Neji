@@ -111,13 +111,20 @@ export function importadorCsv({ alTerminar = () => {} } = {}) {
   const resultado = h('div');
   const error = h('div.error-modal.oculto', { role: 'alert' });
   const mostrarError = (texto) => { error.textContent = texto; error.classList.toggle('oculto', !texto); };
+  // Al elegir otro archivo deja de verse el resultado del anterior.
+  archivo.addEventListener('change', () => { mostrarError(''); vaciar(resultado); });
+  let enviando = false;
 
+  /** Sube el archivo. Un segundo clic mientras sube no hace nada (con «Se suma al stock» sumaría dos veces). */
   async function importar() {
+    if (enviando) return null;
     if (!archivo.files[0]) return mostrarError('Elige el archivo CSV.');
     const datos = new FormData();
     datos.append('archivo', archivo.files[0]);
     datos.append('existencias', sumar.checked ? 'sumar' : 'reemplazar');
+    enviando = true;
     mostrarError('');
+    vaciar(resultado, h('p.suave', 'Importando… no cierres esta ventana.'));
     try {
       const r = await api.subir('/api/productos/importar', datos);
       vaciar(resultado, h('div.panel',
@@ -127,7 +134,10 @@ export function importadorCsv({ alTerminar = () => {} } = {}) {
       archivo.value = '';
       alTerminar(r);
     } catch (err) {
+      vaciar(resultado);
       mostrarError(err.message);
+    } finally {
+      enviando = false;
     }
     return null;
   }
@@ -295,7 +305,7 @@ export async function montar(contenedor) {
         }),
       },
       { titulo: 'Código', valor: (p) => h('span.mono', p.codigo) },
-      { titulo: 'Descripción', valor: (p) => [p.descripcion, p.tipo_venta === 'granel' ? h('span.etiqueta', ' granel') : null, p.exento ? h('span.etiqueta', ' exento') : null, esFarmacia() && p.principios ? h('div.ayuda.pa', p.principios) : null] },
+      { titulo: 'Descripción', valor: (p) => [p.descripcion, p.tipo_venta === 'granel' ? [' ', h('span.etiqueta', 'granel')] : null, p.exento ? [' ', h('span.etiqueta', 'exento')] : null, esFarmacia() && p.principios ? h('div.ayuda.pa', p.principios) : null] },
       { titulo: 'Departamento', valor: (p) => p.departamento || '' },
       admin ? { titulo: 'Costo', valor: (p) => pesos(p.precio_costo), clase: 'num' } : null,
       { titulo: 'Precio', valor: (p) => h('b', pesos(p.precio_venta)), clase: 'num' },

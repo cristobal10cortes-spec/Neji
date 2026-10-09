@@ -60,35 +60,67 @@ export async function listarImpresoras({ refrescar = false } = {}) {
   return { escritorio: true, impresoras: [], ...r };
 }
 
-/** Elige sola la impresora de tickets: la predeterminada si es de tickets, si no la primera de tickets. */
+/**
+ * Elige sola la impresora de tickets: primero las que están en línea (la predeterminada, después
+ * cualquiera) y, solo si no hay, una sin conexión.
+ */
 export function impresoraSugerida(impresoras) {
-  const reales = impresoras.filter((i) => !i.virtual);
-  return reales.find((i) => i.termica && i.predeterminada) || reales.find((i) => i.termica && !i.sin_conexion)
-    || reales.find((i) => i.termica) || null;
+  const termicas = impresoras.filter((i) => !i.virtual && i.termica);
+  return termicas.find((i) => i.predeterminada && !i.sin_conexion) || termicas.find((i) => !i.sin_conexion)
+    || termicas[0] || null;
 }
 
-export const papelTicket = () => leerImpresora()?.papel || (estado.config.ticket_ancho === '58' ? '58' : '80');
+/** ¿El nombre dice que es de 58 mm? (POS-58, POS58, XP-58IIH, «58mm Printer») */
+export const esDe58 = (i) => /(^|\D)58(\D|$)/.test(`${i?.nombre || ''} ${i?.controlador || ''}`);
 
-/** Impresora para los tickets de esta terminal: la elegida o, si no hay, la que se detecta sola. */
+const papelGeneral = () => (estado.config.ticket_ancho === '58' ? '58' : '80');
+
+/**
+ * Ancho del papel con esa configuración: el elegido en este computador o, si no se eligió, el de
+ * Configuración → Negocio y ticket. Una impresora encontrada sola solo lo fija si su nombre lo dice.
+ */
+export function papelDe(config) {
+  if (config?.automatica) return config.papel === '58' ? '58' : papelGeneral();
+  return config?.papel === '58' || config?.papel === '80' ? config.papel : papelGeneral();
+}
+
+export const papelTicket = () => papelDe(leerImpresora());
+
+/** Configuración para una impresora encontrada sola. */
+export const configAutomatica = (i) => ({
+  nombre: i.nombre, modo: 'escpos', papel: esDe58(i) ? '58' : '', cortar: true, cajon: true, codigo: 'cp850', copias: 1, automatica: true,
+});
+
+/**
+ * Impresora para los tickets de esta terminal: la elegida o, si no hay, la que se detecta sola. Una
+ * encontrada sola se vuelve a revisar si ya no está o quedó sin conexión y hay otra de tickets en línea
+ * (por ejemplo, Windows crea «POS-80C (Copiar 1)» al enchufarla en otro puerto USB).
+ */
 async function impresoraParaTickets() {
   const elegida = leerImpresora();
   if (elegida?.dialogo) return null; // eligió usar siempre el cuadro de impresión
-  if (elegida?.nombre) return elegida;
+  if (elegida?.nombre && !elegida.automatica) return elegida;
   const { ok, impresoras } = await listarImpresoras();
-  const sugerida = ok ? impresoraSugerida(impresoras) : null;
-  if (!sugerida) return null;
-  const config = { nombre: sugerida.nombre, modo: 'escpos', papel: papelTicket(), cortar: true, cajon: true, codigo: 'cp850', copias: 1, automatica: true };
+  if (!ok) return elegida?.nombre ? elegida : null;
+  if (elegida?.nombre) {
+    const actual = impresoras.find((i) => i.nombre === elegida.nombre);
+    if (actual && !actual.sin_conexion) return elegida;
+  }
+  const sugerida = impresoraSugerida(impresoras);
+  if (!sugerida || (elegida?.nombre && sugerida.sin_conexion)) return elegida?.nombre ? elegida : null;
+  const config = configAutomatica(sugerida);
   guardarImpresora(config);
   return config;
 }
 
 /** Trabajo para NejiPOS.exe a partir de la configuración de la impresora. */
 export function trabajoImpresion(config, bloques, { abrirCajon = false } = {}) {
-  const papel = config.papel === '58' ? '58' : '80';
+  const papel = papelDe(config);
   return {
     impresora: config.nombre, modo: config.modo === 'windows' ? 'windows' : 'escpos',
     columnas: Number(config.columnas) || PAPEL_COLUMNAS[papel], papel, cortar: config.cortar !== false,
-    cajon: Boolean(abrirCajon && config.cajon), codigo: config.codigo || 'cp850', copias: Number(config.copias) || 1, bloques,
+    cajon: Boolean(abrirCajon && config.cajon), codigo: config.codigo || 'cp850', copias: Number(config.copias) || 1,
+    sin_chino: typeof config.sin_chino === 'boolean' ? config.sin_chino : undefined, bloques,
   };
 }
 
@@ -141,8 +173,12 @@ export async function imprimir(contenido, { abrirCajon = false } = {}) {
     if (config) {
       const api = await escritorio();
       const r = api ? await api.imprimir(trabajoImpresion(config, bloquesTicket(contenido), { abrirCajon })) : null;
-      if (r?.ok) return true;
-      aviso(`No se pudo imprimir en «${config.nombre}»: ${r?.error || 'el programa no respondió'}. Se abre el cuadro de impresión.`, 'error', 8000);
+      if (r?.ok) {
+        if (r.aviso) aviso(r.aviso, 'error', 8000);   // salió el ticket, pero no se abrió el cajón
+        return true;
+      }
+      const motivo = (r?.error || 'el programa no respondió').replace(/[.\s]+$/, '');
+      aviso(`No se pudo imprimir en «${config.nombre}»: ${motivo}. Se abre el cuadro de impresión.`, 'error', 8000);
     }
   }
   imprimirConDialogo(contenido);

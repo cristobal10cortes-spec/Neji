@@ -215,6 +215,14 @@ export async function montar(contenedor) {
         h('b', { class: claseDiferencia(contado - esperado) }, `Total: ${textoDiferencia(contado - esperado)}`));
     };
     filas.forEach((f) => { f.contado.addEventListener('input', pintarTotal); f.incluir.addEventListener('change', pintarTotal); });
+    // Enter pasa al «Contado» de la caja siguiente y, en la última, confirma (como el corte de una caja).
+    filas.forEach((f, i) => f.contado.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      const siguiente = filas.slice(i + 1).find((x) => x.incluir.checked);
+      if (siguiente) siguiente.contado.focus();
+      else enviarCorte();
+    }));
     pintarTotal();
     const m = modal({
       titulo: 'Corte general',
@@ -374,7 +382,7 @@ export async function montar(contenedor) {
         { titulo: 'Turno', valor: (t) => `#${t.id}` },
         { titulo: 'Caja', valor: (t) => t.caja },
         { titulo: 'Abrió', valor: (t) => `${t.usuario} · ${fecha(t.abierto)}` },
-        { titulo: 'Cerró', valor: (t) => (t.cerrado ? [fecha(t.cerrado), t.corte_general_id ? h('span.etiqueta', ` general #${t.corte_general_id}`) : null] : h('span.etiqueta.aviso', 'abierto')) },
+        { titulo: 'Cerró', valor: (t) => (t.cerrado ? [fecha(t.cerrado), t.corte_general_id ? [' ', h('span.etiqueta', `general #${t.corte_general_id}`)] : null] : h('span.etiqueta.aviso', 'abierto')) },
         { titulo: 'Ventas', valor: (t) => `${t.n_ventas} · ${pesos(t.total_ventas)}`, clase: 'num' },
         { titulo: 'Diferencia', valor: (t) => (t.diferencia == null ? '—' : h('span', { class: t.diferencia < 0 ? 'rojo' : t.diferencia > 0 ? 'verde' : '' }, textoDiferencia(t.diferencia))), clase: 'num' },
       ], turnos, {

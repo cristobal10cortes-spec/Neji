@@ -101,8 +101,8 @@ function dibujarAplicacion() {
       h('div.marca', 'Neji', h('span', ' POS')),
       nav,
       h('div.sesion',
-        h('span.caja', { title: 'Caja de esta terminal (se cambia en Configuración)' }, nombreCaja()),
-        h('span.ocultar-movil.nombre-usuario', `${estado.usuario.nombre} (${estado.usuario.rol})`),
+        h('span.caja', { title: `${nombreCaja()}: caja de esta terminal (se cambia en Configuración)` }, nombreCaja()),
+        h('span.ocultar-movil.nombre-usuario', { title: `${estado.usuario.nombre} (${estado.usuario.rol})` }, `${estado.usuario.nombre} (${estado.usuario.rol})`),
         h('button.btn.chico', { type: 'button', onclick: salir, title: `Cerrar la sesión de ${estado.usuario.nombre}` }, 'Salir'))),
     principal);
   mostrarVista();

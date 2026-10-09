@@ -449,7 +449,7 @@ async function vistaConfiguracion(zona) {
         { titulo: 'Cantidad sugerida', valor: (f) => numero(f.cantidad_sugerida), clase: 'num' },
         { titulo: 'Estado', valor: (f) => h(`span.etiqueta.${f.activa ? 'ok' : 'mal'}`, f.activa ? 'Activa' : 'Inactiva') },
       ], formas, { alClic: async (f) => { if (await formForma(f)) recargar(); } }),
-      h('p.ayuda', 'Precios netos (sin IVA), igual que en CORAND.ERP. El IVA se suma al calcular.'),
+      h('p.ayuda', 'Precios netos (sin IVA). El IVA se suma al calcular.'),
       h('div.fila', h('span', 'Redondear el total de las recetas:'), redondeo)),
     h('div.panel',
       h('div.fila.entre', h('h3', 'Precio de los principios activos'),

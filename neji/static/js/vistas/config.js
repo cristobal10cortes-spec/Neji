@@ -4,8 +4,8 @@ import { api, descargar } from '../api.js';
 import { recargarConfiguracion } from '../app.js';
 import { esAdmin, esFarmacia, estado, fijarCaja, nombreCaja } from '../estado.js';
 import {
-  bloquesTicket, escritorio, guardarImpresora, impresoraSugerida, imprimirConDialogo, leerImpresora, listarImpresoras, papelTicket, ticketVenta,
-  trabajoImpresion,
+  bloquesTicket, configAutomatica, esDe58, escritorio, guardarImpresora, impresoraSugerida, imprimirConDialogo, leerImpresora, listarImpresoras, papelDe,
+  ticketVenta, trabajoImpresion,
 } from '../impresion.js';
 import { aviso, avisoError, fecha, formulario, h, numero, pestanas, tabla, vaciar } from '../ui.js';
 import { importadorCsv } from './productos.js';
@@ -102,8 +102,10 @@ function ventaDeEjemplo(atendio) {
   const total = lineas.reduce((t, l) => t + l.importe, 0);
   const iva = Math.round(total - total / 1.19);
   const recibido = Math.ceil(total / 1000) * 1000;
+  const ahora = new Date();
+  const local = new Date(ahora - ahora.getTimezoneOffset() * 60000);   // la hora de este equipo, como en los tickets
   return {
-    folio: 1024, fecha: new Date().toISOString().slice(0, 19).replace('T', ' '), caja: nombreCaja(), atendio, usuario: atendio,
+    folio: 1024, fecha: local.toISOString().slice(0, 19).replace('T', ' '), caja: nombreCaja(), atendio, usuario: atendio,
     items: lineas, subtotal: total, descuento: 0, total, neto: total - iva, iva, exento: 0,
     pagos: [{ metodo: 'efectivo', monto: total }], efectivo_recibido: recibido, cambio: recibido - total, redondeo: 0,
   };
@@ -134,23 +136,46 @@ async function vistaUsuarios(zona) {
     return h('span', { title: si.map((p) => p.etiqueta).join('\n') || 'Solo vender' }, `${si.length} de ${catalogo.length}`);
   }
 
+  const elegir = (u) => { elegido = u.id; pintar(); lista.querySelector(`tr[data-id="${u.id}"]`)?.focus(); };
+
   function pintar() {
-    vaciar(lista, h('div.panel',
-      h('div.fila.entre', h('h3', 'Usuarios'), h('button.btn.primario', { type: 'button', onclick: () => editar() }, 'Nuevo usuario')),
-      tabla([
+    const tablaUsuarios = tabla([
         { titulo: 'Usuario', valor: (u) => h('b', u.usuario) },
         { titulo: 'Nombre', valor: (u) => u.nombre },
         { titulo: 'En el ticket', valor: (u) => u.nombre_ticket || h('span.suave', u.nombre) },
         { titulo: 'Rol', valor: (u) => (u.rol === 'admin' ? 'Administrador' : 'Cajero') },
         { titulo: 'Permisos', valor: resumenPermisos },
         { titulo: 'Estado', valor: (u) => h(`span.etiqueta.${u.activo ? 'ok' : 'mal'}`, u.activo ? 'Activo' : 'Inactivo') },
-        { titulo: '', valor: (u) => h('button.btn.chico', { type: 'button', onclick: (e) => { e.stopPropagation(); editar(u); } }, 'Editar') },
+        {
+          titulo: '',
+          valor: (u) => h('button.btn.chico', {
+            type: 'button', dataset: { editar: u.id }, 'aria-label': `Editar ${u.usuario}`,
+            onclick: (e) => { e.stopPropagation(); elegido = u.id; pintarPrevia(); marcarElegido(); editar(u); },
+          }, 'Editar'),
+        },
       ], usuarios, {
-        alClic: (u) => { elegido = u.id; pintar(); },
+        alClic: elegir,
         claseFila: (u) => (u.id === elegido ? 'sel' : ''),
-      }),
+      });
+    // Las filas también se eligen con el teclado (Tab y Enter o Espacio).
+    tablaUsuarios.querySelectorAll('tbody tr.clic').forEach((tr, i) => {
+      const u = usuarios[i];
+      tr.tabIndex = 0;
+      tr.dataset.id = u.id;
+      tr.setAttribute('aria-label', `Ver el ticket de ${u.usuario}`);
+      tr.addEventListener('keydown', (e) => {
+        if (e.target === tr && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); elegir(u); }
+      });
+    });
+    vaciar(lista, h('div.panel',
+      h('div.fila.entre', h('h3', 'Usuarios'), h('button.btn.primario', { type: 'button', dataset: { editar: 'nuevo' }, onclick: () => editar() }, 'Nuevo usuario')),
+      tablaUsuarios,
       h('p.ayuda', 'El administrador puede todo, incluida esta configuración. A cada cajero se le eligen sus permisos con «Editar». Haz clic en un usuario para ver cómo sale en el ticket.')));
     pintarPrevia();
+  }
+
+  function marcarElegido() {
+    lista.querySelectorAll('tbody tr').forEach((tr) => tr.classList.toggle('sel', Number(tr.dataset.id) === elegido));
   }
 
   function pintarPrevia() {
@@ -169,6 +194,7 @@ async function vistaUsuarios(zona) {
         if (u.id === estado.usuario.id) estado.usuario.nombre_ticket = nombre.value.trim() || null;
         aviso('Nombre del ticket guardado.', 'ok');
         await cargar(u.id);
+        previa.querySelector('input')?.focus();
       } catch (e) {
         avisoError(e);
       }
@@ -187,12 +213,15 @@ async function vistaUsuarios(zona) {
     // Un administrador muestra lo que tendría como cajero: pasarlo a cajero restringe, no le da todo.
     const casillas = Object.fromEntries(catalogo.map((p) => [p.clave,
       h('input', { type: 'checkbox', checked: u ? (u.permisos_cajero || u.permisos)[p.clave] : p.por_defecto })]));
-    const nota = h('p.ayuda');
+    const nota = h('p.ayuda.nota-admin');
     const permisos = h('fieldset.permisos',
       h('legend', 'Permisos del cajero'),
+      nota,
       h('p.ayuda', 'Todos pueden vender, cobrar, abrir la caja y atender clientes.'),
-      catalogo.map((p) => h('label.check', casillas[p.clave], p.etiqueta)),
-      nota);
+      catalogo.map((p) => h('label.check', casillas[p.clave], p.etiqueta)));
+    // Lo elegido para el cajero se guarda aparte mientras el rol es Administrador (que se ve con todo marcado).
+    let deCajero = null;
+    const valoresCajero = () => deCajero || Object.fromEntries(Object.entries(casillas).map(([k, el]) => [k, el.checked]));
     const r = await formulario({
       titulo: u ? `Editar ${u.usuario}` : 'Nuevo usuario',
       ancho: 'ancho',
@@ -208,15 +237,23 @@ async function vistaUsuarios(zona) {
       alMostrar: (e) => {
         const segunRol = () => {
           const admin = e.rol.value === 'admin';
+          if (admin && !deCajero) {
+            deCajero = valoresCajero();
+            Object.values(casillas).forEach((el) => { el.checked = true; });
+          } else if (!admin && deCajero) {
+            Object.entries(casillas).forEach(([k, el]) => { el.checked = deCajero[k]; });
+            deCajero = null;
+          }
           permisos.disabled = admin;
           permisos.classList.toggle('apagado', admin);
           nota.textContent = admin ? 'El administrador tiene todos los permisos, incluida la configuración, los usuarios y las cajas.' : '';
+          nota.classList.toggle('oculto', !admin);
         };
         e.rol.addEventListener('change', segunRol);
         segunRol();
       },
       alEnviar: (v) => {
-        v.permisos = Object.fromEntries(Object.entries(casillas).map(([k, el]) => [k, el.checked]));
+        v.permisos = valoresCajero();
         return u ? api.put(`/api/usuarios/${u.id}`, v) : api.post('/api/usuarios', v);
       },
     });
@@ -225,6 +262,9 @@ async function vistaUsuarios(zona) {
       if (u?.id === estado.usuario.id) estado.usuario = { ...estado.usuario, nombre: r.nombre, nombre_ticket: r.nombre_ticket };
       await cargar(r.id);
     }
+    // El foco vuelve al botón «Editar» de ese usuario (o a «Nuevo usuario»).
+    const id = r?.id ?? u?.id;
+    (lista.querySelector(`button[data-editar="${id}"]`) || lista.querySelector('button[data-editar="nuevo"]'))?.focus();
   }
 
   await cargar();
@@ -269,7 +309,7 @@ async function vistaCajas(zona) {
       h('div.fila.entre', h('h3', 'Cajas'), h('button.btn.primario', { type: 'button', onclick: () => editar() }, 'Nueva caja')),
       tabla([
         { titulo: 'N°', valor: (c) => c.id },
-        { titulo: 'Nombre', valor: (c) => [c.nombre, c.principal ? h('span.etiqueta.ok', ' principal') : null] },
+        { titulo: 'Nombre', valor: (c) => [c.nombre, c.principal ? [' ', h('span.etiqueta.ok', 'principal')] : null] },
         { titulo: 'Estado', valor: (c) => h(`span.etiqueta.${c.activa ? 'ok' : 'mal'}`, c.activa ? 'Activa' : 'Inactiva') },
       ], cajas, { alClic: (c) => editar(c) }),
       h('p.ayuda', 'Desde la caja principal se hace el corte general: cierra juntas todas las cajas y suma lo de todos los cajeros.'),
@@ -328,7 +368,14 @@ function vistaImportar() {
     h('h3', 'Importar inventario desde CSV'),
     importador.el,
     h('div.fila.fin', { style: { marginTop: '1rem' } },
-      h('button.btn.primario', { type: 'button', onclick: () => importador.importar() }, 'Importar')));
+      h('button.btn.primario', {
+        type: 'button',
+        onclick: async (e) => {
+          const boton = e.currentTarget;
+          boton.disabled = true;
+          try { await importador.importar(); } finally { boton.disabled = false; }
+        },
+      }, 'Importar')));
 }
 
 /** Ticket de prueba: tildes, eñes, columnas y letra grande. */
@@ -347,28 +394,35 @@ function ticketPrueba(papel) {
     h('div', { style: { height: '8mm' } }));
 }
 
+// Marcas sin «modo chino» (a las genéricas POS-58/POS-80 se les apaga, igual que en neji/impresoras.py).
+const SIN_MODO_CHINO = /epson|\bstar\b|\btsp|bixolon|\bsrp-|citizen|\bct-s|samsung|\btm-/i;
+
 /** Impresora de tickets de este computador (se guarda en este equipo, no en el servidor). */
 async function vistaImpresora(zona) {
   let detectadas = await listarImpresoras();
   const guardada = leerImpresora();
-  let config = { modo: 'escpos', papel: papelTicket(), cortar: true, cajon: true, codigo: 'cp850', copias: 1, ...(guardada || {}) };
+  let config = { modo: 'escpos', papel: '', cortar: true, cajon: true, codigo: 'cp850', copias: 1, ...(guardada || {}) };
+  // Una encontrada sola solo fija el papel si su nombre lo dice; si no, manda el de Negocio y ticket.
+  if (config.automatica && config.papel !== '58') config.papel = '';
   if (!guardada && detectadas.ok) {
     // Sin elegir todavía: se propone la que Neji usaría sola.
     const sugerida = impresoraSugerida(detectadas.impresoras);
-    if (sugerida) config = { ...config, nombre: sugerida.nombre, automatica: true };
+    if (sugerida) config = { ...config, ...configAutomatica(sugerida) };
   }
 
   function formularioActual(campos) {
+    const nombre = campos.nombre();
     return {
       ...config,
-      nombre: campos.nombre(),
-      dialogo: !campos.nombre(),
+      nombre,
+      dialogo: !nombre,
       modo: campos.modo.value,
       papel: campos.papel.value,
       cortar: campos.cortar.checked,
       cajon: campos.cajon.checked,
       copias: Number(campos.copias.value) || 1,
       codigo: campos.codigo.value,
+      sin_chino: campos.sinChino.checked,
       columnas: campos.columnas.value ? Math.max(16, Math.min(80, Number(campos.columnas.value) || 0)) || null : null,
       automatica: false,
     };
@@ -379,10 +433,28 @@ async function vistaImpresora(zona) {
     const actual = impresoras.some((i) => i.nombre === config.nombre) ? config.nombre : (config.dialogo ? '' : config.nombre || '');
     const radios = [];
     const opcion = (valor) => {
-      const r = h('input', { type: 'radio', name: 'impresora', value: valor, checked: valor === actual });
+      const r = h('input.radio', {
+        type: 'radio', name: 'impresora', value: valor, checked: valor === actual,
+        'aria-label': valor ? `Usar ${valor}` : 'Ninguna: usar el cuadro de impresión',
+        onchange: () => alElegir(valor),
+      });
       radios.push(r);
       return r;
     };
+    const chinoPorDefecto = (nombre) => Boolean(nombre) && !SIN_MODO_CHINO.test(nombre);
+    let chinoTocado = typeof config.sin_chino === 'boolean';
+    // Al elegir otra impresora se ajusta lo que depende de ella (si no se cambió a mano).
+    const alElegir = (nombre) => {
+      const i = impresoras.find((x) => x.nombre === nombre);
+      if (i) {
+        // Una que no parece de tickets va mejor con su controlador y sin pulso de cajón.
+        campos.modo.value = i.termica ? 'escpos' : 'windows';
+        campos.cajon.checked = Boolean(i.termica);
+        if (esDe58(i)) campos.papel.value = '58';
+      }
+      if (!chinoTocado) campos.sinChino.checked = chinoPorDefecto(nombre);
+    };
+    const general = estado.config.ticket_ancho === '58' ? '58' : '80';
     const etiquetas = (i) => [
       i.termica ? h('span.etiqueta.ok', 'de tickets') : null,
       i.predeterminada ? h('span.etiqueta', 'predeterminada') : null,
@@ -392,7 +464,10 @@ async function vistaImpresora(zona) {
     ];
     const campos = {
       nombre: () => radios.find((r) => r.checked)?.value || '',
-      papel: h('select', { 'aria-label': 'Papel' }, h('option', { value: '80', selected: config.papel !== '58' }, '80 mm (48 letras por línea)'), h('option', { value: '58', selected: config.papel === '58' }, '58 mm (32 letras por línea)')),
+      papel: h('select', { 'aria-label': 'Papel' },
+        h('option', { value: '', selected: !['58', '80'].includes(config.papel) }, `General (${general} mm)`),
+        h('option', { value: '80', selected: config.papel === '80' }, '80 mm (48 letras por línea)'),
+        h('option', { value: '58', selected: config.papel === '58' }, '58 mm (32 letras por línea)')),
       modo: h('select', { 'aria-label': 'Forma de imprimir' },
         h('option', { value: 'escpos', selected: config.modo !== 'windows' }, 'Directa (ESC/POS)'),
         h('option', { value: 'windows', selected: config.modo === 'windows' }, 'Con el controlador de Windows')),
@@ -403,6 +478,10 @@ async function vistaImpresora(zona) {
         [['cp850', 'PC850 Latino (recomendada)'], ['cp858', 'PC858 (con €)'], ['cp1252', 'Windows-1252'], ['cp437', 'PC437 (de fábrica)']]
           .map(([v, t]) => h('option', { value: v, selected: (config.codigo || 'cp850') === v }, t))),
       columnas: h('input', { inputmode: 'numeric', value: config.columnas || '', placeholder: 'Automático', style: { maxWidth: '140px' } }),
+      sinChino: h('input', {
+        type: 'checkbox', checked: typeof config.sin_chino === 'boolean' ? config.sin_chino : chinoPorDefecto(config.nombre),
+        onchange: () => { chinoTocado = true; },
+      }),
     };
 
     const estadoActual = config.nombre && !config.dialogo
@@ -424,13 +503,33 @@ async function vistaImpresora(zona) {
 
     const probar = async () => {
       const prueba = formularioActual(campos);
-      if (!prueba.nombre) return imprimirConDialogo(ticketPrueba(prueba.papel));
+      if (!prueba.nombre) return imprimirConDialogo(ticketPrueba(papelDe(prueba)));
       const api = await escritorio();
-      const r = api ? await api.imprimir(trabajoImpresion(prueba, bloquesTicket(ticketPrueba(prueba.papel)))) : null;
-      if (r?.ok) aviso(`Prueba enviada a «${prueba.nombre}».`, 'ok');
+      const r = api ? await api.imprimir(trabajoImpresion(prueba, bloquesTicket(ticketPrueba(papelDe(prueba))))) : null;
+      if (r?.ok) aviso(r.aviso || `Prueba enviada a «${prueba.nombre}».`, r.aviso ? 'error' : 'ok', r.aviso ? 8000 : 3500);
       else avisoError(new Error(r?.error || 'No se pudo imprimir.'));
       return null;
     };
+    const guardar = h('button.btn.primario', {
+      type: 'button',
+      onclick: () => {
+        config = formularioActual(campos);
+        guardarImpresora(config);
+        aviso('Impresora guardada en este computador.', 'ok');
+        pintar();
+      },
+    }, 'Guardar');
+    const ayudaPapel = h('span.ayuda', 'El general se elige en Negocio y ticket y vale para todas las cajas. Cámbialo aquí solo si esta impresora usa otro papel.');
+
+    if (!detectadas.escritorio) {
+      // En el navegador manda el cuadro de impresión: aquí solo se elige el ancho del papel.
+      vaciar(zona, h('div.panel.impresora',
+        h('h3', 'Impresora de tickets de este computador'),
+        lista,
+        h('div.rejilla', { style: { marginTop: '1rem' } }, h('label.campo', 'Papel', campos.papel, ayudaPapel)),
+        h('div.fila.fin', { style: { marginTop: '1rem' } }, h('button.btn', { type: 'button', onclick: probar }, 'Imprimir prueba'), guardar)));
+      return;
+    }
 
     vaciar(zona, h('div.panel.impresora',
       h('div.fila.entre', h('h3', 'Impresora de tickets de este computador'),
@@ -439,7 +538,7 @@ async function vistaImpresora(zona) {
       lista,
       detectadas.escritorio && detectadas.ok ? h('label.check', opcion(''), 'Ninguna: usar siempre el cuadro de impresión de Windows') : null,
       h('div.rejilla', { style: { marginTop: '1rem' } },
-        h('label.campo', 'Papel', campos.papel),
+        h('label.campo', 'Papel', campos.papel, ayudaPapel),
         h('label.campo', 'Forma de imprimir', campos.modo, h('span.ayuda', 'La directa es para impresoras de tickets: más rápida, corta el papel y abre el cajón. La del controlador sirve con cualquier impresora; úsala si salen símbolos raros.')),
         h('label.campo', 'Copias', campos.copias)),
       h('label.check', campos.cortar, 'Cortar el papel al terminar el ticket'),
@@ -448,18 +547,11 @@ async function vistaImpresora(zona) {
         h('summary', 'Avanzado'),
         h('div.rejilla', { style: { marginTop: '.6rem' } },
           h('label.campo', 'Página de códigos (tildes y ñ)', campos.codigo, h('span.ayuda', 'Si las tildes salen mal, prueba otra.')),
-          h('label.campo', 'Letras por línea', campos.columnas, h('span.ayuda', 'Vacío = según el papel. Algunas de 80 mm usan 42.')))),
+          h('label.campo', 'Letras por línea', campos.columnas, h('span.ayuda', 'Vacío = según el papel. Algunas de 80 mm usan 42.'))),
+        h('label.check', campos.sinChino, 'Apagar el modo chino (si las tildes o la ñ salen como letras chinas)')),
       h('div.fila.fin', { style: { marginTop: '1rem' } },
         h('button.btn', { type: 'button', onclick: probar }, 'Imprimir prueba'),
-        h('button.btn.primario', {
-          type: 'button',
-          onclick: () => {
-            config = formularioActual(campos);
-            guardarImpresora(config);
-            aviso('Impresora guardada en este computador.', 'ok');
-            pintar();
-          },
-        }, 'Guardar')),
+        guardar),
       h('p.ayuda', 'Esta elección es de este computador: cada caja usa su propia impresora. Las etiquetas de códigos de barras y las hojas se imprimen siempre con el cuadro de impresión.')));
   }
   pintar();

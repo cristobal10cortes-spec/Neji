@@ -328,7 +328,8 @@ def importar_productos():
         raise ErrorNegocio("Adjunta un archivo CSV.")
     sumar = request.form.get("existencias") == "sumar"
     contenido = archivo.read()
-    for codificacion in ("utf-8-sig", "latin-1"):
+    # Excel en Windows guarda en cp1252 (comillas “ ”, guiones –, €); latin-1 queda para lo que cp1252 no define.
+    for codificacion in ("utf-8-sig", "cp1252", "latin-1"):
         try:
             texto_csv = contenido.decode(codificacion)
             break

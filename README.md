@@ -57,6 +57,15 @@ encontró y se puede elegir otra, el papel (80 o 58 mm), cortar el papel, abrir 
 de dinero al cobrar en efectivo e imprimir una prueba. Cada caja usa su propia impresora,
 también las que se conectan a otro equipo con `--conectar`.
 
+- Solo elige sola impresoras de tickets, y prefiere una que esté en línea. Las de tinta,
+  láser o etiquetas nunca se eligen solas.
+- Si el nombre dice 58 (POS-58, XP-58) usa papel de 58 mm; si no, el ancho de
+  **Negocio y ticket**.
+- A las POS-58/POS-80 genéricas les apaga el «modo chino» para que las tildes y la ñ no
+  salgan como letras chinas (se puede cambiar en **Avanzado**).
+- Para soporte: `NejiPOS.exe --listar-impresoras` muestra las impresoras que ve y
+  `NejiPOS.exe --prueba-impresora "POS-80"` imprime un ticket de prueba.
+
 ### Con Python (para quien prefiera el navegador)
 
 1. Instala **Python 3.10 o superior** desde <https://www.python.org/downloads/>.
@@ -167,7 +176,7 @@ Se activa en **Configuración → Opciones → Farmacia**, o al configurar Neji 
 **Recetario magistral**
 
 - **Calculadora** para cápsulas, cremas, lociones o cualquier forma que crees.
-  Usa la misma fórmula que CORAND.ERP:
+  La fórmula:
   - Cada principio activo suma: precio × dosis por unidad × cantidad.
   - A eso se agrega el precio por cápsula/gramo/ml × cantidad, más el valor base.
   - Al final se suma el IVA.
@@ -203,9 +212,7 @@ una planilla guardada como CSV desde Excel, eleventa u otro sistema:
 - La existencia puede **reemplazar** el stock (conteo de inventario) o **sumarse**
   (entrada de mercadería). Cada cambio queda en el kardex.
 - Trae una **planilla de ejemplo** para descargar con todas las columnas.
-
-El análisis del programa anterior (CORAND.ERP) está en
-[`docs/analisis-corand.md`](docs/analisis-corand.md).
+- Entiende planillas guardadas por Excel en Windows (con tildes, comillas y €).
 
 ### Productos e inventario
 
@@ -403,9 +410,16 @@ Para agregar una función nueva:
 
 ## El programa anterior: CORAND.ERP / Easy Pharma (`corand_erp.py`)
 
-Este repositorio también guarda el programa original de la farmacia, como referencia. Para
-pasar el inventario a Neji POS, expórtalo a una planilla y súbela en **Configuración →
-Importar inventario (CSV)**.
+Este repositorio también guarda el programa original de la farmacia, como referencia. Su
+análisis está en [`docs/analisis-corand.md`](docs/analisis-corand.md).
+
+Para pasar su inventario a Neji POS (el programa no tiene una opción para exportarlo):
+
+1. Abre `corand_erp_pro.db` con [DB Browser for SQLite](https://sqlitebrowser.org/) (gratis).
+2. **Archivo → Exportar → Tabla(s) como archivo CSV…**, elige la tabla `inventario` y guárdala.
+3. En Neji POS, súbela en **Configuración → Importar inventario (CSV)**. Neji reconoce sus
+   columnas (código, nombre, costo, precio de venta, stock, distribuidor, departamento,
+   vencimiento y principio activo).
 
 Sistema de punto de venta e inventario para farmacia, escrito en **Python** con **PyQt6**.
 

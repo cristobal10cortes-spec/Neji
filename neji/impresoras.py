@@ -36,12 +36,25 @@ GRANDE = (GS + b"!\x11", GS + b"!\x00")              # doble alto y doble ancho
 AVANZAR = ESC + b"d\x04"                              # 4 líneas, para que el corte no se coma el final
 CORTAR = GS + b"V\x42\x00"                            # corte parcial
 ABRIR_CAJON = ESC + b"p\x00\x19\xfa"                  # pulso al pin 2 (el cajón va conectado a la impresora)
+# Muchas POS-58/POS-80 genéricas salen de fábrica en modo chino: las tildes y la ñ salen como letras
+# chinas. FS . apaga ese modo (las que no lo tienen no hacen nada).
+SIN_CHINO = b"\x1c\x2e"
 
-# Nombres y controladores típicos de impresoras de tickets
+# Nombres y controladores típicos de impresoras de tickets (con límites de palabra: «PostScript»,
+# «Deposito» o «XP-2100» no son de tickets).
 PATRON_TERMICA = re.compile(
-    r"pos|receipt|ticket|recibo|t[eé]rmica|thermal|tm-|tm\s?[tu]\d|tsp\d|xp-?\d|slk|80\s?mm|58\s?mm|"
-    r"bixolon|srp-|star\s|sewoo|rongta|hprt|gprinter|3nstar|xprinter|zjiang|citizen|ct-s|custom|"
-    r"epson\s?tm|digipos|nexus|ec-?line|jaltech|pt-?\d|rp\d", re.IGNORECASE)
+    r"\bpos\b|\bpos-?\d|receipt|ticket|recibo|t[eé]rmica|thermal|\btm-|\btm\s?[tu]\d|\btsp\d|"
+    r"\bxp-?(58|80|[qncetv]\d)|\bslk|\b(58|80)\s?mm|bixolon|\bsrp-|\bstar\s|sewoo|rongta|hprt|gprinter|"
+    r"3nstar|xprinter|zjiang|\bct-s|\bepson\s?tm|digipos|ec-?line|jaltech|\bpt-?\d|\brpt?\d|\btp\d|"
+    r"\bzj-?\d|\bgp-?\d|bematech|\bmp-\d+\s?th|generic\s*/\s*text only", re.IGNORECASE)
+# Impresoras de oficina y de etiquetas que podrían coincidir por el nombre: nunca son «de tickets».
+PATRON_OFICINA = re.compile(
+    r"postscript|br-script|\bps\d?\b|\(ps\)|\bpcl|laserjet|deskjet|officejet|inkjet|ink tank|smart tank|"
+    r"pixma|ecotank|workforce|\bepson\s+(xp|l\d|et-|wf-|stylus)|zdesigner|zebra|\btsc\b|godex|dymo|"
+    r"\bql-\d|\bmfc-|\bdcp-", re.IGNORECASE)
+# Marcas que no tienen modo chino: a estas no se les manda FS . salvo que se pida.
+PATRON_SIN_MODO_CHINO = re.compile(r"epson|\bstar\b|\btsp|bixolon|\bsrp-|citizen|\bct-s|samsung|\btm-",
+                                   re.IGNORECASE)
 PATRON_VIRTUAL = re.compile(r"pdf|xps|onenote|fax|send to|enviar a|microsoft print|anydesk|teamviewer",
                             re.IGNORECASE)
 
@@ -110,10 +123,10 @@ def _codificar(texto, codec):
     return bytes(salida)
 
 
-def escpos(renglones, cortar=True, cajon=False, codigo="cp850"):
+def escpos(renglones, cortar=True, cajon=False, codigo="cp850", sin_chino=False):
     """Renglones -> comandos ESC/POS listos para mandar a la impresora."""
     codec, numero = CODIGOS.get(codigo, CODIGOS["cp850"])
-    datos = bytearray(INICIAR + ESC + b"t" + bytes([numero]))
+    datos = bytearray(INICIAR + (SIN_CHINO if sin_chino else b"") + ESC + b"t" + bytes([numero]))
     if cajon:
         datos += ABRIR_CAJON
     for texto, negrita, grande in renglones:
@@ -152,27 +165,39 @@ def leer_trabajo(trabajo):
     bloques = trabajo.get("bloques") or []
     if not isinstance(bloques, list) or not all(isinstance(b, dict) for b in bloques):
         raise ErrorImpresora("El ticket no tiene un formato válido.")
+    sin_chino = trabajo.get("sin_chino")
+    if sin_chino is None:   # sin elegir: se apaga el modo chino en las genéricas (POS-58, POS-80, XP-...)
+        sin_chino = not PATRON_SIN_MODO_CHINO.search(nombre)
     return {
         "impresora": nombre, "modo": modo, "columnas": max(16, min(columnas, 80)),
         "cortar": trabajo.get("cortar", True) is not False, "cajon": bool(trabajo.get("cajon")),
         "codigo": trabajo.get("codigo") if trabajo.get("codigo") in CODIGOS else "cp850",
-        "copias": max(1, min(copias, 5)), "bloques": bloques,
+        "copias": max(1, min(copias, 5)), "bloques": bloques, "sin_chino": bool(sin_chino),
         "papel_mm": 48 if columnas <= 32 else 72,
     }
 
 
 def imprimir_trabajo(trabajo):
-    """Imprime un ticket (o solo abre el cajón, si no trae bloques)."""
+    """Imprime un ticket (o solo abre el cajón, si no trae bloques).
+
+    Devuelve un aviso (texto) si el ticket salió pero el cajón no se pudo abrir, o None.
+    """
     t = leer_trabajo(trabajo)
     renglones = componer(t["bloques"], t["columnas"])
+    aviso = None
     for copia in range(t["copias"] if renglones else 1):
         cajon = t["cajon"] and copia == 0
         if t["modo"] == "escpos" or not renglones:
-            imprimir_crudo(t["impresora"], escpos(renglones, t["cortar"], cajon, t["codigo"]))
+            imprimir_crudo(t["impresora"], escpos(renglones, t["cortar"], cajon, t["codigo"], t["sin_chino"]))
         else:
             imprimir_windows(t["impresora"], renglones, t["columnas"], t["papel_mm"])
             if cajon:   # el controlador de Windows no abre el cajón: se manda el pulso aparte
-                imprimir_crudo(t["impresora"], INICIAR + ABRIR_CAJON, "Cajón Neji POS")
+                try:
+                    imprimir_crudo(t["impresora"], INICIAR + ABRIR_CAJON, "Cajón Neji POS")
+                except ErrorImpresora as e:
+                    # El ticket ya salió: que falle el cajón no es un error de impresión.
+                    aviso = f"El ticket se imprimió, pero no se pudo abrir el cajón: {e}"
+    return aviso
 
 
 # --- Windows -----------------------------------------------------------------------------------------
@@ -228,7 +253,8 @@ def clasificar(nombre, puerto, controlador):
         conexion = "Compartida"
     else:
         conexion = puerto or "—"
-    return {"virtual": virtual, "termica": not virtual and bool(PATRON_TERMICA.search(texto)), "conexion": conexion}
+    termica = not virtual and bool(PATRON_TERMICA.search(texto)) and not PATRON_OFICINA.search(texto)
+    return {"virtual": virtual, "termica": termica, "conexion": conexion}
 
 
 def listar():
@@ -246,7 +272,13 @@ def listar():
 
     banderas = 0x2 | 0x4  # PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS
     necesario, cantidad = wintypes.DWORD(0), wintypes.DWORD(0)
-    w.EnumPrintersW(banderas, None, 2, None, 0, ctypes.byref(necesario), ctypes.byref(cantidad))
+    if not w.EnumPrintersW(banderas, None, 2, None, 0, ctypes.byref(necesario), ctypes.byref(cantidad)):
+        codigo = ctypes.get_last_error()
+        if codigo == 1722:   # RPC_S_SERVER_UNAVAILABLE: el servicio de impresión está detenido
+            raise ErrorImpresora("El servicio «Cola de impresión» de Windows está detenido. Inícialo (Servicios → "
+                                 "Cola de impresión → Iniciar) o reinicia el computador.")
+        if codigo != 122:    # ERROR_INSUFFICIENT_BUFFER es lo esperado cuando sí hay impresoras
+            raise _error_windows(ctypes, "leer las impresoras", "Windows")
     if not necesario.value:
         return []
     memoria = ctypes.create_string_buffer(necesario.value)
@@ -368,6 +400,7 @@ def imprimir_windows(nombre, renglones, columnas, papel_mm=72):
         finally:
             gdi.EndDoc(hdc)
     finally:
+        # Primero se borra el DC: una fuente que sigue seleccionada en él no se puede borrar.
+        gdi.DeleteDC(hdc)
         for f in fuentes:
             gdi.DeleteObject(f)
-        gdi.DeleteDC(hdc)
