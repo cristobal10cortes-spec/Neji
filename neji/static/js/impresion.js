@@ -77,7 +77,7 @@ const papelGeneral = () => (estado.config.ticket_ancho === '58' ? '58' : '80');
 
 /**
  * Ancho del papel con esa configuración: el elegido en este computador o, si no se eligió, el de
- * Configuración → Negocio y ticket. Una impresora encontrada sola solo lo fija si su nombre lo dice.
+ * Configuración → Ticket. Una impresora encontrada sola solo lo fija si su nombre lo dice.
  */
 export function papelDe(config) {
   if (config?.automatica) return config.papel === '58' ? '58' : papelGeneral();
@@ -194,30 +194,89 @@ export async function abrirCajon() {
 
 const ln = (izq, der, clase = '') => h(`div.ln${clase ? '.' + clase : ''}`, h('span', izq), h('span', der));
 
-function encabezadoNegocio() {
-  const c = estado.config;
-  return [
-    h('div.c.xl', c.negocio_nombre || ''),
-    c.negocio_rut ? h('div.c', `RUT: ${c.negocio_rut}`) : null,
-    c.negocio_giro ? h('div.c', c.negocio_giro) : null,
-    c.negocio_direccion ? h('div.c', c.negocio_direccion) : null,
-    c.negocio_telefono ? h('div.c', `Tel: ${c.negocio_telefono}`) : null,
-    c.ticket_encabezado ? h('div.c', c.ticket_encabezado) : null,
-  ];
+// --- Diseño del ticket (Configuración → Ticket) ------------------------------------------------------
+// El encabezado y el pie son líneas de texto. {nombre}, {rut}, {giro}, {direccion}, {telefono} y {correo}
+// se reemplazan por los datos de Configuración → Negocio; si el dato está vacío, la línea no sale.
+
+export const DATOS_NEGOCIO = [
+  ['nombre', 'Nombre', 'negocio_nombre'], ['rut', 'RUT', 'negocio_rut'], ['giro', 'Giro', 'negocio_giro'],
+  ['direccion', 'Dirección', 'negocio_direccion'], ['telefono', 'Teléfono', 'negocio_telefono'], ['correo', 'Correo', 'negocio_email'],
+];
+export const PARTES_TICKET = [
+  ['atendio', 'Caja y «Atendió»'], ['cliente', 'Cliente'], ['neto_iva', 'Neto e IVA'], ['cambio', 'Recibido y cambio'],
+];
+
+const linea = (texto, extra = {}) => ({ texto, alinear: 'centro', negrita: false, grande: false, ...extra });
+const textoEnLineas = (t) => String(t || '').split('\n').map((x) => x.trim()).filter(Boolean);
+
+/** Diseño de fábrica: el mismo ticket de siempre. */
+export function disenoPredeterminado(c = {}) {
+  return {
+    encabezado: [
+      linea('{nombre}', { negrita: true, grande: true }), linea('RUT: {rut}'), linea('{giro}'), linea('{direccion}'), linea('Tel: {telefono}'),
+      ...textoEnLineas(c.ticket_encabezado).map((t) => linea(t)),
+    ],
+    pie: [...textoEnLineas(c.ticket_pie ?? '¡Gracias por su compra!'), ...textoEnLineas(c.ticket_leyenda ?? 'Comprobante interno de venta')].map((t) => linea(t)),
+    mostrar: Object.fromEntries(PARTES_TICKET.map(([k]) => [k, true])),
+  };
+}
+
+/** Diseño guardado (o el de fábrica, armado con los textos de antes). */
+export function disenoTicket(c = estado.config) {
+  const base = disenoPredeterminado(c);
+  try {
+    const d = JSON.parse(c.ticket_diseno || 'null');
+    if (d && Array.isArray(d.encabezado) && Array.isArray(d.pie)) return { ...base, ...d, mostrar: { ...base.mostrar, ...(d.mostrar || {}) } };
+  } catch { /* diseño dañado: el de fábrica */ }
+  return base;
+}
+
+/** Texto de una línea con los datos del negocio, o null si sus datos están vacíos. */
+export function textoLinea(texto, c = estado.config) {
+  let hayDato = false;
+  let lleno = false;
+  const t = String(texto || '').replace(/\{(\w+)\}/g, (todo, clave) => {
+    const dato = DATOS_NEGOCIO.find(([k]) => k === clave);
+    if (!dato) return todo;
+    hayDato = true;
+    const valor = String(c[dato[2]] || '').trim();
+    if (valor) lleno = true;
+    return valor;
+  });
+  if (hayDato && !lleno) return null;
+  return t.trim() ? t : null;
+}
+
+/** Líneas del diseño → elementos del ticket (.c centrado, .g negrita, .xl grande; los lee bloquesTicket). */
+function lineasTicket(lineas, c) {
+  return lineas.map((l) => {
+    const t = textoLinea(l.texto, c);
+    if (t === null) return null;
+    return h(`div${l.alinear === 'izq' ? '' : '.c'}${l.grande ? '.xl' : l.negrita ? '.g' : ''}`, t);
+  });
+}
+
+function encabezadoNegocio(diseno = disenoTicket()) {
+  return lineasTicket(diseno.encabezado, estado.config);
 }
 
 const claseTicket = () => `div.ticket${papelTicket() === '58' ? '.t58' : ''}`;
 
-export function ticketVenta(v, { destacarAtendio = false } = {}) {
+/**
+ * Ticket de venta. `diseno` y `papel` sirven para la vista previa de Configuración → Ticket (lo que
+ * todavía no se guarda); si no, se usan los guardados.
+ */
+export function ticketVenta(v, { destacarAtendio = false, diseno = disenoTicket(), papel = null } = {}) {
   const c = estado.config;
+  const ver = diseno.mostrar;
   const pagos = v.pagos.map((p) => ln(nombreMetodo(p.metodo), pesos(p.monto)));
   const efectivo = v.pagos.find((p) => p.metodo === 'efectivo');
-  return h(claseTicket(),
-    encabezadoNegocio(),
+  return h(papel ? `div.ticket${papel === '58' ? '.t58' : ''}` : claseTicket(),
+    encabezadoNegocio(diseno),
     h('hr'),
     ln(`Folio: ${v.folio}`, fecha(v.fecha)),
-    h('div', { class: destacarAtendio ? 'atendio' : null }, `${v.caja} · Atendió: ${v.atendio || v.usuario}`),
-    v.cliente ? h('div', `Cliente: ${v.cliente}${v.cliente_rut ? ' · ' + v.cliente_rut : ''}`) : null,
+    ver.atendio || destacarAtendio ? h('div', { class: destacarAtendio ? 'atendio' : null }, `${v.caja} · Atendió: ${v.atendio || v.usuario}`) : null,
+    v.cliente && ver.cliente ? h('div', `Cliente: ${v.cliente}${v.cliente_rut ? ' · ' + v.cliente_rut : ''}`) : null,
     h('hr'),
     v.items.map((i) => [
       h('div', i.descripcion),
@@ -226,21 +285,21 @@ export function ticketVenta(v, { destacarAtendio = false } = {}) {
     h('hr'),
     v.descuento ? [ln('Subtotal', pesos(v.subtotal)), ln('Descuento', `-${pesos(v.descuento)}`)] : null,
     ln('TOTAL', pesos(v.total), 'xl'),
-    ln(`Neto`, pesos(v.neto)),
-    ln(`IVA (${c.iva_porcentaje || 19}%)`, pesos(v.iva)),
-    v.exento ? ln('Exento', pesos(v.exento)) : null,
+    ver.neto_iva ? [
+      ln(`Neto`, pesos(v.neto)),
+      ln(`IVA (${c.iva_porcentaje || 19}%)`, pesos(v.iva)),
+      v.exento ? ln('Exento', pesos(v.exento)) : null,
+    ] : null,
     h('hr'),
     pagos,
-    efectivo ? [
+    efectivo && ver.cambio ? [
       v.redondeo ? ln('Redondeo (Ley 20.956)', pesos(v.redondeo)) : null,
       ln('Recibido', pesos(v.efectivo_recibido)),
       ln('Cambio', pesos(v.cambio), 'g'),
     ] : null,
     v.pagos.some((p) => p.metodo === 'fiado') && v.cliente_saldo != null ? ln('Saldo pendiente cliente', pesos(v.cliente_saldo)) : null,
     v.devuelto ? ln('Devuelto', `-${pesos(v.devuelto)}`) : null,
-    h('hr'),
-    c.ticket_pie ? h('div.c', c.ticket_pie) : null,
-    c.ticket_leyenda ? h('div.c', c.ticket_leyenda) : null,
+    diseno.pie.length ? [h('hr'), lineasTicket(diseno.pie, c)] : null,
     h('div', { style: { height: '8mm' } }));
 }
 

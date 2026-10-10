@@ -36,6 +36,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from neji.version import VERSION
+
 NOMBRE = "NejiPOS"
 TITULO = "Neji POS"
 # Puerto y dirección fijos: lo que la ventana guarda (caja de la terminal, tickets en espera)
@@ -141,13 +143,92 @@ def detener_servidor(servidor):
         servidor.close()
 
 
-def responde_neji(base, segundos=2.0):
-    """True si en esa dirección ya hay un Neji POS funcionando."""
+def estado_neji(base, segundos=2.0):
+    """Lo que responde /api/estado del Neji POS que está en esa dirección, o None si no hay uno."""
     try:
         with urllib.request.urlopen(f"{base}/api/estado", timeout=segundos) as r:
-            return "configurado" in json.loads(r.read().decode("utf-8"))
+            estado = json.loads(r.read().decode("utf-8"))
+            return estado if isinstance(estado, dict) and "configurado" in estado else None
     except (OSError, ValueError):
+        return None
+
+
+def responde_neji(base, segundos=2.0):
+    """True si en esa dirección ya hay un Neji POS funcionando."""
+    return estado_neji(base, segundos) is not None
+
+
+# --- Otra versión abierta ---------------------------------------------------------------------------
+# Si al instalar una versión nueva la anterior sigue abierta (en la barra de tareas o de una carpeta
+# portátil), la nueva no puede usar el puerto y se seguiría viendo la anterior: se ofrece cerrarla.
+
+SIN_VENTANA_CONSOLA = 0x08000000   # CREATE_NO_WINDOW
+
+
+def pid_en_puerto(salida_netstat, puerto):
+    """PID del programa que escucha en ese puerto, según «netstat -ano -p TCP» (en cualquier idioma)."""
+    for linea in salida_netstat.splitlines():
+        partes = linea.split()
+        if len(partes) >= 5 and partes[0].upper() == "TCP" and partes[1].rsplit(":", 1)[-1] == str(puerto) \
+                and partes[2].rsplit(":", 1)[-1] == "0" and partes[-1].isdigit():
+            return int(partes[-1])
+    return None
+
+
+def nombre_de_proceso(salida_tasklist):
+    """Nombre del programa en la salida de «tasklist /FO CSV /NH» (primer campo), o ''."""
+    primera = salida_tasklist.strip().splitlines()[0] if salida_tasklist.strip() else ""
+    return primera.split('","')[0].strip('"') if primera.startswith('"') else ""
+
+
+def _ejecutar(*comando):
+    import subprocess
+    try:
+        r = subprocess.run(comando, capture_output=True, timeout=15, check=False,
+                           creationflags=SIN_VENTANA_CONSOLA if sys.platform == "win32" else 0)
+        return r.stdout.decode("mbcs" if sys.platform == "win32" else "utf-8", "replace")
+    except (OSError, ValueError):
+        return ""
+
+
+def cerrar_neji_en_puerto(puerto):
+    """Cierra el NejiPOS.exe que usa el puerto (solo si es Neji POS). True si lo cerró."""
+    if sys.platform != "win32":
         return False
+    pid = pid_en_puerto(_ejecutar("netstat", "-ano", "-p", "TCP"), puerto)
+    if not pid or pid == os.getpid():
+        return False
+    nombre = nombre_de_proceso(_ejecutar("tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"))
+    if nombre.lower() != "nejipos.exe":
+        registro.warning("El puerto %s lo usa %r (PID %s): no se cierra", puerto, nombre, pid)
+        return False
+    registro.info("Cerrando la otra versión de Neji POS (PID %s)", pid)
+    _ejecutar("taskkill", "/PID", str(pid), "/T", "/F")
+    return True
+
+
+def resolver_otra_instancia(base, puerto, esperar_segundos=15):
+    """Ya hay un Neji POS en el puerto. Devuelve True si hay que seguir abriendo este (la otra versión
+    se cerró) o False si hay que salir (es esta misma versión, o la otra no se pudo cerrar)."""
+    otra = estado_neji(base) or {}
+    version_otra = otra.get("version")
+    if version_otra == VERSION:
+        mensaje("Neji POS ya está abierto en este computador.\n\nBúscalo en la barra de tareas.")
+        return False
+    descripcion = f"la versión {version_otra}" if version_otra else "una versión anterior"
+    if not mensaje(f"Hay otra ventana de Neji POS abierta en este computador, con {descripcion}.\n\n"
+                   f"Para abrir la versión {VERSION} hay que cerrarla. Lo que está guardado no se pierde.\n\n"
+                   "¿Cerrarla ahora y abrir la versión nueva?", pregunta=True):
+        return False
+    if cerrar_neji_en_puerto(puerto):
+        limite = time.monotonic() + esperar_segundos
+        while time.monotonic() < limite:
+            if not responde_neji(base, 0.5) and puerto_libre(HOST_VENTANA, puerto):
+                return True
+            time.sleep(0.3)
+    mensaje("No se pudo cerrar la otra ventana de Neji POS.\n\nCiérrala (o reinicia el computador) y vuelve "
+            "a abrir Neji POS.", error=True)
+    return False
 
 
 def esperar(base, segundos=20):
@@ -385,7 +466,7 @@ class ApiEscritorio:
 
 def crear_ventana(webview, url, confirmar_cierre=True):
     return webview.create_window(
-        TITULO, url, width=1366, height=800, min_size=(1024, 640), maximized=True,
+        f"{TITULO} {VERSION}", url, width=1366, height=800, min_size=(1024, 640), maximized=True,
         confirm_close=confirmar_cierre, text_select=True, zoomable=True, background_color="#F3F5F7",
         js_api=ApiEscritorio())
 
@@ -460,7 +541,7 @@ def prueba_de_humo(salida=None):
             detener_servidor(servidor)
         shutil.rmtree(datos, ignore_errors=True)
 
-    return informar(salida, {"ok": ok, "congelado": congelado(),
+    return informar(salida, {"ok": ok, "version": VERSION, "congelado": congelado(),
                              "static_folder": app.static_folder if app else None,
                              "resultados": resultados})
 
@@ -618,7 +699,7 @@ def main(argv=None):
     datos.mkdir(parents=True, exist_ok=True)
     os.environ["NEJI_DATOS"] = str(datos)
     configurar_registro(datos)
-    registro.info("Iniciando %s (datos en %s)", TITULO, datos)
+    registro.info("Iniciando %s %s (datos en %s)", TITULO, VERSION, datos)
 
     if args.impresion_directa:
         imprimir_directo()
@@ -626,8 +707,7 @@ def main(argv=None):
         return conectar(args.conectar, datos)
 
     base = f"http://{HOST_VENTANA}:{args.puerto}"
-    if responde_neji(base):
-        mensaje("Neji POS ya está abierto en este computador.\n\nBúscalo en la barra de tareas.")
+    if responde_neji(base) and not resolver_otra_instancia(base, args.puerto):
         return 0
     app = crear_app()
     from neji import equipo

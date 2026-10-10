@@ -340,6 +340,23 @@ body:has(.ventas) #avisos { top: auto; bottom: 160px; }
 .permisos .nota-admin { color: var(--primario); font-weight: 600; margin: 0; }
 tbody tr.clic:focus-visible { outline: 2px solid var(--primario); outline-offset: -2px; }
 @media (max-width: 980px) { .usuarios { grid-template-columns: minmax(0, 1fr); } }
+
+/* Configuración → Ticket: líneas del encabezado y del pie, con la vista previa al lado. */
+.editor-ticket { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: 1rem; align-items: start; }
+.editor-ticket > .previa-ticket { position: sticky; top: .5rem; }
+.seccion-ticket { margin-top: 1rem; }
+.papel-general { max-width: 420px; }
+p.version, span.version { color: var(--suave, #64748b); font-size: .82rem; margin: 0; text-align: center; }
+.lineas-ticket { display: flex; flex-direction: column; gap: .35rem; align-items: flex-start; }
+.linea-ticket { display: flex; gap: .3rem; align-items: center; width: 100%; }
+.linea-ticket input { flex: 1 1 auto; min-width: 0; }
+.linea-ticket select { width: auto; flex: none; }
+.linea-ticket .btn { flex: none; min-width: 34px; justify-content: center; }
+.btn.alternar[aria-pressed="true"] { background: var(--primario); border-color: var(--primario); color: #fff; }
+.btn.peligro-suave:hover { color: var(--peligro); border-color: #f0b7b7; background: var(--peligro-claro); }
+.insertar-dato { flex-wrap: wrap; gap: .3rem; margin-top: .5rem; align-items: center; }
+.partes-ticket { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: .3rem .8rem; }
+@media (max-width: 980px) { .editor-ticket { grid-template-columns: minmax(0, 1fr); } .editor-ticket > .previa-ticket { position: static; } }
 .aviso-suave { background: #fff7e0; border: 1px solid #f3d27a; border-radius: 8px; padding: .6rem .9rem; }
 .aviso-suave p { margin: .2rem 0; }
 .impresora .tabla-caja { margin: .4rem 0 .6rem; }

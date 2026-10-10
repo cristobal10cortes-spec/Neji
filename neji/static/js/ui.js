@@ -261,7 +261,11 @@ let contadorFormularios = 0;
  * (o los valores si no hay `alEnviar`), o null si se cancela.
  * Tipos de campo: texto, password, email, monto, cantidad, fecha, area, select, check.
  */
-export function formulario({ titulo, campos, aceptar = 'Guardar', ancho = '', alEnviar, intro, extra, alMostrar }) {
+/**
+ * Formulario en una ventana. Con `enterAvanza`, Enter pasa al campo siguiente (Mayús+Enter al anterior)
+ * y desde el último al botón Guardar; Enter sobre Guardar guarda.
+ */
+export function formulario({ titulo, campos, aceptar = 'Guardar', ancho = '', alEnviar, intro, extra, alMostrar, enterAvanza = false }) {
   return new Promise((resolver) => {
     const id = `form-${++contadorFormularios}`;
     const entradas = {};
@@ -303,6 +307,26 @@ export function formulario({ titulo, campos, aceptar = 'Guardar', ancho = '', al
         { texto: aceptar, clase: 'primario', submit: true, form: id },
       ],
     });
+
+    if (enterAvanza) {
+      form.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
+        const el = e.target;
+        if (el.tagName === 'TEXTAREA' || el.tagName === 'BUTTON') return;   // en un texto largo Enter es otra línea
+        const orden = Object.values(entradas).filter((x) => !x.disabled && x.getClientRects().length);
+        const i = orden.indexOf(el);
+        if (i < 0) return;
+        e.preventDefault();
+        if (e.shiftKey) {
+          orden[Math.max(i - 1, 0)].focus();
+        } else if (i < orden.length - 1) {
+          orden[i + 1].focus();
+          orden[i + 1].select?.();
+        } else {
+          m.el.querySelector('footer .btn.primario')?.focus();
+        }
+      });
+    }
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();

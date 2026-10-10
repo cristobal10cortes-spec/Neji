@@ -9,8 +9,23 @@ import {
 
 const POR_PAGINA = 50;
 
-/** Alta o edición de producto. Devuelve el producto guardado o null. */
+let formularioAbierto = false;
+
+/**
+ * Alta o edición de producto. Devuelve el producto guardado o null. Un doble clic en la fila abre una
+ * sola ventana: la segunda llamada, mientras la primera está abierta, no hace nada.
+ */
 export async function formProducto(producto = null) {
+  if (formularioAbierto) return null;
+  formularioAbierto = true;
+  try {
+    return await abrirFormProducto(producto);
+  } finally {
+    formularioAbierto = false;
+  }
+}
+
+async function abrirFormProducto(producto) {
   const farmacia = esFarmacia();
   const [departamentos, principios] = await Promise.all([
     api.get('/api/departamentos').catch(() => []),
@@ -47,6 +62,8 @@ export async function formProducto(producto = null) {
   return formulario({
     titulo: producto ? 'Editar producto' : 'Nuevo producto',
     ancho: 'ancho',
+    enterAvanza: true,   // Enter pasa de un dato al siguiente, hasta «Guardar»
+    intro: h('p.ayuda', 'Enter pasa al dato siguiente; al final, Enter en «Guardar» guarda el producto.'),
     campos: campos.filter(Boolean),
     extra: listaDeps,
     alMostrar: (e) => {

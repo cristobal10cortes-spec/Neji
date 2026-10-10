@@ -23,9 +23,9 @@ en una base SQLite con respaldo automático diario.
 
 ### Recomendado: el programa NejiPOS.exe
 
-1. Descarga **`NejiPOS-Instalador.exe`**. Cada versión se compila sola en GitHub:
-   pestaña **Actions → NejiPOS.exe (Windows)**, en el último resultado con ✓, sección
-   *Artifacts*.
+1. Descarga **`NejiPOS-Instalador-<versión>.exe`** (por ejemplo `NejiPOS-Instalador-0.1.12.exe`).
+   Cada versión se compila sola en GitHub: pestaña **Actions → NejiPOS.exe (Windows)**, en el
+   último resultado con ✓, sección *Artifacts*.
 2. Ábrelo y sigue los pasos. No pide clave de administrador y crea el acceso directo
    **Neji POS** en el escritorio.
    - Windows puede mostrar «Windows protegió su PC» porque el programa no tiene firma
@@ -42,8 +42,10 @@ Neji POS se abre en **su propia ventana**, sin navegador ni ventana negra:
 - **Tus datos no están en la carpeta del programa**, sino en
   `%LOCALAPPDATA%\NejiPOS\datos`; la ruta exacta aparece en
   **Configuración → Respaldos**. Por eso actualizar o desinstalar el programa no los toca.
-- Para actualizar, instala la versión nueva encima de la anterior.
-- **Versión portátil:** `NejiPOS-portable.zip` trae la carpeta del programa sin
+- Para actualizar, instala la versión nueva encima de la anterior. Si Neji POS está abierto, el
+  instalador lo cierra. La versión que está abierta se ve en el título de la ventana, al entrar
+  y en **Configuración**; si abres la nueva con la anterior abierta, la nueva ofrece cerrarla.
+- **Versión portátil:** `NejiPOS-portable-<versión>.zip` trae la carpeta del programa sin
   instalador. Si junto a `NejiPOS.exe` pones una carpeta `datos` con tu `neji.db`, usa
   esa (útil para llevarlo en un pendrive o para pasar los datos de la versión anterior).
 - F5 y F12 no hacen nada fuera de la venta: son atajos de Neji (cliente, cobrar).
@@ -60,7 +62,7 @@ también las que se conectan a otro equipo con `--conectar`.
 - Solo elige sola impresoras de tickets, y prefiere una que esté en línea. Las de tinta,
   láser o etiquetas nunca se eligen solas.
 - Si el nombre dice 58 (POS-58, XP-58) usa papel de 58 mm; si no, el ancho de
-  **Negocio y ticket**.
+  **Configuración → Ticket** (80 mm de fábrica).
 - A las POS-58/POS-80 genéricas les apaga el «modo chino» para que las tildes y la ñ no
   salgan como letras chinas (se puede cambiar en **Avanzado**).
 - Para soporte: `NejiPOS.exe --listar-impresoras` muestra las impresoras que ve y
@@ -88,7 +90,7 @@ Para abrirlo como aplicación desde el navegador, crea un acceso directo con est
 - `--app` lo abre en su propia ventana, sin barra de direcciones.
 - `--kiosk-printing` imprime el ticket directo en la impresora predeterminada.
 
-El ancho del ticket se elige en **Configuración → Negocio y ticket**.
+El ancho del ticket se elige en **Configuración → Ticket**.
 
 ### Lector de código de barras
 
@@ -139,7 +141,11 @@ otras cajas vendan. Cada caja tiene su propio turno y su propio corte.
   crédito, transferencia, **fiado** o **pago mixto**.
 - **Redondeo del efectivo según la Ley 20.956**. La boleta y los reportes guardan
   el monto exacto.
-- Ticket con desglose de **neto e IVA**, para impresoras de 58 u 80 mm.
+- Ticket con desglose de **neto e IVA**, para impresoras de 80 mm (de fábrica) o 58 mm.
+- **Configuración → Ticket**: se editan las líneas del encabezado y del pie (agregar,
+  quitar, mover, centrar, negrita y letra grande), con los datos del negocio como
+  `{nombre}` o `{rut}`, y se elige qué más sale (Atendió, cliente, neto e IVA, cambio).
+  La vista previa cambia mientras se edita.
 - **Cotizaciones** que no descuentan inventario y después se cargan en un ticket
   para venderlas.
 
@@ -220,6 +226,8 @@ una planilla guardada como CSV desde Excel, eleventa u otro sistema:
 - Precio de costo, % de ganancia, precio de venta y mayoreo.
 - Productos exentos de IVA.
 - Generador de código interno EAN-13 para productos sin código de barras.
+- En **Nuevo producto** y al editar uno, `Enter` pasa al dato siguiente (código,
+  descripción, departamento, se vende por, principio activo…) hasta **Guardar**.
 - **Etiquetas con código de barras** (Code 128) para imprimir.
 - Entradas de mercadería (actualizan el costo), salidas por merma y ajustes por conteo físico.
 - **Kardex**: el historial de cada producto.
@@ -384,7 +392,7 @@ Para compilar `NejiPOS.exe` (lo hace solo el workflow
 py -3.12 -m pip install -r requirements-exe.txt pytest
 py -3.12 -m PyInstaller --noconfirm --clean empaquetado\NejiPOS.spec
 dist\NejiPOS\NejiPOS.exe --prueba          # prueba sin ventana: sale con 0 si todo responde
-iscc empaquetado\NejiPOS.iss                # instalador (Inno Setup 6) -> dist\NejiPOS-Instalador.exe
+iscc empaquetado\NejiPOS.iss                # instalador (Inno Setup 6) -> dist\NejiPOS-Instalador-<versión>.exe
                                             # (antes, deja build\MicrosoftEdgeWebview2Setup.exe)
 ```
 

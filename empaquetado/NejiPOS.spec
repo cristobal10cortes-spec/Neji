@@ -35,12 +35,21 @@ if sys.platform == "win32":  # versioninfo usa pefile, que PyInstaller instala s
         ],
     )
 
+# La versión también va dentro del programa (neji/version.txt): se ve en el título de la ventana, al
+# entrar y en Configuración, y sirve para saber si la que está abierta es la nueva.
+carpeta_version = os.path.join(RAIZ, "build", "version-neji")
+os.makedirs(carpeta_version, exist_ok=True)
+archivo_version = os.path.join(carpeta_version, "version.txt")
+with open(archivo_version, "w", encoding="utf-8") as f:
+    f.write(version)
+
 a = Analysis(
     [os.path.join(RAIZ, "escritorio.py")],
     pathex=[RAIZ],
     datas=[
         (os.path.join(RAIZ, "neji", "static"), os.path.join("neji", "static")),
         (os.path.join(RAIZ, "neji", "schema.sql"), "neji"),
+        (archivo_version, "neji"),
     ],
     # pywebview trae su propio hook (DLL de WebView2 y su JS) y pyinstaller-hooks-contrib
     # los de pythonnet (clr, clr_loader): no hacen falta hiddenimports.

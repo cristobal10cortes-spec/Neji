@@ -2,6 +2,8 @@
 
 import sys
 
+import pytest
+
 import escritorio
 
 
@@ -163,3 +165,87 @@ def test_sin_consola_las_pruebas_de_impresora_se_muestran_en_un_cuadro(monkeypat
     vistos.clear()
     assert escritorio.probar_impresora("", salida=tmp_path / "r.json") == 1
     assert vistos == [] and "No hay una impresora elegida" in (tmp_path / "r.json").read_text(encoding="utf-8")
+
+
+NETSTAT = """
+Conexiones activas
+
+  Proto  Dirección local          Dirección remota        Estado           PID
+  TCP    0.0.0.0:135            0.0.0.0:0              ESCUCHANDO       1052
+  TCP    127.0.0.1:5000         0.0.0.0:0              ESCUCHANDO       4321
+  TCP    127.0.0.1:5000         127.0.0.1:50123        ESTABLECIDA      4321
+  TCP    127.0.0.1:50123        127.0.0.1:5000         ESTABLECIDA      9999
+"""
+
+
+def test_encuentra_el_programa_que_usa_el_puerto():
+    assert escritorio.pid_en_puerto(NETSTAT, 5000) == 4321          # en español («ESCUCHANDO») o inglés
+    assert escritorio.pid_en_puerto(NETSTAT.replace("127.0.0.1:5000         0.0.0.0:0", "0.0.0.0:5000           0.0.0.0:0"), 5000) == 4321
+    assert escritorio.pid_en_puerto(NETSTAT, 5001) is None
+    assert escritorio.nombre_de_proceso('"NejiPOS.exe","4321","Console","1","120.000 KB"\r\n') == "NejiPOS.exe"
+    assert escritorio.nombre_de_proceso("INFORMACIÓN: no hay tareas ejecutándose con los criterios especificados.") == ""
+
+
+def test_otra_version_abierta_se_cierra_y_se_abre_la_nueva(monkeypatch):
+    preguntas, cerrados = [], []
+    monkeypatch.setattr(escritorio, "VERSION", "0.1.20")
+    monkeypatch.setattr(escritorio, "mensaje", lambda texto, error=False, pregunta=False: preguntas.append(texto) or True)
+    abierta = {"si": True}
+    monkeypatch.setattr(escritorio, "estado_neji", lambda base, segundos=2.0: {"configurado": True} if abierta["si"] else None)
+    monkeypatch.setattr(escritorio, "puerto_libre", lambda host, puerto: not abierta["si"])
+
+    def cerrar(puerto):
+        cerrados.append(puerto)
+        abierta["si"] = False
+        return True
+    monkeypatch.setattr(escritorio, "cerrar_neji_en_puerto", cerrar)
+    # Una versión anterior (sin «version» en /api/estado): se pregunta, se cierra y se sigue.
+    assert escritorio.resolver_otra_instancia("http://127.0.0.1:5000", 5000) is True
+    assert cerrados == [5000] and "una versión anterior" in preguntas[0] and "0.1.20" in preguntas[0]
+
+
+def test_misma_version_abierta_no_se_cierra(monkeypatch):
+    vistos = []
+    monkeypatch.setattr(escritorio, "VERSION", "0.1.20")
+    monkeypatch.setattr(escritorio, "estado_neji", lambda base, segundos=2.0: {"configurado": True, "version": "0.1.20"})
+    monkeypatch.setattr(escritorio, "mensaje", lambda texto, **k: vistos.append(texto))
+    monkeypatch.setattr(escritorio, "cerrar_neji_en_puerto", lambda puerto: pytest.fail("no debía cerrar"))
+    assert escritorio.resolver_otra_instancia("http://127.0.0.1:5000", 5000) is False
+    assert "ya está abierto" in vistos[0]
+
+
+def test_si_no_quiere_cerrar_la_otra_no_se_abre(monkeypatch):
+    monkeypatch.setattr(escritorio, "estado_neji", lambda base, segundos=2.0: {"configurado": True, "version": "0.1.9"})
+    monkeypatch.setattr(escritorio, "mensaje", lambda texto, pregunta=False, **k: False)
+    monkeypatch.setattr(escritorio, "cerrar_neji_en_puerto", lambda puerto: pytest.fail("no debía cerrar"))
+    assert escritorio.resolver_otra_instancia("http://127.0.0.1:5000", 5000) is False
+
+
+def test_si_no_se_puede_cerrar_avisa(monkeypatch):
+    vistos = []
+    monkeypatch.setattr(escritorio, "estado_neji", lambda base, segundos=2.0: {"configurado": True, "version": "0.1.9"})
+    monkeypatch.setattr(escritorio, "mensaje", lambda texto, pregunta=False, **k: vistos.append(texto) or True)
+    monkeypatch.setattr(escritorio, "cerrar_neji_en_puerto", lambda puerto: False)   # p. ej. lo usa otro programa
+    assert escritorio.resolver_otra_instancia("http://127.0.0.1:5000", 5000) is False
+    assert "No se pudo cerrar" in vistos[-1]
+
+
+def test_la_version_se_ve_en_el_estado_y_en_la_prueba(api, tmp_path):
+    from neji.version import VERSION
+    assert api.get("/api/estado")["version"] == VERSION
+    import json
+    escritorio.prueba_de_humo(tmp_path / "informe.json")
+    assert json.loads((tmp_path / "informe.json").read_text(encoding="utf-8"))["version"] == VERSION
+
+
+def test_la_version_empaquetada_manda(tmp_path, monkeypatch):
+    import neji.version as v
+    archivo = tmp_path / "version.txt"
+    archivo.write_text("0.1.42\n", encoding="utf-8")
+    monkeypatch.setattr(v, "__file__", str(tmp_path / "version.py"))
+    monkeypatch.setenv("NEJI_VERSION", "9.9.9")
+    assert v.version() == "0.1.42"
+    archivo.unlink()
+    assert v.version() == "9.9.9"
+    monkeypatch.delenv("NEJI_VERSION")
+    assert v.version() == "desarrollo"

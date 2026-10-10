@@ -4,8 +4,8 @@ import { api, descargar } from '../api.js';
 import { recargarConfiguracion } from '../app.js';
 import { esAdmin, esFarmacia, estado, fijarCaja, nombreCaja } from '../estado.js';
 import {
-  bloquesTicket, configAutomatica, esDe58, escritorio, guardarImpresora, impresoraSugerida, imprimirConDialogo, leerImpresora, listarImpresoras, papelDe,
-  ticketVenta, trabajoImpresion,
+  DATOS_NEGOCIO, PARTES_TICKET, bloquesTicket, configAutomatica, disenoPredeterminado, disenoTicket, esDe58, escritorio, guardarImpresora,
+  impresoraSugerida, imprimir, imprimirConDialogo, leerImpresora, listarImpresoras, papelDe, ticketVenta, trabajoImpresion,
 } from '../impresion.js';
 import { aviso, avisoError, fecha, formulario, h, numero, pestanas, tabla, vaciar } from '../ui.js';
 import { importadorCsv } from './productos.js';
@@ -49,26 +49,150 @@ function formularioConfig(claves, construir) {
 function vistaNegocio() {
   return formularioConfig({
     negocio_nombre: 'texto', negocio_rut: 'texto', negocio_giro: 'texto', negocio_direccion: 'texto', negocio_telefono: 'texto', negocio_email: 'texto',
-    ticket_encabezado: 'area', ticket_pie: 'area', ticket_leyenda: 'texto', ticket_ancho: 'texto', imprimir_automatico: 'check', impresion_directa: 'check',
-  }, (c) => {
-    const ancho = h('select', h('option', { value: '80', selected: estado.config.ticket_ancho !== '58' }, '80 mm'), h('option', { value: '58', selected: estado.config.ticket_ancho === '58' }, '58 mm'));
-    c.ticket_ancho = ancho;
-    return [
-      h('h3', 'Datos del negocio'),
-      h('div.rejilla',
-        campo('Nombre del negocio', c.negocio_nombre), campo('RUT', c.negocio_rut), campo('Giro', c.negocio_giro),
-        campo('Dirección', c.negocio_direccion), campo('Teléfono', c.negocio_telefono), campo('Correo', c.negocio_email)),
-      h('h3', { style: { marginTop: '1.2rem' } }, 'Ticket'),
-      h('div.rejilla',
-        campo('Ancho del papel', ancho),
-        campo('Texto bajo el encabezado', c.ticket_encabezado, 'Ej: horario de atención o redes sociales'),
-        campo('Mensaje al final', c.ticket_pie),
-        campo('Leyenda legal', c.ticket_leyenda, 'Mientras no emitas boleta electrónica desde Neji, el ticket es un comprobante interno.')),
-      check('Imprimir el ticket automáticamente al cobrar', c.imprimir_automatico),
-      check('Cuando se use el cuadro de impresión, imprimir sin mostrarlo (en la impresora predeterminada)', c.impresion_directa,
+  }, (c) => [
+    h('h3', 'Datos del negocio'),
+    h('div.rejilla',
+      campo('Nombre del negocio', c.negocio_nombre), campo('RUT', c.negocio_rut), campo('Giro', c.negocio_giro),
+      campo('Dirección', c.negocio_direccion), campo('Teléfono', c.negocio_telefono), campo('Correo', c.negocio_email)),
+    h('p.ayuda', { style: { marginTop: '.8rem' } }, 'Estos datos salen en el encabezado del ticket. Qué líneas salen y cómo se ven se elige en la pestaña «Ticket».'),
+  ]);
+}
+
+const copiar = (x) => JSON.parse(JSON.stringify(x));
+
+/**
+ * Ticket: ancho del papel (80 mm de fábrica), las líneas del encabezado y del pie, qué partes salen y
+ * una vista previa que cambia mientras se edita.
+ */
+function vistaTicket(zona) {
+  const c = estado.config;
+  let diseno = copiar(disenoTicket(c));
+  const papel = h('select', { 'aria-label': 'Ancho del papel' },
+    h('option', { value: '80', selected: c.ticket_ancho !== '58' }, '80 mm · 48 letras por línea (lo normal)'),
+    h('option', { value: '58', selected: c.ticket_ancho === '58' }, '58 mm · 32 letras por línea'));
+  const automatico = h('input', { type: 'checkbox', checked: c.imprimir_automatico === '1' });
+  const directa = h('input', { type: 'checkbox', checked: c.impresion_directa === '1' });
+  const error = h('div.error-modal.oculto', { role: 'alert' });
+  const previa = h('div');
+  const editores = h('div');
+  let ultimoCampo = null;   // la línea donde se insertan los datos del negocio
+
+  const ejemplo = () => ({ ...ventaDeEjemplo(estado.usuario?.nombre_ticket || estado.usuario?.nombre || 'Cajero'), cliente: 'María González', cliente_rut: '12.345.678-5' });
+  const pintarPrevia = () => vaciar(previa, h('div.papel-ticket', { 'aria-label': 'Vista previa del ticket' }, ticketVenta(ejemplo(), { diseno, papel: papel.value })));
+  papel.addEventListener('change', pintarPrevia);
+
+  function editorLineas(seccion, titulo) {
+    const cont = h('div.lineas-ticket');
+    const pintar = (enfocar = null) => {
+      const lista = diseno[seccion];
+      vaciar(cont, lista.map((l, i) => {
+        const texto = h('input', { value: l.texto, maxlength: 120, placeholder: 'Texto de la línea', 'aria-label': `${titulo}, línea ${i + 1}` });
+        texto.addEventListener('input', () => { l.texto = texto.value; pintarPrevia(); });
+        texto.addEventListener('focus', () => { ultimoCampo = { texto, linea: l }; });
+        const alinear = h('select', { 'aria-label': `Alineación de la línea ${i + 1}` },
+          h('option', { value: 'centro', selected: l.alinear !== 'izq' }, 'Centrada'),
+          h('option', { value: 'izq', selected: l.alinear === 'izq' }, 'Izquierda'));
+        alinear.addEventListener('change', () => { l.alinear = alinear.value; pintarPrevia(); });
+        const alternar = (clave, etiqueta, nombre) => {
+          const b = h('button.btn.chico.alternar', { type: 'button', title: nombre, 'aria-label': `${nombre} (línea ${i + 1})`, 'aria-pressed': String(Boolean(l[clave])) }, etiqueta);
+          b.addEventListener('click', () => { l[clave] = !l[clave]; b.setAttribute('aria-pressed', String(l[clave])); pintarPrevia(); });
+          return b;
+        };
+        const mover = (paso) => {
+          const j = i + paso;
+          [lista[i], lista[j]] = [lista[j], lista[i]];
+          pintar(j);
+          pintarPrevia();
+        };
+        return h('div.linea-ticket', texto, alinear,
+          alternar('negrita', 'N', 'Negrita'), alternar('grande', 'A+', 'Letra grande'),
+          h('button.btn.chico', { type: 'button', title: 'Subir', 'aria-label': `Subir la línea ${i + 1}`, disabled: i === 0, onclick: () => mover(-1) }, '↑'),
+          h('button.btn.chico', { type: 'button', title: 'Bajar', 'aria-label': `Bajar la línea ${i + 1}`, disabled: i === lista.length - 1, onclick: () => mover(1) }, '↓'),
+          h('button.btn.chico.peligro-suave', {
+            type: 'button', title: 'Quitar la línea', 'aria-label': `Quitar la línea ${i + 1}`,
+            onclick: () => { lista.splice(i, 1); pintar(Math.min(i, lista.length - 1)); pintarPrevia(); },
+          }, '✕'));
+      }), h('button.btn.chico', {
+        type: 'button', disabled: lista.length >= 20,
+        onclick: () => { lista.push({ texto: '', alinear: 'centro', negrita: false, grande: false }); pintar(lista.length - 1); },
+      }, '+ Agregar línea'));
+      if (enfocar !== null && enfocar >= 0) cont.querySelectorAll('.linea-ticket input')[enfocar]?.focus();
+    };
+    pintar();
+    return h('section.seccion-ticket', h('h3', titulo),
+      seccion === 'encabezado' ? h('p.ayuda', 'Lo que va entre llaves, como {nombre} o {rut}, se reemplaza por los datos de la pestaña «Negocio»; si ese dato está vacío, la línea no sale. «N» es negrita y «A+» letra grande.') : null,
+      cont);
+  }
+
+  // Botones para poner los datos del negocio en la línea que se está editando (sin perderla de vista).
+  const insertar = h('div.fila.insertar-dato', h('span.ayuda', 'Insertar dato del negocio:'),
+    DATOS_NEGOCIO.map(([clave, nombre]) => h('button.btn.chico', {
+      type: 'button',
+      onmousedown: (e) => e.preventDefault(),
+      onclick: () => {
+        if (!ultimoCampo) return aviso('Primero haz clic en la línea donde va el dato.');
+        const { texto, linea: l } = ultimoCampo;
+        const desde = texto.selectionStart ?? texto.value.length;
+        const hasta = texto.selectionEnd ?? desde;
+        texto.value = `${texto.value.slice(0, desde)}{${clave}}${texto.value.slice(hasta)}`;
+        l.texto = texto.value;
+        texto.focus();
+        texto.setSelectionRange(desde + clave.length + 2, desde + clave.length + 2);
+        pintarPrevia();
+        return null;
+      },
+    }, nombre)));
+
+  const partes = Object.fromEntries(PARTES_TICKET.map(([k]) => [k, h('input', { type: 'checkbox', checked: diseno.mostrar[k] !== false })]));
+  Object.entries(partes).forEach(([k, el]) => el.addEventListener('change', () => { diseno.mostrar[k] = el.checked; pintarPrevia(); }));
+
+  const pintarEditores = () => vaciar(editores, editorLineas('encabezado', 'Encabezado'), insertar,
+    h('section.seccion-ticket', h('h3', 'Qué más sale en el ticket'),
+      h('div.partes-ticket', PARTES_TICKET.map(([k, nombre]) => h('label.check', partes[k], nombre))),
+      h('p.ayuda', 'Siempre salen el folio y la fecha, los productos, el total y la forma de pago.')),
+    editorLineas('pie', 'Pie (al final del ticket)'));
+
+  const guardar = async () => {
+    try {
+      const limpio = { ...diseno, encabezado: diseno.encabezado.filter((l) => l.texto.trim()), pie: diseno.pie.filter((l) => l.texto.trim()) };
+      await api.put('/api/config', { ticket_diseno: limpio, ticket_ancho: papel.value, imprimir_automatico: automatico.checked, impresion_directa: directa.checked });
+      aviso('Ticket guardado.', 'ok');
+      await recargarConfiguracion({ pestana: pestanaActual });
+    } catch (err) {
+      error.textContent = err.message;
+      error.classList.remove('oculto');
+    }
+  };
+
+  pintarEditores();
+  pintarPrevia();
+  vaciar(zona, h('div.editor-ticket',
+    h('div.panel',
+      error,
+      h('h3', 'Papel'),
+      h('div.papel-general', campo('Ancho del papel', papel, 'Lo normal es 80 mm. Si tu impresora usa rollos de 58 mm, elige 58. Cada computador puede usar otro ancho en «Impresora de tickets».')),
+      editores,
+      h('h3', { style: { marginTop: '1rem' } }, 'Al cobrar'),
+      check('Imprimir el ticket automáticamente al cobrar', automatico),
+      check('Cuando se use el cuadro de impresión, imprimir sin mostrarlo (en la impresora predeterminada)', directa,
         'La impresora de tickets de cada caja se elige en la pestaña «Impresora de tickets» y ahí siempre se imprime directo. Esta opción es para lo demás (etiquetas, hojas) en NejiPOS.exe; se aplica al volver a abrir Neji POS.'),
-    ];
-  });
+      h('div.fila.entre', { style: { marginTop: '1rem' } },
+        h('button.btn', {
+          type: 'button',
+          onclick: () => {
+            diseno = copiar(disenoPredeterminado());
+            Object.entries(partes).forEach(([k, el]) => { el.checked = diseno.mostrar[k] !== false; });
+            papel.value = '80';
+            ultimoCampo = null;
+            pintarEditores();
+            pintarPrevia();
+            aviso('Se volvió al ticket de fábrica. Presiona «Guardar cambios» para quedarte con él.');
+          },
+        }, 'Volver al ticket de fábrica'),
+        h('div.fila',
+          h('button.btn', { type: 'button', onclick: () => imprimir(ticketVenta(ejemplo(), { diseno, papel: papel.value })) }, 'Imprimir prueba'),
+          h('button.btn.primario', { type: 'button', onclick: guardar }, 'Guardar cambios')))),
+    h('div.panel.previa-ticket', h('h3', 'Así sale el ticket'), previa)));
 }
 
 function vistaOpciones() {
@@ -402,7 +526,7 @@ async function vistaImpresora(zona) {
   let detectadas = await listarImpresoras();
   const guardada = leerImpresora();
   let config = { modo: 'escpos', papel: '', cortar: true, cajon: true, codigo: 'cp850', copias: 1, ...(guardada || {}) };
-  // Una encontrada sola solo fija el papel si su nombre lo dice; si no, manda el de Negocio y ticket.
+  // Una encontrada sola solo fija el papel si su nombre lo dice; si no, manda el de Configuración → Ticket.
   if (config.automatica && config.papel !== '58') config.papel = '';
   if (!guardada && detectadas.ok) {
     // Sin elegir todavía: se propone la que Neji usaría sola.
@@ -519,7 +643,7 @@ async function vistaImpresora(zona) {
         pintar();
       },
     }, 'Guardar');
-    const ayudaPapel = h('span.ayuda', 'El general se elige en Negocio y ticket y vale para todas las cajas. Cámbialo aquí solo si esta impresora usa otro papel.');
+    const ayudaPapel = h('span.ayuda', 'El general se elige en la pestaña Ticket y vale para todas las cajas. Cámbialo aquí solo si esta impresora usa otro papel.');
 
     if (!detectadas.escritorio) {
       // En el navegador manda el cuadro de impresión: aquí solo se elige el ancho del papel.
@@ -580,13 +704,14 @@ async function vistaRespaldos(zona) {
 export async function montar(contenedor, parametros = {}) {
   const admin = esAdmin();
   const opciones = admin
-    ? [['negocio', 'Negocio y ticket'], ['opciones', 'Opciones'], ['usuarios', 'Usuarios'], ['cajas', 'Cajas'], ['terminal', 'Esta terminal'],
+    ? [['negocio', 'Negocio'], ['ticket', 'Ticket'], ['opciones', 'Opciones'], ['usuarios', 'Usuarios'], ['cajas', 'Cajas'], ['terminal', 'Esta terminal'],
       ['impresora', 'Impresora de tickets'], ['respaldos', 'Respaldos'], ['importar', 'Importar inventario (CSV)']]
     : [['terminal', 'Esta terminal'], ['impresora', 'Impresora de tickets']];
   let actual = opciones.some(([k]) => k === parametros.pestana) ? parametros.pestana : opciones[0][0];
   const barra = h('div');
   const zona = h('div');
-  vaciar(contenedor, h('h2', 'Configuración'), barra, zona);
+  // La versión, para saber cuál está abierta (por ejemplo, después de instalar una nueva).
+  vaciar(contenedor, h('div.fila.entre', h('h2', 'Configuración'), h('span.version', `Neji POS versión ${estado.version || '—'}`)), barra, zona);
 
   async function mostrar(p) {
     actual = p;
@@ -594,6 +719,7 @@ export async function montar(contenedor, parametros = {}) {
     vaciar(barra, pestanas(opciones, actual, mostrar));
     try {
       if (p === 'negocio') vaciar(zona, vistaNegocio());
+      else if (p === 'ticket') vistaTicket(zona);
       else if (p === 'opciones') vaciar(zona, vistaOpciones());
       else if (p === 'usuarios') await vistaUsuarios(zona);
       else if (p === 'cajas') await vistaCajas(zona);
