@@ -326,6 +326,14 @@ export function formulario({ titulo, campos, aceptar = 'Guardar', ancho = '', al
           m.el.querySelector('footer .btn.primario')?.focus();
         }
       });
+      // Mayús+Enter en «Guardar» vuelve al último dato en vez de guardar.
+      m.el.querySelector('footer .btn.primario')?.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || !e.shiftKey) return;
+        const orden = Object.values(entradas).filter((x) => !x.disabled && x.getClientRects().length);
+        if (!orden.length) return;
+        e.preventDefault();
+        orden[orden.length - 1].focus();
+      });
     }
 
     form.addEventListener('submit', async (e) => {
