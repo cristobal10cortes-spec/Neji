@@ -327,3 +327,28 @@ def test_caja_principal_siempre_activa_al_migrar(app, api):
     con.close()
     inicializar(app.config["DATABASE"])
     assert {c["nombre"]: c["principal"] for c in api.get("/api/cajas")} == {"Caja 1": 0, "Mesón": 1}
+
+
+def test_diseno_del_ticket_se_valida_y_se_guarda(api):
+    """Configuración → Ticket: líneas del encabezado y del pie, y qué partes salen."""
+    import json
+    assert api.get("/api/config")["ticket_diseno"] == ""          # vacío = el ticket de siempre
+    c = api.put("/api/config", {"ticket_diseno": {
+        "encabezado": [{"texto": "  {nombre}  ", "grande": True}, {"texto": "   "}, {"texto": "RUT: {rut}", "alinear": "raro"}],
+        "pie": [{"texto": "Gracias", "alinear": "izq", "negrita": "1"}],
+        "mostrar": {"neto_iva": False, "otra": True},
+    }})
+    d = json.loads(c["ticket_diseno"])
+    assert d["encabezado"] == [
+        {"texto": "{nombre}", "alinear": "centro", "negrita": False, "grande": True},
+        {"texto": "RUT: {rut}", "alinear": "centro", "negrita": False, "grande": False},
+    ]                                                              # la línea vacía no se guarda
+    assert d["pie"] == [{"texto": "Gracias", "alinear": "izq", "negrita": True, "grande": False}]
+    assert d["mostrar"] == {"atendio": True, "cliente": True, "neto_iva": False, "cambio": True}
+    # Un texto largo se corta y queda en una línea; el JSON largo no se corta a 500 caracteres.
+    largo = api.put("/api/config", {"ticket_diseno": {"encabezado": [{"texto": "x" * 300}] * 10, "pie": []}})
+    assert all(l["texto"] == "x" * 120 for l in json.loads(largo["ticket_diseno"])["encabezado"])
+    api.put("/api/config", {"ticket_diseno": {"encabezado": [{"texto": "a"}] * 21, "pie": []}}, esperado=400)
+    api.put("/api/config", {"ticket_diseno": "{no es json"}, esperado=400)
+    api.put("/api/config", {"ticket_diseno": {"encabezado": "texto", "pie": []}}, esperado=400)
+    assert api.put("/api/config", {"ticket_diseno": ""})["ticket_diseno"] == ""   # volver al de siempre

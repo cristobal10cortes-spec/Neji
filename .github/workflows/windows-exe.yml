@@ -1,6 +1,6 @@
 # Compila NejiPOS.exe en Windows: pruebas, ejecutable, prueba de la ventana real e instalador.
-# El resultado se descarga desde la pestaña Actions (artefactos «NejiPOS-Instalador» y
-# «NejiPOS-portable»). Al subir un tag vX.Y.Z además se publica como Release.
+# El resultado se descarga desde la pestaña Actions (artefactos «NejiPOS-Instalador-<versión>» y
+# «NejiPOS-portable-<versión>»). Al subir un tag vX.Y.Z además se publica como Release.
 name: NejiPOS.exe (Windows)
 
 on:
@@ -61,6 +61,9 @@ jobs:
           $p = Start-Process -FilePath 'dist\NejiPOS\NejiPOS.exe' -ArgumentList '--prueba', '--salida', "`"$informe`"" -Wait -PassThru
           if (Test-Path $informe) { Get-Content $informe -Raw } else { Write-Host 'No se generó el informe' }
           if ($p.ExitCode -ne 0) { throw "La prueba falló (código $($p.ExitCode))" }
+          # La versión que muestra el programa (ventana, entrada y Configuración) es la de esta compilación.
+          $v = (Get-Content $informe -Raw | ConvertFrom-Json).version
+          if ($v -ne $env:NEJI_VERSION) { throw "El programa dice la versión '$v' y debía decir '$env:NEJI_VERSION'" }
 
       - name: Prueba de impresoras (una impresora de tickets de prueba que escribe en un archivo)
         timeout-minutes: 6
@@ -198,14 +201,27 @@ jobs:
             $env:Path += ";${env:ProgramFiles(x86)}\Inno Setup 6"
           }
           iscc empaquetado\NejiPOS.iss
-          Get-Item dist\NejiPOS-Instalador.exe | Format-List Name, Length
+          Get-Item "dist\NejiPOS-Instalador-$env:NEJI_VERSION.exe" | Format-List Name, Length
 
       - name: Probar el instalador (instalación silenciosa en una ruta con tildes)
         timeout-minutes: 8
         run: |
           $destino = Join-Path $env:RUNNER_TEMP 'Programas de José Ñúñez\Neji POS'
-          $p = Start-Process -FilePath 'dist\NejiPOS-Instalador.exe' -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$destino`"" -Wait -PassThru
+          # Como en una actualización real: Neji POS (otra copia, de otra carpeta) queda abierto y el
+          # instalador lo tiene que cerrar; si no, se seguiría viendo la versión anterior.
+          $env:NEJI_DATOS = Join-Path $env:RUNNER_TEMP 'datos-abierto'
+          $abierto = Start-Process -FilePath 'dist\NejiPOS\NejiPOS.exe' -PassThru
+          $listo = $false
+          foreach ($i in 1..60) {
+            try { Invoke-WebRequest 'http://127.0.0.1:5000/api/estado' -UseBasicParsing -TimeoutSec 2 | Out-Null; $listo = $true; break } catch { Start-Sleep -Milliseconds 500 }
+          }
+          Remove-Item Env:NEJI_DATOS
+          if (-not $listo) { throw 'No se pudo dejar Neji POS abierto antes de instalar' }
+          $p = Start-Process -FilePath "dist\NejiPOS-Instalador-$env:NEJI_VERSION.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$destino`"" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "El instalador terminó con el código $($p.ExitCode)" }
+          Start-Sleep -Seconds 1
+          if (Get-Process -Id $abierto.Id -ErrorAction SilentlyContinue) { throw 'El instalador no cerró el Neji POS que estaba abierto' }
+          Write-Host 'El instalador cerró el Neji POS abierto.'
           foreach ($archivo in 'NejiPOS.exe', 'NejiPOS.exe.config', '_internal\python312.dll') {
             if (-not (Test-Path (Join-Path $destino $archivo))) { throw "El instalador no dejó $archivo" }
           }
@@ -216,19 +232,19 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "El programa instalado no abrió la ventana (código $($p.ExitCode))" }
 
       - name: Versión portátil
-        run: Compress-Archive -Path dist\NejiPOS -DestinationPath dist\NejiPOS-portable.zip
+        run: Compress-Archive -Path dist\NejiPOS -DestinationPath "dist\NejiPOS-portable-$env:NEJI_VERSION.zip"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: NejiPOS-Instalador
-          path: dist/NejiPOS-Instalador.exe
+          name: NejiPOS-Instalador-${{ env.NEJI_VERSION }}
+          path: dist/NejiPOS-Instalador-${{ env.NEJI_VERSION }}.exe
           if-no-files-found: error
           retention-days: 60
 
       - uses: actions/upload-artifact@v4
         with:
-          name: NejiPOS-portable
-          path: dist/NejiPOS-portable.zip
+          name: NejiPOS-portable-${{ env.NEJI_VERSION }}
+          path: dist/NejiPOS-portable-${{ env.NEJI_VERSION }}.zip
           if-no-files-found: error
           retention-days: 60
 
@@ -246,5 +262,5 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            descargas/NejiPOS-Instalador.exe
-            descargas/NejiPOS-portable.zip
+            descargas/NejiPOS-Instalador-*.exe
+            descargas/NejiPOS-portable-*.zip

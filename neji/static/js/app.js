@@ -138,7 +138,8 @@ function pantallaAcceso(configurado, negocio) {
       h('label.campo', 'Usuario administrador', campos.usuario),
       h('label.campo', 'Contraseña (mínimo 4 caracteres)', campos.password),
       h('label.check', campos.modulo_farmacia, 'Es una farmacia (activar vademécum y recetario magistral)'),
-      h('button.btn.primario.grande', { type: 'submit' }, 'Comenzar'));
+      h('button.btn.primario.grande', { type: 'submit' }, 'Comenzar'),
+      h('p.version', `Versión ${estado.version || '—'}`));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const datos = Object.fromEntries(Object.entries(campos).map(([k, el]) => [k, el.type === 'checkbox' ? el.checked : el.value.trim()]));
@@ -162,7 +163,8 @@ function pantallaAcceso(configurado, negocio) {
     error,
     h('label.campo', 'Usuario', usuario),
     h('label.campo', 'Contraseña', password),
-    h('button.btn.primario.grande', { type: 'submit' }, 'Entrar'));
+    h('button.btn.primario.grande', { type: 'submit' }, 'Entrar'),
+    h('p.version', `Versión ${estado.version || '—'}`));
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
@@ -181,6 +183,7 @@ async function iniciar() {
   try {
     const r = await api.get('/api/estado');
     estado.usuario = r.usuario;
+    estado.version = r.version || '';
     if (!r.usuario) {
       pantallaAcceso(r.configurado, r.negocio);
       return;

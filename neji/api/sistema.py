@@ -11,6 +11,7 @@ from ..auth import PERMISOS, con_permiso, leer_permisos, permisos_de, solo_admin
 from ..chile import formatear_rut, validar_rut
 from ..db import CONFIG_POR_DEFECTO, ahora, filas, get_db, leer_config, transaccion
 from ..validar import ErrorNegocio, booleano, entero, texto
+from ..version import VERSION
 from . import bp, datos_json
 
 OPCIONES_SI_NO = {
@@ -19,6 +20,43 @@ OPCIONES_SI_NO = {
     "impresion_directa",
 }
 CONFIG_EDITABLE = set(CONFIG_POR_DEFECTO) - {"ultimo_respaldo", "recetario_semilla"}
+PARTES_TICKET = ("atendio", "cliente", "neto_iva", "cambio")
+MAX_LINEAS_TICKET = 20
+
+
+def leer_diseno_ticket(valor):
+    """Diseño del ticket que manda Configuración → Ticket, validado. Vacío = el ticket de siempre."""
+    if valor in (None, ""):
+        return ""
+    if isinstance(valor, str):
+        try:
+            valor = json.loads(valor)
+        except ValueError:
+            raise ErrorNegocio("El diseño del ticket no es válido.") from None
+    if not isinstance(valor, dict):
+        raise ErrorNegocio("El diseño del ticket no es válido.")
+
+    def lineas(nombre, titulo):
+        crudas = valor.get(nombre) or []
+        if not isinstance(crudas, list) or not all(isinstance(l, dict) for l in crudas):
+            raise ErrorNegocio("El diseño del ticket no es válido.")
+        if len(crudas) > MAX_LINEAS_TICKET:
+            raise ErrorNegocio(f"{titulo}: como máximo {MAX_LINEAS_TICKET} líneas.")
+        salida = []
+        for l in crudas:
+            texto = " ".join(str(l.get("texto") or "").split())[:120]
+            if not texto:
+                continue   # las líneas vacías no se guardan
+            salida.append({"texto": texto, "alinear": "izq" if l.get("alinear") == "izq" else "centro",
+                           "negrita": booleano(l.get("negrita")), "grande": booleano(l.get("grande"))})
+        return salida
+
+    mostrar = valor.get("mostrar") if isinstance(valor.get("mostrar"), dict) else {}
+    return json.dumps({
+        "encabezado": lineas("encabezado", "Encabezado"),
+        "pie": lineas("pie", "Pie"),
+        "mostrar": {parte: booleano(mostrar.get(parte, True)) for parte in PARTES_TICKET},
+    }, ensure_ascii=False)
 
 
 def _iniciar_sesion(usuario_id):
@@ -33,7 +71,7 @@ def estado():
     configurado = con.execute("SELECT 1 FROM usuarios LIMIT 1").fetchone() is not None
     nombre = con.execute("SELECT valor FROM config WHERE clave = 'negocio_nombre'").fetchone()
     return jsonify(configurado=configurado, usuario=usuario_actual(),
-                   negocio=nombre["valor"] if nombre else "")
+                   negocio=nombre["valor"] if nombre else "", version=VERSION)
 
 
 @bp.post("/setup")
@@ -109,6 +147,8 @@ def guardar_config():
             valor = str(min(entero(valor, "cantidad de respaldos", minimo=1), 100))
         elif clave == "ticket_ancho":
             valor = "58" if str(valor) == "58" else "80"
+        elif clave == "ticket_diseno":
+            valor = leer_diseno_ticket(valor)
         elif clave == "receta_redondeo":
             valor = str(valor).strip()
             if valor not in ("1", "10", "50", "100"):

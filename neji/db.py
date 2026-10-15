@@ -22,6 +22,7 @@ CONFIG_POR_DEFECTO = {
     "ticket_pie": "¡Gracias por su compra!",
     "ticket_leyenda": "Comprobante interno de venta",
     "ticket_ancho": "80",
+    "ticket_diseno": "",   # líneas del encabezado y del pie (JSON); vacío = el ticket de siempre
     "imprimir_automatico": "1",
     "iva_porcentaje": "19",
     "redondeo_efectivo": "1",

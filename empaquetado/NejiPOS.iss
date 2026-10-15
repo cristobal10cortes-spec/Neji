@@ -1,4 +1,4 @@
-; Instalador de Neji POS (Inno Setup 6). Se compila después de PyInstaller:
+﻿; Instalador de Neji POS (Inno Setup 6). Se compila después de PyInstaller:
 ;     iscc empaquetado\NejiPOS.iss      ->  dist\NejiPOS-Instalador.exe
 ; Instala para el usuario actual (no pide administrador) en %LOCALAPPDATA%\Programs\Neji POS.
 ; Los datos del negocio quedan en %LOCALAPPDATA%\NejiPOS\datos: ni actualizar ni desinstalar
@@ -20,7 +20,8 @@ DisableProgramGroupPage=yes
 DisableDirPage=auto
 PrivilegesRequired=lowest
 OutputDir=..\dist
-OutputBaseFilename=NejiPOS-Instalador
+; El nombre lleva la versión: así no se confunde con un instalador descargado antes.
+OutputBaseFilename=NejiPOS-Instalador-{#Version}
 SetupIconFile=neji.ico
 UninstallDisplayIcon={app}\NejiPOS.exe
 UninstallDisplayName=Neji POS
@@ -71,4 +72,46 @@ begin
   Result := not (VersionValida(HKLM, 'SOFTWARE\WOW6432Node' + CLAVE_WEBVIEW2)
               or VersionValida(HKLM, 'SOFTWARE' + CLAVE_WEBVIEW2)
               or VersionValida(HKCU, 'Software' + CLAVE_WEBVIEW2));
+end;
+
+{ True si hay un Neji POS abierto en este computador (instalado o portátil, de cualquier carpeta). }
+function NejiAbierto: Boolean;
+var
+  Localizador, Servicio, Procesos: Variant;
+begin
+  Result := False;
+  try
+    Localizador := CreateOleObject('WbemScripting.SWbemLocator');
+    Servicio := Localizador.ConnectServer('.', 'root\CIMV2');
+    Procesos := Servicio.ExecQuery('SELECT ProcessId FROM Win32_Process WHERE Name = ''NejiPOS.exe''');
+    Result := Procesos.Count > 0;
+  except
+    Result := False;
+  end;
+end;
+
+{ Antes de copiar los archivos: si Neji POS sigue abierto, se cierra. Si no, después de instalar se
+  seguiría viendo la versión anterior (la nueva encuentra el puerto ocupado por la que está abierta). }
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Codigo, Intento: Integer;
+begin
+  Result := '';
+  if not NejiAbierto then
+    Exit;
+  if not WizardSilent then
+    if MsgBox('Neji POS está abierto. Para instalar la versión nueva hay que cerrarlo (lo que está guardado no se pierde).'
+              + #13#10#13#10 + '¿Cerrarlo ahora?', mbConfirmation, MB_YESNO) <> IDYES then
+    begin
+      Result := 'Cierra Neji POS y vuelve a abrir el instalador.';
+      Exit;
+    end;
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM NejiPOS.exe', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+  for Intento := 1 to 40 do
+  begin
+    if not NejiAbierto then
+      Exit;
+    Sleep(250);
+  end;
+  Result := 'No se pudo cerrar Neji POS. Ciérralo (o reinicia el computador) y vuelve a abrir el instalador.';
 end;
