@@ -4,10 +4,11 @@ import { api, descargar } from '../api.js';
 import { recargarConfiguracion } from '../app.js';
 import { esAdmin, esFarmacia, estado, fijarCaja, nombreCaja } from '../estado.js';
 import {
-  DATOS_NEGOCIO, PARTES_TICKET, bloquesTicket, configAutomatica, disenoPredeterminado, disenoTicket, esDe58, escritorio, guardarImpresora,
+  DATOS_NEGOCIO, PARTES_TICKET, bloquesTicket, columnasDe, configAutomatica, disenoPredeterminado, disenoTicket, esDe58, escritorio, guardarImpresora,
   impresoraSugerida, imprimir, imprimirConDialogo, leerImpresora, listarImpresoras, papelDe, ticketVenta, trabajoImpresion,
 } from '../impresion.js';
 import { aviso, avisoError, fecha, formulario, h, numero, pestanas, tabla, vaciar } from '../ui.js';
+import { componerRenglones } from '../renglones.js';
 import { importadorCsv } from './productos.js';
 
 let pestanaActual = null;
@@ -60,26 +61,59 @@ function vistaNegocio() {
 
 const copiar = (x) => JSON.parse(JSON.stringify(x));
 
+// Lo editado en la pestaña Ticket y todavía no guardado: se conserva al ir a otra pestaña o pantalla.
+let borradorTicket = null;
+
 /**
  * Ticket: ancho del papel (80 mm de fábrica), las líneas del encabezado y del pie, qué partes salen y
  * una vista previa que cambia mientras se edita.
  */
-function vistaTicket(zona) {
+async function vistaTicket(zona) {
   const c = estado.config;
-  let diseno = copiar(disenoTicket(c));
+  const borrador = borradorTicket?.usuario === estado.usuario?.id ? borradorTicket : null;
+  let diseno = copiar(borrador?.diseno || disenoTicket(c));
+  const anchoInicial = borrador?.papel ?? (c.ticket_ancho === '58' ? '58' : '80');
   const papel = h('select', { 'aria-label': 'Ancho del papel' },
-    h('option', { value: '80', selected: c.ticket_ancho !== '58' }, '80 mm · 48 letras por línea (lo normal)'),
-    h('option', { value: '58', selected: c.ticket_ancho === '58' }, '58 mm · 32 letras por línea'));
-  const automatico = h('input', { type: 'checkbox', checked: c.imprimir_automatico === '1' });
-  const directa = h('input', { type: 'checkbox', checked: c.impresion_directa === '1' });
+    h('option', { value: '80', selected: anchoInicial !== '58' }, '80 mm · 48 letras por línea (lo normal)'),
+    h('option', { value: '58', selected: anchoInicial === '58' }, '58 mm · 32 letras por línea'));
+  const automatico = h('input', { type: 'checkbox', checked: borrador ? borrador.automatico : c.imprimir_automatico === '1' });
+  const directa = h('input', { type: 'checkbox', checked: borrador ? borrador.directa : c.impresion_directa === '1' });
   const error = h('div.error-modal.oculto', { role: 'alert' });
   const previa = h('div');
   const editores = h('div');
+  const notaPapel = h('p.ayuda.nota-papel');
+  const sinGuardar = h('span.sin-guardar', { class: borrador ? null : 'oculto' }, 'Hay cambios sin guardar');
   let ultimoCampo = null;   // la línea donde se insertan los datos del negocio
+  let listo = false;
+  // En NejiPOS.exe con impresora de tickets, la vista previa muestra los mismos renglones que el papel.
+  const directo = Boolean(await escritorio()) && !leerImpresora()?.dialogo;
 
   const ejemplo = () => ({ ...ventaDeEjemplo(estado.usuario?.nombre_ticket || estado.usuario?.nombre || 'Cajero'), cliente: 'María González', cliente_rut: '12.345.678-5' });
-  const pintarPrevia = () => vaciar(previa, h('div.papel-ticket', { 'aria-label': 'Vista previa del ticket' }, ticketVenta(ejemplo(), { diseno, papel: papel.value })));
+  // El ancho con que imprime este computador: el de «Impresora de tickets» si lo fijó; si no, el de aquí.
+  const papelEquipo = () => papelDe(leerImpresora(), papel.value);
+  const pintarPrevia = () => {
+    const pe = papelEquipo();
+    const ticket = ticketVenta(ejemplo(), { diseno, papel: pe });
+    notaPapel.textContent = pe !== papel.value
+      ? `Este computador imprime en ${pe} mm (se eligió en «Impresora de tickets»): la vista previa y la prueba usan ese ancho.` : '';
+    if (directo) {
+      const impresora = leerImpresora();
+      const columnas = columnasDe(impresora, papel.value);
+      const renglones = componerRenglones(bloquesTicket(ticket), columnas, impresora?.codigo || 'cp850');
+      vaciar(previa, h('div.papel-ticket',
+        h('div.papel-termico', { 'aria-label': 'Vista previa del ticket', style: { width: `calc(${columnas}ch + 1.6rem)` } },
+          renglones.map(([t, negrita, grande]) => h(`div.renglon${negrita ? '.g' : ''}${grande ? '.xl' : ''}`, t || '\u00a0')))));
+    } else {
+      vaciar(previa, h('div.papel-ticket', { 'aria-label': 'Vista previa del ticket' }, ticket));
+    }
+    if (listo) {
+      borradorTicket = { usuario: estado.usuario?.id, diseno, papel: papel.value, automatico: automatico.checked, directa: directa.checked };
+      sinGuardar.classList.remove('oculto');
+    }
+  };
   papel.addEventListener('change', pintarPrevia);
+  automatico.addEventListener('change', pintarPrevia);
+  directa.addEventListener('change', pintarPrevia);
 
   function editorLineas(seccion, titulo) {
     const cont = h('div.lineas-ticket');
@@ -110,17 +144,23 @@ function vistaTicket(zona) {
           h('button.btn.chico', { type: 'button', title: 'Bajar', 'aria-label': `Bajar la línea ${i + 1}`, disabled: i === lista.length - 1, onclick: () => mover(1) }, '↓'),
           h('button.btn.chico.peligro-suave', {
             type: 'button', title: 'Quitar la línea', 'aria-label': `Quitar la línea ${i + 1}`,
-            onclick: () => { lista.splice(i, 1); pintar(Math.min(i, lista.length - 1)); pintarPrevia(); },
+            onclick: () => {
+              if (ultimoCampo?.linea === l) ultimoCampo = null;
+              lista.splice(i, 1);
+              pintar(Math.min(i, lista.length - 1));
+              pintarPrevia();
+            },
           }, '✕'));
       }), h('button.btn.chico', {
         type: 'button', disabled: lista.length >= 20,
         onclick: () => { lista.push({ texto: '', alinear: 'centro', negrita: false, grande: false }); pintar(lista.length - 1); },
       }, '+ Agregar línea'));
       if (enfocar !== null && enfocar >= 0) cont.querySelectorAll('.linea-ticket input')[enfocar]?.focus();
+      else if (enfocar === -1) cont.querySelector(':scope > .btn')?.focus();   // sin líneas: «+ Agregar línea»
     };
     pintar();
     return h('section.seccion-ticket', h('h3', titulo),
-      seccion === 'encabezado' ? h('p.ayuda', 'Lo que va entre llaves, como {nombre} o {rut}, se reemplaza por los datos de la pestaña «Negocio»; si ese dato está vacío, la línea no sale. «N» es negrita y «A+» letra grande.') : null,
+      seccion === 'encabezado' ? h('p.ayuda', 'Lo que va entre llaves, como {nombre} o {rut}, se reemplaza por los datos de la pestaña «Negocio». Si todos los datos de una línea están vacíos, la línea no sale: por eso conviene poner cada dato en su propia línea. «N» es negrita y «A+» letra grande.') : null,
       cont);
   }
 
@@ -130,7 +170,7 @@ function vistaTicket(zona) {
       type: 'button',
       onmousedown: (e) => e.preventDefault(),
       onclick: () => {
-        if (!ultimoCampo) return aviso('Primero haz clic en la línea donde va el dato.');
+        if (!ultimoCampo?.texto.isConnected) return aviso('Primero haz clic en la línea donde va el dato.');
         const { texto, linea: l } = ultimoCampo;
         const desde = texto.selectionStart ?? texto.value.length;
         const hasta = texto.selectionEnd ?? desde;
@@ -156,21 +196,27 @@ function vistaTicket(zona) {
     try {
       const limpio = { ...diseno, encabezado: diseno.encabezado.filter((l) => l.texto.trim()), pie: diseno.pie.filter((l) => l.texto.trim()) };
       await api.put('/api/config', { ticket_diseno: limpio, ticket_ancho: papel.value, imprimir_automatico: automatico.checked, impresion_directa: directa.checked });
+      borradorTicket = null;
       aviso('Ticket guardado.', 'ok');
       await recargarConfiguracion({ pestana: pestanaActual });
     } catch (err) {
+      // El botón está abajo: el error se ve en un aviso y arriba del panel, que se trae a la vista.
       error.textContent = err.message;
       error.classList.remove('oculto');
+      avisoError(err);
+      error.scrollIntoView({ block: 'center' });
     }
   };
 
   pintarEditores();
   pintarPrevia();
+  listo = true;
   vaciar(zona, h('div.editor-ticket',
     h('div.panel',
       error,
       h('h3', 'Papel'),
       h('div.papel-general', campo('Ancho del papel', papel, 'Lo normal es 80 mm. Si tu impresora usa rollos de 58 mm, elige 58. Cada computador puede usar otro ancho en «Impresora de tickets».')),
+      notaPapel,
       editores,
       h('h3', { style: { marginTop: '1rem' } }, 'Al cobrar'),
       check('Imprimir el ticket automáticamente al cobrar', automatico),
@@ -190,7 +236,8 @@ function vistaTicket(zona) {
           },
         }, 'Volver al ticket de fábrica'),
         h('div.fila',
-          h('button.btn', { type: 'button', onclick: () => imprimir(ticketVenta(ejemplo(), { diseno, papel: papel.value })) }, 'Imprimir prueba'),
+          sinGuardar,
+          h('button.btn', { type: 'button', onclick: () => imprimir(ticketVenta(ejemplo(), { diseno, papel: papelEquipo() }), { papelGeneral: papel.value }) }, 'Imprimir prueba'),
           h('button.btn.primario', { type: 'button', onclick: guardar }, 'Guardar cambios')))),
     h('div.panel.previa-ticket', h('h3', 'Así sale el ticket'), previa)));
 }
@@ -237,7 +284,11 @@ function ventaDeEjemplo(atendio) {
 
 /** Ticket de ejemplo en pantalla, con la línea «Atendió» destacada. */
 export function previaTicket(atendio) {
-  return h('div.papel-ticket', { 'aria-label': 'Vista previa del ticket' }, ticketVenta(ventaDeEjemplo(atendio), { destacarAtendio: true }));
+  // Si la línea «Atendió» está apagada en Configuración → Ticket, se ve igual (para elegir el nombre) con un aviso.
+  const apagada = disenoTicket().mostrar.atendio === false;
+  return h('div',
+    apagada ? h('p.aviso-suave', 'La línea «Atendió» está apagada en Configuración → Ticket: este nombre no sale en los tickets.') : null,
+    h('div.papel-ticket', { 'aria-label': 'Vista previa del ticket' }, ticketVenta(ventaDeEjemplo(atendio), { destacarAtendio: true })));
 }
 
 async function vistaUsuarios(zona) {
@@ -719,7 +770,7 @@ export async function montar(contenedor, parametros = {}) {
     vaciar(barra, pestanas(opciones, actual, mostrar));
     try {
       if (p === 'negocio') vaciar(zona, vistaNegocio());
-      else if (p === 'ticket') vistaTicket(zona);
+      else if (p === 'ticket') await vistaTicket(zona);
       else if (p === 'opciones') vaciar(zona, vistaOpciones());
       else if (p === 'usuarios') await vistaUsuarios(zona);
       else if (p === 'cajas') await vistaCajas(zona);

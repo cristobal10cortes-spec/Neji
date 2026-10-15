@@ -36,7 +36,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from neji.version import VERSION
+from neji.version import VERSION, numeros
 
 NOMBRE = "NejiPOS"
 TITULO = "Neji POS"
@@ -187,7 +187,7 @@ def _ejecutar(*comando):
         r = subprocess.run(comando, capture_output=True, timeout=15, check=False,
                            creationflags=SIN_VENTANA_CONSOLA if sys.platform == "win32" else 0)
         return r.stdout.decode("mbcs" if sys.platform == "win32" else "utf-8", "replace")
-    except (OSError, ValueError):
+    except (OSError, ValueError, subprocess.SubprocessError):   # p. ej. netstat que tarda demasiado
         return ""
 
 
@@ -214,6 +214,12 @@ def resolver_otra_instancia(base, puerto, esperar_segundos=15):
     version_otra = otra.get("version")
     if version_otra == VERSION:
         mensaje("Neji POS ya está abierto en este computador.\n\nBúscalo en la barra de tareas.")
+        return False
+    if numeros(version_otra) and numeros(VERSION) and numeros(version_otra) > numeros(VERSION):
+        # La abierta es más nueva: este acceso directo abre una copia vieja. No se cierra la nueva.
+        mensaje(f"Ya está abierta la versión {version_otra} de Neji POS, más nueva que esta ({VERSION}).\n\n"
+                f"Este acceso directo abre una copia antigua, en:\n{Path(sys.executable).parent}\n\n"
+                "Usa el acceso directo «Neji POS» del escritorio o del menú Inicio.")
         return False
     descripcion = f"la versión {version_otra}" if version_otra else "una versión anterior"
     if not mensaje(f"Hay otra ventana de Neji POS abierta en este computador, con {descripcion}.\n\n"
@@ -464,20 +470,20 @@ class ApiEscritorio:
             return {"ok": False, "error": f"Error al imprimir: {e}"}
 
 
-def crear_ventana(webview, url, confirmar_cierre=True):
+def crear_ventana(webview, url, confirmar_cierre=True, titulo=None):
     return webview.create_window(
-        f"{TITULO} {VERSION}", url, width=1366, height=800, min_size=(1024, 640), maximized=True,
+        titulo or f"{TITULO} {VERSION}", url, width=1366, height=800, min_size=(1024, 640), maximized=True,
         confirm_close=confirmar_cierre, text_select=True, zoomable=True, background_color="#F3F5F7",
         js_api=ApiEscritorio())
 
 
-def abrir_ventana(url, red=False):
+def abrir_ventana(url, red=False, titulo=None):
     """Abre la ventana y espera a que la cierren. Si no se puede, devuelve (estado, detalle)."""
     estado, detalle, _ = preparar_motor()
     if estado != "ok":
         return estado, detalle
     webview = configurar_webview()
-    crear_ventana(webview, url)
+    crear_ventana(webview, url, titulo=titulo)
     carpeta_webview().mkdir(parents=True, exist_ok=True)
     # private_mode=False: si no, se borran al cerrar la caja elegida y los tickets en espera.
     # storage_path propio y fuera de datos/ (con modo privado pywebview borraría esa carpeta).
@@ -663,7 +669,18 @@ def conectar(destino, datos):
                 "encendido, con Neji POS abierto y con «Permitir otras cajas» activado en "
                 "Configuración → Cajas.", error=True)
         return 1
-    fallo = abrir_ventana(base + "/")
+    # La interfaz (pantallas, tickets) la da el equipo principal: su versión es la que se ve.
+    version_principal = (estado_neji(base) or {}).get("version")
+    equipo = base.removeprefix("http://")
+    mas_antigua = not version_principal or (numeros(version_principal) and numeros(VERSION)
+                                            and numeros(version_principal) < numeros(VERSION))
+    if mas_antigua:
+        # Se actualizó esta caja y no el principal: los cambios no se verían y nadie sabría por qué.
+        mensaje(f"Esta caja tiene Neji POS {VERSION}, pero las pantallas las da el equipo principal "
+                f"({equipo}), que tiene {f'la versión {version_principal}' if version_principal else 'una versión anterior'}."
+                "\n\nPara ver los cambios de la versión nueva, instálala también en el equipo principal.")
+    titulo = f"{TITULO} {version_principal or ''} (conectado a {equipo})".replace("  ", " ")
+    fallo = abrir_ventana(base + "/", titulo=titulo)
     if fallo and sin_ventana(base + "/", *fallo, datos):
         relanzar()
     return 0

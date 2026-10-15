@@ -143,3 +143,16 @@ def test_cola_de_impresion_detenida_se_explica(monkeypatch):
         monkeypatch.setattr(imp, "_winspool", lambda: (falso_ctypes, wintypes, w))
         with pytest.raises(imp.ErrorImpresora, match=esperado):
             imp.listar()
+
+
+def test_simbolos_que_la_impresora_no_tiene_se_aproximan():
+    datos = imp.escpos([("☎ 2 222 2222 • Despacho ✚ Turno ✓ ★", False, False)])
+    assert "Tel 2 222 2222 - Despacho + Turno v *".encode("cp850") in datos
+
+
+def test_los_renglones_no_terminan_en_espacio():
+    """textwrap deja o no un espacio al final según la versión de Python: los renglones nunca lo llevan."""
+    for texto in ("por Ñandú a PARACETAMOL500MGX16COMPRIMIDOSRECUBIERTOS Gracias", "Gracias por PARACETAMOL500MGX16COMPRIMIDOS"):
+        for columnas in (8, 12, 16, 24):
+            for t, _, _ in imp.componer([{"tipo": "texto", "texto": texto}], columnas):
+                assert t == t.rstrip()

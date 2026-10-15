@@ -345,8 +345,9 @@ def test_diseno_del_ticket_se_valida_y_se_guarda(api):
     ]                                                              # la línea vacía no se guarda
     assert d["pie"] == [{"texto": "Gracias", "alinear": "izq", "negrita": True, "grande": False}]
     assert d["mostrar"] == {"atendio": True, "cliente": True, "neto_iva": False, "cambio": True}
-    # Un texto largo se corta y queda en una línea; el JSON largo no se corta a 500 caracteres.
-    largo = api.put("/api/config", {"ticket_diseno": {"encabezado": [{"texto": "x" * 300}] * 10, "pie": []}})
+    # Una línea de más de 120 letras no se corta en silencio; el JSON largo no se corta a 500 caracteres.
+    api.put("/api/config", {"ticket_diseno": {"encabezado": [{"texto": "x" * 121}], "pie": []}}, esperado=400)
+    largo = api.put("/api/config", {"ticket_diseno": {"encabezado": [{"texto": "x" * 120}] * 10, "pie": []}})
     assert all(l["texto"] == "x" * 120 for l in json.loads(largo["ticket_diseno"])["encabezado"])
     api.put("/api/config", {"ticket_diseno": {"encabezado": [{"texto": "a"}] * 21, "pie": []}}, esperado=400)
     api.put("/api/config", {"ticket_diseno": "{no es json"}, esperado=400)

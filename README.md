@@ -114,6 +114,10 @@ tecla lo devuelve ahí.
 El computador principal debe quedar encendido y con Neji POS abierto mientras las
 otras cajas vendan. Cada caja tiene su propio turno y su propio corte.
 
+Las pantallas las da el computador principal: para actualizar, basta instalar la versión
+nueva ahí. Las otras cajas la cargan solas al cambiar de pantalla (o con el botón del aviso
+«Neji POS se actualizó»), sin perder el ticket en curso.
+
 ---
 
 ## Qué incluye
@@ -145,7 +149,8 @@ otras cajas vendan. Cada caja tiene su propio turno y su propio corte.
 - **Configuración → Ticket**: se editan las líneas del encabezado y del pie (agregar,
   quitar, mover, centrar, negrita y letra grande), con los datos del negocio como
   `{nombre}` o `{rut}`, y se elige qué más sale (Atendió, cliente, neto e IVA, cambio).
-  La vista previa cambia mientras se edita.
+  La vista previa cambia mientras se edita y, en NejiPOS.exe, muestra los mismos renglones
+  que salen en la impresora de tickets.
 - **Cotizaciones** que no descuentan inventario y después se cargan en un ticket
   para venderlas.
 

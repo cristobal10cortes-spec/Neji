@@ -70,7 +70,8 @@ def _texto(valor):
 
 
 def _partir(texto, ancho):
-    return textwrap.wrap(texto, ancho, break_long_words=True, break_on_hyphens=False) or [""]
+    # Sin espacios al final: textwrap los deja o no según la versión de Python (3.12 / 3.13).
+    return [l.rstrip() for l in textwrap.wrap(texto, ancho, break_long_words=True, break_on_hyphens=False)] or [""]
 
 
 def componer(bloques, columnas):
@@ -106,6 +107,14 @@ def componer(bloques, columnas):
     return renglones
 
 
+# Lo que no existe en la página de códigos de la impresora (se usa igual en la vista previa: impresion.js).
+REEMPLAZOS = {
+    "—": "-", "–": "-", "…": "...", "“": '"', "”": '"', "‘": "'", "’": "'", "€": "EUR", "·": "-",
+    "•": "-", "☎": "Tel", "✆": "Tel", "📞": "Tel", "✚": "+", "✓": "v", "✔": "v", "→": "->", "←": "<-",
+    "★": "*", "☆": "*",
+}
+
+
 def _codificar(texto, codec):
     """Texto -> bytes de la impresora. Lo que no existe en esa página de códigos se aproxima."""
     salida = bytearray()
@@ -115,8 +124,7 @@ def _codificar(texto, codec):
             continue
         except UnicodeEncodeError:
             pass
-        reemplazo = {"—": "-", "–": "-", "…": "...", "“": '"', "”": '"', "‘": "'", "’": "'", "€": "EUR",
-                     "·": "-"}.get(letra)
+        reemplazo = REEMPLAZOS.get(letra)
         if reemplazo is None:
             reemplazo = unicodedata.normalize("NFKD", letra).encode("ascii", "ignore").decode() or "?"
         salida += reemplazo.encode(codec, "replace")
