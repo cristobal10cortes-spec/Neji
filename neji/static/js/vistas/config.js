@@ -7,7 +7,7 @@ import {
   DATOS_NEGOCIO, PARTES_TICKET, bloquesTicket, configAutomatica, disenoPredeterminado, disenoTicket, esDe58, escritorio, guardarImpresora,
   impresoraSugerida, imprimir, imprimirConDialogo, leerImpresora, listarImpresoras, papelDe, ticketVenta, trabajoImpresion,
 } from '../impresion.js';
-import { aviso, avisoError, fecha, formulario, h, numero, pestanas, tabla, vaciar } from '../ui.js';
+import { aviso, avisoError, confirmar, fecha, formulario, h, numero, pestanas, tabla, vaciar } from '../ui.js';
 import { importadorCsv } from './productos.js';
 
 let pestanaActual = null;
@@ -396,6 +396,12 @@ async function vistaUsuarios(zona) {
 
 /** Varias cajas: las otras se conectan a este equipo por la red local. */
 function panelRed(equipo) {
+  if (equipo?.web) {
+    return h('div', { style: { marginTop: '1.2rem' } },
+      h('h3', 'Varias cajas'),
+      h('p', 'Neji está en internet: cada caja entra desde su navegador a ', h('b.mono', equipo.direccion_web),
+        ' con su usuario. Luego elige en cada equipo qué caja es, en la pestaña «Esta terminal».'));
+  }
   const permitir = h('input', { type: 'checkbox', checked: estado.config.modo_red === '1' });
   const situacion = h('div');
   const pintar = () => {
@@ -615,7 +621,9 @@ async function vistaImpresora(zona) {
     const lista = !detectadas.escritorio
       ? h('div.aviso-suave',
         h('p', h('b', 'Estás usando Neji POS en el navegador. '), 'Aquí la impresora se elige en el cuadro de impresión.'),
-        h('p.ayuda', 'Con el programa NejiPOS.exe, Neji encuentra solo las impresoras instaladas en este computador (USB, red o serie: POS-80, POS-58, SLK, Epson, Xprinter…) e imprime directo, sin preguntar.'))
+        estado.web
+          ? h('p.ayuda', 'Para que el ticket salga sin el cuadro de impresión, deja la impresora de tickets como predeterminada de este computador y abre la caja con el acceso directo de Chrome con --kiosk-printing (instrucciones en el README, «Farmacia Piedra en internet»).')
+          : h('p.ayuda', 'Con el programa NejiPOS.exe, Neji encuentra solo las impresoras instaladas en este computador (USB, red o serie: POS-80, POS-58, SLK, Epson, Xprinter…) e imprime directo, sin preguntar.'))
       : !detectadas.ok
         ? h('div.error-modal', detectadas.error || 'No se pudieron leer las impresoras.')
         : tabla([
@@ -695,8 +703,29 @@ async function vistaRespaldos(zona) {
         { titulo: 'Tamaño', valor: (r) => `${numero(Math.round(r.tamano / 1024))} KB`, clase: 'num' },
         { titulo: '', valor: (r) => h('button.btn.chico', { type: 'button', onclick: () => descargar(`/api/respaldos/${encodeURIComponent(r.nombre)}`) }, 'Descargar') },
       ], respaldos, { vacio: 'Aún no hay respaldos.' }),
-      h('p', 'Tus datos están en ', h('b.mono', carpeta), '. Los respaldos automáticos quedan en la carpeta «respaldos» dentro de ella.'),
-      h('p.ayuda', `Para restaurar: cierra Neji POS, reemplaza el archivo neji.db de esa carpeta por el respaldo (renómbralo a neji.db) y vuelve a abrir.`)));
+      equipo?.web
+        ? h('p', 'Tus datos están en el servidor, junto con los respaldos automáticos.')
+        : h('p', 'Tus datos están en ', h('b.mono', carpeta), '. Los respaldos automáticos quedan en la carpeta «respaldos» dentro de ella.'),
+      h('div.panel', { style: { marginTop: '1rem' } },
+        h('h3', 'Restaurar un respaldo'),
+        h('p', 'Reemplaza todos los datos por los de un respaldo: uno descargado de aquí o el archivo neji.db del programa de Windows (está en su carpeta «datos»). Antes se guarda un respaldo de lo que hay ahora.'),
+        h('div.fila', archivo, h('button.btn.peligro', { type: 'button', onclick: restaurar }, 'Restaurar')))));
+  };
+  const archivo = h('input', { type: 'file', accept: '.db' });
+  const restaurar = async () => {
+    const elegido = archivo.files?.[0];
+    if (!elegido) return aviso('Elige el archivo del respaldo (.db).', 'error');
+    if (!(await confirmar('Restaurar respaldo', `Todos los datos actuales se reemplazan por los de «${elegido.name}». Después tendrás que volver a entrar con un usuario de ese respaldo.`, { aceptar: 'Restaurar', peligro: true }))) return null;
+    const datos = new FormData();
+    datos.append('archivo', elegido);
+    try {
+      await api.subir('/api/respaldos/restaurar', datos);
+      aviso('Respaldo restaurado. Entra de nuevo con tu usuario.', 'ok', 6000);
+      setTimeout(() => location.reload(), 1500);
+    } catch (e) {
+      avisoError(e);
+    }
+    return null;
   };
   await cargar();
 }
@@ -711,7 +740,7 @@ export async function montar(contenedor, parametros = {}) {
   const barra = h('div');
   const zona = h('div');
   // La versión, para saber cuál está abierta (por ejemplo, después de instalar una nueva).
-  vaciar(contenedor, h('div.fila.entre', h('h2', 'Configuración'), h('span.version', `Neji POS versión ${estado.version || '—'}`)), barra, zona);
+  vaciar(contenedor, h('div.fila.entre', h('h2', 'Configuración'), h('span.version', `${estado.marca || 'Neji POS'} versión ${estado.version || '—'}`)), barra, zona);
 
   async function mostrar(p) {
     actual = p;
