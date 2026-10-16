@@ -45,6 +45,22 @@ permite disco y los datos se perderían.
 
 **Actualizar:** es automático: cada cambio que entra a `main` se publica solo.
 
+**Prueba gratis en PythonAnywhere** (para mostrarla; es más lenta y la cuenta gratis se
+debe renovar con un clic cada 3 meses):
+
+1. Crea una cuenta gratis en [pythonanywhere.com](https://www.pythonanywhere.com)
+   (el nombre de usuario queda en la dirección: `usuario.pythonanywhere.com`).
+2. **Files**: sube `farmacia-piedra.zip` (las carpetas `neji/` y `wsgi_pythonanywhere.py`
+   comprimidas).
+3. **Consoles → Bash**, y escribe:
+   `unzip farmacia-piedra.zip -d farmacia && python3.11 -m pip install --user "flask>=3"`
+4. **Web → Add a new web app → Manual configuration → Python 3.11**.
+5. En esa página, abre el **WSGI configuration file**, borra todo y deja solo las cuatro
+   líneas que están al comienzo de `wsgi_pythonanywhere.py` (con tu código de instalación).
+   Guarda, activa **Force HTTPS** y presiona **Reload**.
+6. Abre `https://usuario.pythonanywhere.com` y sigue como en Render (código de instalación,
+   administrador y, si quieres, restaurar el `neji.db` del programa de Windows).
+
 (También está `fly.toml` para [Fly.io](https://fly.io), con servidor en Santiago:
 `fly volumes create datos --region scl --size 1`, `fly secrets set NEJI_CODIGO_INSTALACION=...`
 y `fly deploy`.)

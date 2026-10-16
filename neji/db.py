@@ -1,6 +1,7 @@
 """Conexión a SQLite y utilidades de transacción."""
 
 import json
+import os
 import sqlite3
 import unicodedata
 from contextlib import contextmanager
@@ -65,7 +66,10 @@ def conectar(ruta):
     con.create_function("sin_acentos", 1, sin_acentos, deterministic=True)
     con.execute("PRAGMA foreign_keys = ON")
     con.execute("PRAGMA busy_timeout = 10000")
-    con.execute("PRAGMA journal_mode = WAL")
+    # WAL necesita memoria compartida en el mismo disco: en discos de red (PythonAnywhere) se apaga
+    # con NEJI_SIN_WAL=1 y se usa el diario de siempre.
+    con.execute("PRAGMA journal_mode = DELETE" if os.environ.get("NEJI_SIN_WAL") == "1"
+                else "PRAGMA journal_mode = WAL")
     return con
 
 
