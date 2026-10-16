@@ -1,0 +1,24 @@
+# Farmacia Piedra en Render (https://render.com). En Render: New → Blueprint → este repositorio.
+# Ver README, «Farmacia Piedra en internet». Una sola instancia: la base es un archivo SQLite en el disco.
+services:
+  - type: web
+    name: farmacia-piedra
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter          # el plan gratis no permite disco: los datos se perderían
+    region: virginia       # la más cercana a Chile
+    branch: main
+    autoDeploy: true       # cada cambio que entra a main se publica solo
+    healthCheckPath: /api/estado
+    numInstances: 1
+    envVars:
+      - key: NEJI_MARCA
+        value: Farmacia Piedra
+      - key: TZ
+        value: America/Santiago
+      - key: NEJI_CODIGO_INSTALACION
+        sync: false        # Render lo pide al crear el Blueprint: lo eliges tú
+    disk:
+      name: datos
+      mountPath: /datos
+      sizeGB: 1

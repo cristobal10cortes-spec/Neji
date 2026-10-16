@@ -29,6 +29,9 @@ MAX_LINEAS_TICKET = 20
 # Freno a quien prueba contraseñas (importa cuando Neji está en internet): tras INTENTOS_MAXIMOS fallos
 # seguidos desde una misma dirección, o para un mismo usuario, se espera BLOQUEO_SEGUNDOS.
 INTENTOS_MAXIMOS = 8
+# Por dirección se permite más: detrás de algunos proxies (Render) varias cajas pueden verse con la
+# misma dirección, y una cajera que se equivoca no debe bloquear a las demás.
+INTENTOS_MAXIMOS_POR_DIRECCION = 30
 BLOQUEO_SEGUNDOS = 15 * 60
 _fallos = {}
 _fallos_lock = threading.Lock()
@@ -45,7 +48,7 @@ def _revisar_bloqueo(usuario):
             cuenta, desde = _fallos.get(clave, (0, ahora_s))
             if ahora_s - desde > BLOQUEO_SEGUNDOS:
                 _fallos.pop(clave, None)
-            elif cuenta >= INTENTOS_MAXIMOS:
+            elif cuenta >= (INTENTOS_MAXIMOS_POR_DIRECCION if clave.startswith("ip:") else INTENTOS_MAXIMOS):
                 minutos = max(1, round((BLOQUEO_SEGUNDOS - (ahora_s - desde)) / 60))
                 raise ErrorNegocio(f"Demasiados intentos fallidos. Espera {minutos} minutos e inténtalo de nuevo.",
                                    status=429)

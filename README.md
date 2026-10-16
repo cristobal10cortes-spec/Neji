@@ -23,40 +23,38 @@ en una base SQLite con respaldo automático diario. También puede vivir **en in
 ## Farmacia Piedra en internet
 
 La misma aplicación, en un servidor: cada caja entra desde Chrome a una dirección
-(por ejemplo `https://farmacia-piedra.fly.dev`) con su usuario, sin instalar nada.
+(por ejemplo `https://farmacia-piedra.onrender.com`) con su usuario, sin instalar nada.
 Los datos quedan en el servidor, con el mismo respaldo automático diario.
 
-**Dónde vive:** [Fly.io](https://fly.io), en su centro de datos de Santiago (`scl`), con
-un disco de 1 GB para la base de datos. La configuración está en `fly.toml` y `Dockerfile`.
-Una máquina pequeña siempre encendida más el disco cuestan unos pocos dólares al mes
-(revisa los precios vigentes en fly.io antes de crear la cuenta).
+**Dónde vive:** [Render](https://render.com), en Virginia (EE.UU.), con un disco de 1 GB
+para la base de datos. La configuración está en `render.yaml` y `Dockerfile`. Usa el plan
+Starter más el disco (revisa los precios vigentes en render.com): el plan gratis no
+permite disco y los datos se perderían.
 
-**Primera vez** (en un computador con [flyctl](https://fly.io/docs/flyctl/install/)):
+**Primera vez:**
 
-```bash
-fly auth login
-fly apps create farmacia-piedra
-fly volumes create datos --region scl --size 1 -a farmacia-piedra
-fly secrets set -a farmacia-piedra NEJI_CODIGO_INSTALACION="elige-un-código-largo"
-fly deploy
-```
+1. Crea una cuenta en render.com entrando con GitHub.
+2. **New → Blueprint**, elige este repositorio y la rama `main`.
+3. Render pide `NEJI_CODIGO_INSTALACION`: escribe un código largo que solo tú sepas.
+4. **Apply**. Cuando termine, abre la dirección del servicio (arriba en su página).
+5. La primera pantalla pide ese **código de instalación**: así nadie más puede crear
+   el administrador.
+6. Para traer los datos del programa de Windows, entra como administrador a
+   **Configuración → Respaldos → Restaurar un respaldo** y sube el archivo `neji.db`
+   (o un respaldo descargado desde el programa).
 
-Luego abre la dirección que muestra `fly deploy`. La primera pantalla pide el **código
-de instalación** (el que pusiste arriba): así nadie más puede crear el administrador.
-Para traer los datos del programa de Windows, entra como administrador a
-**Configuración → Respaldos → Restaurar un respaldo** y sube el archivo `neji.db`
-(o un respaldo descargado desde el programa).
+**Actualizar:** es automático: cada cambio que entra a `main` se publica solo.
 
-**Actualizar:** `fly deploy`, o en GitHub la pestaña **Actions → «Farmacia Piedra (web)» →
-Run workflow** (necesita el secreto `FLY_API_TOKEN` del repositorio, que se obtiene con
-`fly tokens create deploy -a farmacia-piedra`).
+(También está `fly.toml` para [Fly.io](https://fly.io), con servidor en Santiago:
+`fly volumes create datos --region scl --size 1`, `fly secrets set NEJI_CODIGO_INSTALACION=...`
+y `fly deploy`.)
 
 **Imprimir tickets:** en el navegador se usa el cuadro de impresión. Para que el ticket
 salga directo, deja la impresora de tickets como **predeterminada** en ese computador y
 crea un acceso directo de Chrome con:
 
 ```
-chrome.exe --kiosk-printing --app=https://farmacia-piedra.fly.dev
+chrome.exe --kiosk-printing --app=https://farmacia-piedra.onrender.com
 ```
 
 El cajón de dinero se abre si la impresora lo hace al imprimir (opción del controlador).
@@ -65,7 +63,7 @@ El cajón de dinero se abre si la impresora lo hace al imprimir (opción del con
 instalación), `NEJI_MARCA` (el nombre arriba a la izquierda), `NEJI_CODIGO_INSTALACION`,
 `NEJI_DATOS` (carpeta de datos) y `NEJI_CLAVE_SECRETA` (opcional; si falta, se crea una en
 la carpeta de datos). Debe correr **una sola máquina**: la base es un archivo SQLite.
-Tras 8 contraseñas fallidas seguidas, ese usuario o dirección espera 15 minutos.
+Tras 8 contraseñas fallidas seguidas, ese usuario espera 15 minutos (30 desde una misma dirección).
 
 ## Instalación en Windows
 
