@@ -23,10 +23,20 @@ def _clave_secreta(carpeta):
     return ruta.read_text(encoding="utf-8").strip()
 
 
+def _activado(variable):
+    return (os.environ.get(variable) or "").strip().lower() in ("1", "si", "sí", "true", "yes")
+
+
 def create_app(config=None):
     app = Flask(__name__, static_folder="static", static_url_path="/static")
     datos = os.environ.get("NEJI_DATOS") or str(RAIZ / "datos")
     app.config.update(
+        # En internet (NEJI_WEB=1): detrás del proxy HTTPS del hosting, cookie solo por HTTPS y la
+        # primera configuración pide el código de instalación (NEJI_CODIGO_INSTALACION).
+        WEB=_activado("NEJI_WEB"),
+        MARCA=(os.environ.get("NEJI_MARCA") or "").strip(),
+        CODIGO_INSTALACION=(os.environ.get("NEJI_CODIGO_INSTALACION") or "").strip(),
+        SECRET_KEY=os.environ.get("NEJI_CLAVE_SECRETA") or None,
         DATOS=datos,
         DATABASE=os.path.join(datos, "neji.db"),
         RESPALDOS=os.path.join(datos, "respaldos"),
@@ -38,6 +48,10 @@ def create_app(config=None):
     )
     if config:
         app.config.update(config)
+    if app.config["WEB"]:
+        from werkzeug.middleware.proxy_fix import ProxyFix
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+        app.config["SESSION_COOKIE_SECURE"] = True
     os.makedirs(app.config["DATOS"], exist_ok=True)
     app.secret_key = app.config.get("SECRET_KEY") or _clave_secreta(app.config["DATOS"])
     app.json.ensure_ascii = False

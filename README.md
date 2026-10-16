@@ -15,9 +15,57 @@ El detalle de esa investigación está en [`docs/investigacion.md`](docs/investi
 No se copió código de ningún programa: todo está escrito desde cero.
 
 Funciona **sin internet**: los datos quedan en el computador del negocio,
-en una base SQLite con respaldo automático diario.
+en una base SQLite con respaldo automático diario. También puede vivir **en internet**
+(así funciona Farmacia Piedra): ver [Farmacia Piedra en internet](#farmacia-piedra-en-internet).
 
 ---
+
+## Farmacia Piedra en internet
+
+La misma aplicación, en un servidor: cada caja entra desde Chrome a una dirección
+(por ejemplo `https://farmacia-piedra.fly.dev`) con su usuario, sin instalar nada.
+Los datos quedan en el servidor, con el mismo respaldo automático diario.
+
+**Dónde vive:** [Fly.io](https://fly.io), en su centro de datos de Santiago (`scl`), con
+un disco de 1 GB para la base de datos. La configuración está en `fly.toml` y `Dockerfile`.
+Una máquina pequeña siempre encendida más el disco cuestan unos pocos dólares al mes
+(revisa los precios vigentes en fly.io antes de crear la cuenta).
+
+**Primera vez** (en un computador con [flyctl](https://fly.io/docs/flyctl/install/)):
+
+```bash
+fly auth login
+fly apps create farmacia-piedra
+fly volumes create datos --region scl --size 1 -a farmacia-piedra
+fly secrets set -a farmacia-piedra NEJI_CODIGO_INSTALACION="elige-un-código-largo"
+fly deploy
+```
+
+Luego abre la dirección que muestra `fly deploy`. La primera pantalla pide el **código
+de instalación** (el que pusiste arriba): así nadie más puede crear el administrador.
+Para traer los datos del programa de Windows, entra como administrador a
+**Configuración → Respaldos → Restaurar un respaldo** y sube el archivo `neji.db`
+(o un respaldo descargado desde el programa).
+
+**Actualizar:** `fly deploy`, o en GitHub la pestaña **Actions → «Farmacia Piedra (web)» →
+Run workflow** (necesita el secreto `FLY_API_TOKEN` del repositorio, que se obtiene con
+`fly tokens create deploy -a farmacia-piedra`).
+
+**Imprimir tickets:** en el navegador se usa el cuadro de impresión. Para que el ticket
+salga directo, deja la impresora de tickets como **predeterminada** en ese computador y
+crea un acceso directo de Chrome con:
+
+```
+chrome.exe --kiosk-printing --app=https://farmacia-piedra.fly.dev
+```
+
+El cajón de dinero se abre si la impresora lo hace al imprimir (opción del controlador).
+
+**Variables del servidor:** `NEJI_WEB=1` (la pone el Dockerfile: HTTPS, código de
+instalación), `NEJI_MARCA` (el nombre arriba a la izquierda), `NEJI_CODIGO_INSTALACION`,
+`NEJI_DATOS` (carpeta de datos) y `NEJI_CLAVE_SECRETA` (opcional; si falta, se crea una en
+la carpeta de datos). Debe correr **una sola máquina**: la base es un archivo SQLite.
+Tras 8 contraseñas fallidas seguidas, ese usuario o dirección espera 15 minutos.
 
 ## Instalación en Windows
 
@@ -327,7 +375,8 @@ una planilla guardada como CSV desde Excel, eleventa u otro sistema:
 - Descarga un respaldo de vez en cuando desde **Configuración → Respaldos** y
   guárdalo fuera del computador (en un pendrive o en la nube).
 
-Para restaurar un respaldo:
+Para restaurar un respaldo, en **Configuración → Respaldos → Restaurar un respaldo**
+sube el archivo (antes se guarda un respaldo de lo que había). O, a mano:
 
 1. Cierra Neji.
 2. Reemplaza `neji.db` de la carpeta de datos por el archivo del respaldo, renombrado

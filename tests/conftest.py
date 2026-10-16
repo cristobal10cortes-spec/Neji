@@ -1,6 +1,15 @@
 import pytest
 
 from neji import create_app
+from neji.api import sistema
+
+
+@pytest.fixture(autouse=True)
+def _sin_intentos_fallidos():
+    """El freno de intentos de acceso es del proceso: cada prueba parte de cero."""
+    sistema._fallos.clear()
+    yield
+    sistema._fallos.clear()
 
 
 @pytest.fixture
