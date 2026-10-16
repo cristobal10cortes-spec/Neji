@@ -55,6 +55,17 @@ def test_freno_de_intentos_de_acceso(tmp_path):
     c.post("/api/login", {"usuario": "admin", "password": "1234"})
 
 
+def test_un_usuario_bloqueado_no_bloquea_a_los_demas(tmp_path):
+    c = Cliente(_app(tmp_path).test_client())
+    c.post("/api/setup", SETUP)
+    c.post("/api/usuarios", {"usuario": "caja", "password": "1111", "rol": "cajero"}, esperado=201)
+    c.post("/api/logout")
+    for _ in range(sistema.INTENTOS_MAXIMOS):
+        c.post("/api/login", {"usuario": "admin", "password": "mala"}, esperado=401)
+    c.post("/api/login", {"usuario": "admin", "password": "1234"}, esperado=429)
+    c.post("/api/login", {"usuario": "caja", "password": "1111"})
+
+
 def test_restaurar_respaldo(tmp_path):
     # Un respaldo de «otro computador», con su propio negocio y administrador.
     otro = _app(tmp_path / "otro")
