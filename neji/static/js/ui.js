@@ -194,6 +194,8 @@ export function modal({ titulo, cuerpo, botones = [], ancho = '', alCerrar, alTe
     error(mensaje) {
       errorEl.textContent = mensaje || '';
       errorEl.classList.toggle('oculto', !mensaje);
+      // El aviso va arriba del cuerpo: si se bajó (p. ej. hasta «Guardar»), se lleva a la vista.
+      if (mensaje) errorEl.scrollIntoView({ block: 'nearest' });
     },
   };
 
@@ -362,7 +364,10 @@ export function formulario({ titulo, campos, aceptar = 'Guardar', ancho = '', al
         resultado = alEnviar ? (await alEnviar(valores)) ?? valores : valores;
         m.cerrar();
       } catch (err) {
+        boton.disabled = false;
         m.error(err.message);
+        // Al deshabilitarse, el botón pierde el foco: se le devuelve para seguir con el teclado.
+        if (!m.el.contains(document.activeElement)) boton.focus();
       } finally {
         boton.disabled = false;
       }

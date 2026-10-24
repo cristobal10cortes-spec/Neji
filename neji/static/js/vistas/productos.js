@@ -69,7 +69,12 @@ async function abrirFormProducto(producto) {
     alMostrar: (e) => {
       const generar = h('button.btn.chico', { type: 'button' }, 'Generar código interno');
       generar.addEventListener('click', async () => {
-        try { e.codigo.value = (await api.get('/api/productos/siguiente-codigo')).codigo; } catch (err) { avisoError(err); }
+        try {
+          e.codigo.value = (await api.get('/api/productos/siguiente-codigo')).codigo;
+          // Sigue el recorrido con Enter: el próximo dato es la descripción.
+          e.descripcion.focus();
+          e.descripcion.select();
+        } catch (err) { avisoError(err); }
       });
       e.codigo.after(generar);
       const desdeMargen = () => {

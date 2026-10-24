@@ -249,3 +249,51 @@ def test_la_version_empaquetada_manda(tmp_path, monkeypatch):
     assert v.version() == "9.9.9"
     monkeypatch.delenv("NEJI_VERSION")
     assert v.version() == "desarrollo"
+
+
+def test_una_copia_antigua_no_cierra_la_version_nueva_abierta(monkeypatch):
+    vistos = []
+    monkeypatch.setattr(escritorio, "VERSION", "0.1.14")
+    monkeypatch.setattr(escritorio, "estado_neji", lambda base, segundos=2.0: {"configurado": True, "version": "0.1.16"})
+    monkeypatch.setattr(escritorio, "mensaje", lambda texto, pregunta=False, **k: vistos.append((texto, pregunta)) or True)
+    monkeypatch.setattr(escritorio, "cerrar_neji_en_puerto", lambda puerto: pytest.fail("no debía cerrar la nueva"))
+    assert escritorio.resolver_otra_instancia("http://127.0.0.1:5000", 5000) is False
+    texto, pregunta = vistos[0]
+    assert not pregunta and "0.1.16" in texto and "más nueva" in texto and "copia antigua" in texto
+
+
+def test_ejecutar_no_se_cae_si_el_comando_tarda(monkeypatch):
+    import subprocess
+
+    def lento(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="netstat", timeout=15)
+    monkeypatch.setattr(subprocess, "run", lento)
+    assert escritorio._ejecutar("netstat", "-ano") == ""
+
+
+def test_conectar_muestra_la_version_del_principal(monkeypatch):
+    abiertas, avisos = [], []
+    monkeypatch.setattr(escritorio, "VERSION", "0.1.16")
+    monkeypatch.setattr(escritorio, "esperar", lambda base, segundos=20: True)
+    monkeypatch.setattr(escritorio, "abrir_ventana", lambda url, red=False, titulo=None: abiertas.append(titulo))
+    monkeypatch.setattr(escritorio, "mensaje", lambda texto, **k: avisos.append(texto))
+    # El principal tiene una versión anterior: se avisa y el título dice la del principal.
+    monkeypatch.setattr(escritorio, "estado_neji", lambda base, segundos=2.0: {"configurado": True, "version": "0.1.14"})
+    assert escritorio.conectar("192.168.1.20", None) == 0
+    assert abiertas[-1] == "Neji POS 0.1.14 (conectado a 192.168.1.20:5000)"
+    assert "0.1.14" in avisos[-1] and "equipo principal" in avisos[-1]
+    # El principal está al día (o más nuevo): sin aviso.
+    avisos.clear()
+    monkeypatch.setattr(escritorio, "estado_neji", lambda base, segundos=2.0: {"configurado": True, "version": "0.1.16"})
+    escritorio.conectar("192.168.1.20", None)
+    assert avisos == [] and abiertas[-1] == "Neji POS 0.1.16 (conectado a 192.168.1.20:5000)"
+
+
+def test_el_programa_compilado_no_toma_la_version_del_entorno(tmp_path, monkeypatch):
+    import neji.version as v
+    monkeypatch.setattr(v, "__file__", str(tmp_path / "version.py"))   # sin version.txt al lado
+    monkeypatch.setenv("NEJI_VERSION", "0.1.99")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    assert v.version() == "desconocida"
+    assert v.numeros("0.1.14") == (0, 1, 14) and v.numeros("0.1.14") < v.numeros("0.1.16")
+    assert v.numeros("desarrollo") is None and v.numeros(None) is None

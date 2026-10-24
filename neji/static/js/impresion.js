@@ -1,6 +1,7 @@
 // Impresión: ticket de venta, corte de caja, cotización y etiquetas con código de barras.
 
 import { estado } from './estado.js';
+import { partir } from './renglones.js';
 import { aviso, fecha, h, numero, pesos, unidadPlural } from './ui.js';
 
 const NOMBRE_METODO = {
@@ -79,10 +80,13 @@ const papelGeneral = () => (estado.config.ticket_ancho === '58' ? '58' : '80');
  * Ancho del papel con esa configuración: el elegido en este computador o, si no se eligió, el de
  * Configuración → Ticket. Una impresora encontrada sola solo lo fija si su nombre lo dice.
  */
-export function papelDe(config) {
-  if (config?.automatica) return config.papel === '58' ? '58' : papelGeneral();
-  return config?.papel === '58' || config?.papel === '80' ? config.papel : papelGeneral();
+export function papelDe(config, general = papelGeneral()) {
+  if (config?.automatica) return config.papel === '58' ? '58' : general;
+  return config?.papel === '58' || config?.papel === '80' ? config.papel : general;
 }
+
+/** Letras por línea con esa configuración (las de «Letras por línea» o las del papel). */
+export const columnasDe = (config, general) => Number(config?.columnas) || PAPEL_COLUMNAS[papelDe(config, general)];
 
 export const papelTicket = () => papelDe(leerImpresora());
 
@@ -114,8 +118,8 @@ async function impresoraParaTickets() {
 }
 
 /** Trabajo para NejiPOS.exe a partir de la configuración de la impresora. */
-export function trabajoImpresion(config, bloques, { abrirCajon = false } = {}) {
-  const papel = papelDe(config);
+export function trabajoImpresion(config, bloques, { abrirCajon = false, papelGeneral: general } = {}) {
+  const papel = papelDe(config, general);
   return {
     impresora: config.nombre, modo: config.modo === 'windows' ? 'windows' : 'escpos',
     columnas: Number(config.columnas) || PAPEL_COLUMNAS[papel], papel, cortar: config.cortar !== false,
@@ -167,12 +171,12 @@ export function imprimirConDialogo(contenido) {
  * Imprime un ticket (directo en la impresora de tickets si está NejiPOS.exe) o cualquier hoja (etiquetas,
  * compras sugeridas) con el cuadro de impresión. `abrirCajon`: venta en efectivo con cajón conectado.
  */
-export async function imprimir(contenido, { abrirCajon = false } = {}) {
+export async function imprimir(contenido, { abrirCajon = false, papelGeneral: general } = {}) {
   if (contenido?.classList?.contains('ticket')) {
     const config = await impresoraParaTickets();
     if (config) {
       const api = await escritorio();
-      const r = api ? await api.imprimir(trabajoImpresion(config, bloquesTicket(contenido), { abrirCajon })) : null;
+      const r = api ? await api.imprimir(trabajoImpresion(config, bloquesTicket(contenido), { abrirCajon, papelGeneral: general })) : null;
       if (r?.ok) {
         if (r.aviso) aviso(r.aviso, 'error', 8000);   // salió el ticket, pero no se abrió el cajón
         return true;
@@ -207,7 +211,9 @@ export const PARTES_TICKET = [
 ];
 
 const linea = (texto, extra = {}) => ({ texto, alinear: 'centro', negrita: false, grande: false, ...extra });
-const textoEnLineas = (t) => String(t || '').split('\n').map((x) => x.trim()).filter(Boolean);
+// Los textos de antes (hasta 500 letras) se parten por palabras en líneas de 120 como máximo.
+const textoEnLineas = (t) => String(t || '').split('\n').map((x) => x.trim()).filter(Boolean)
+  .flatMap((x) => partir(x.split(/\s+/).join(' '), 120));
 
 /** Diseño de fábrica: el mismo ticket de siempre. */
 export function disenoPredeterminado(c = {}) {

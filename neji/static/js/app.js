@@ -2,7 +2,7 @@
 
 import { api, cuandoSeCierreSesion } from './api.js';
 import { cargarSesion, esFarmacia, estado, nombreCaja, puede } from './estado.js';
-import { aviso, avisoError, cerrarModales, h, teclaEnModal, vaciar } from './ui.js';
+import { aviso, avisoError, cerrarModales, h, modalAbierto, teclaEnModal, vaciar } from './ui.js';
 import * as caja from './vistas/caja.js';
 import * as clientes from './vistas/clientes.js';
 import * as config from './vistas/config.js';
@@ -54,9 +54,39 @@ function vistasPermitidas() {
  * Vuelve a leer el usuario: el administrador puede cambiar sus permisos mientras la sesión está abierta.
  * Devuelve true si cambiaron (hay que rearmar el menú).
  */
+// --- Versión nueva en el servidor ---------------------------------------------------------------
+// Una caja que quedó abierta mientras se actualizaba el equipo principal seguiría con las pantallas
+// anteriores: al cambiar de pantalla se recarga (el ticket en curso está guardado y no se pierde) y,
+// mientras tanto, un aviso ofrece cargar la versión nueva.
+
+let avisoVersion = null;
+
+function versionNueva(version, { recargar = false } = {}) {
+  if (!version || !estado.version || version === estado.version) return false;
+  if (recargar && !modalAbierto()) {
+    location.reload();
+    return true;
+  }
+  if (!avisoVersion) {
+    avisoVersion = h('div.aviso-version', { role: 'status' },
+      h('span', `Neji POS se actualizó a la versión ${version}.`),
+      h('button.btn.chico.primario', { type: 'button', onclick: () => location.reload() }, 'Cargar la versión nueva'));
+    document.body.append(avisoVersion);
+  }
+  return false;
+}
+
+setInterval(async () => {
+  if (!estado.usuario) return;
+  try {
+    versionNueva((await api.get('/api/estado')).version);
+  } catch { /* sin conexión: se revisa la próxima vez */ }
+}, 120000);
+
 async function refrescarUsuario() {
   try {
-    const { usuario } = await api.get('/api/estado');
+    const { usuario, version } = await api.get('/api/estado');
+    if (versionNueva(version, { recargar: true })) return false;
     if (!usuario) return false;
     const huella = (u) => JSON.stringify([u.rol, u.permisos]);
     const cambio = huella(usuario) !== huella(estado.usuario);

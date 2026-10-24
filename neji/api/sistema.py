@@ -89,10 +89,12 @@ def leer_diseno_ticket(valor):
         if len(crudas) > MAX_LINEAS_TICKET:
             raise ErrorNegocio(f"{titulo}: como máximo {MAX_LINEAS_TICKET} líneas.")
         salida = []
-        for l in crudas:
-            texto = " ".join(str(l.get("texto") or "").split())[:120]
+        for numero, l in enumerate(crudas, 1):
+            texto = " ".join(str(l.get("texto") or "").split())
             if not texto:
                 continue   # las líneas vacías no se guardan
+            if len(texto) > 120:   # no se corta en silencio: la pantalla parte los textos largos de antes
+                raise ErrorNegocio(f"{titulo}, línea {numero}: como máximo 120 letras (tiene {len(texto)}).")
             salida.append({"texto": texto, "alinear": "izq" if l.get("alinear") == "izq" else "centro",
                            "negrita": booleano(l.get("negrita")), "grande": booleano(l.get("grande"))})
         return salida
