@@ -1,15 +1,18 @@
 """Configuración inicial, sesión, usuarios, cajas, departamentos, configuración y respaldos."""
 
+import hmac
 import json
 import os
+import threading
+import time
 
-from flask import current_app, jsonify, send_from_directory, session
+from flask import current_app, jsonify, request, send_from_directory, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .. import equipo, respaldos
 from ..auth import PERMISOS, con_permiso, leer_permisos, permisos_de, solo_admin, usuario_actual
 from ..chile import formatear_rut, validar_rut
-from ..db import CONFIG_POR_DEFECTO, ahora, filas, get_db, leer_config, transaccion
+from ..db import CONFIG_POR_DEFECTO, ahora, cerrar_db, filas, get_db, leer_config, transaccion
 from ..validar import ErrorNegocio, booleano, entero, texto
 from ..version import VERSION
 from . import bp, datos_json
@@ -22,6 +25,49 @@ OPCIONES_SI_NO = {
 CONFIG_EDITABLE = set(CONFIG_POR_DEFECTO) - {"ultimo_respaldo", "recetario_semilla"}
 PARTES_TICKET = ("atendio", "cliente", "neto_iva", "cambio")
 MAX_LINEAS_TICKET = 20
+
+# Freno a quien prueba contraseñas (importa cuando Neji está en internet): tras INTENTOS_MAXIMOS fallos
+# seguidos desde una misma dirección, o para un mismo usuario, se espera BLOQUEO_SEGUNDOS.
+INTENTOS_MAXIMOS = 8
+# Por dirección se permite más: detrás de algunos proxies (Render) varias cajas pueden verse con la
+# misma dirección, y una cajera que se equivoca no debe bloquear a las demás.
+INTENTOS_MAXIMOS_POR_DIRECCION = 30
+BLOQUEO_SEGUNDOS = 15 * 60
+_fallos = {}
+_fallos_lock = threading.Lock()
+
+
+def _claves_intento(usuario):
+    return (f"ip:{request.remote_addr}", f"usuario:{usuario.casefold()}")
+
+
+def _revisar_bloqueo(usuario):
+    ahora_s = time.monotonic()
+    with _fallos_lock:
+        for clave in _claves_intento(usuario):
+            cuenta, desde = _fallos.get(clave, (0, ahora_s))
+            if ahora_s - desde > BLOQUEO_SEGUNDOS:
+                _fallos.pop(clave, None)
+            elif cuenta >= (INTENTOS_MAXIMOS_POR_DIRECCION if clave.startswith("ip:") else INTENTOS_MAXIMOS):
+                minutos = max(1, round((BLOQUEO_SEGUNDOS - (ahora_s - desde)) / 60))
+                raise ErrorNegocio(f"Demasiados intentos fallidos. Espera {minutos} minutos e inténtalo de nuevo.",
+                                   status=429)
+
+
+def _anotar_fallo(usuario):
+    ahora_s = time.monotonic()
+    with _fallos_lock:
+        if len(_fallos) > 10000:
+            _fallos.clear()
+        for clave in _claves_intento(usuario):
+            cuenta, desde = _fallos.get(clave, (0, ahora_s))
+            _fallos[clave] = (cuenta + 1, desde)
+
+
+def _olvidar_fallos(usuario):
+    with _fallos_lock:
+        for clave in _claves_intento(usuario):
+            _fallos.pop(clave, None)
 
 
 def leer_diseno_ticket(valor):
@@ -73,7 +119,13 @@ def estado():
     configurado = con.execute("SELECT 1 FROM usuarios LIMIT 1").fetchone() is not None
     nombre = con.execute("SELECT valor FROM config WHERE clave = 'negocio_nombre'").fetchone()
     return jsonify(configurado=configurado, usuario=usuario_actual(),
-                   negocio=nombre["valor"] if nombre else "", version=VERSION)
+                   negocio=nombre["valor"] if nombre else "", version=VERSION,
+                   marca=current_app.config["MARCA"], web=current_app.config["WEB"],
+                   pide_codigo=not configurado and _pide_codigo())
+
+
+def _pide_codigo():
+    return bool(current_app.config["WEB"] or current_app.config["CODIGO_INSTALACION"])
 
 
 @bp.post("/setup")
@@ -84,6 +136,17 @@ def setup():
     with transaccion(con):
         if con.execute("SELECT 1 FROM usuarios LIMIT 1").fetchone():
             raise ErrorNegocio("El sistema ya está configurado.", status=409)
+        if _pide_codigo():
+            # En internet cualquiera podría llegar primero a esta pantalla: solo quien tiene el código
+            # (la variable NEJI_CODIGO_INSTALACION del servidor) crea el administrador.
+            esperado = current_app.config["CODIGO_INSTALACION"]
+            if not esperado:
+                raise ErrorNegocio("Falta configurar el código de instalación en el servidor "
+                                   "(NEJI_CODIGO_INSTALACION).", status=403)
+            _revisar_bloqueo("(instalacion)")
+            if not hmac.compare_digest(str(datos.get("codigo") or "").strip().encode(), esperado.encode()):
+                _anotar_fallo("(instalacion)")
+                raise ErrorNegocio("El código de instalación no es correcto.", status=403)
         usuario = texto(datos, "usuario", requerido=True, nombre="el usuario", max_largo=40)
         password = datos.get("password") or ""
         if len(password) < 4:
@@ -110,12 +173,15 @@ def setup():
 @bp.post("/login")
 def login():
     datos = datos_json()
+    nombre = str(datos.get("usuario") or "").strip()
+    _revisar_bloqueo(nombre)
     row = get_db().execute(
-        "SELECT id, password_hash FROM usuarios WHERE usuario = ? AND activo = 1",
-        (str(datos.get("usuario") or "").strip(),),
+        "SELECT id, password_hash FROM usuarios WHERE usuario = ? AND activo = 1", (nombre,),
     ).fetchone()
     if row is None or not check_password_hash(row["password_hash"], str(datos.get("password") or "")):
+        _anotar_fallo(nombre)
         raise ErrorNegocio("Usuario o contraseña incorrectos.", status=401)
+    _olvidar_fallos(nombre)
     _iniciar_sesion(row["id"])
     return jsonify(usuario=usuario_actual())
 
@@ -361,6 +427,8 @@ def borrar_departamento(dep_id):
 @solo_admin
 def datos_equipo():
     """Dónde están los datos y la dirección que usan las otras cajas para conectarse."""
+    if current_app.config["WEB"]:
+        return jsonify(web=True, direccion_web=request.host_url.rstrip("/"))
     return jsonify(equipo.describir(current_app.config["DATOS"]))
 
 
@@ -390,3 +458,20 @@ def descargar_respaldo(nombre):
         raise ErrorNegocio("Respaldo no encontrado.", status=404)
     return send_from_directory(os.path.abspath(current_app.config["RESPALDOS"]), nombre,
                                as_attachment=True)
+
+
+@bp.post("/respaldos/restaurar")
+@solo_admin
+def restaurar_respaldo():
+    """Reemplaza los datos por un respaldo subido (por ejemplo, el neji.db del programa de Windows).
+
+    Antes se respalda lo que hay, así el cambio se puede deshacer con ese respaldo."""
+    archivo = request.files.get("archivo")
+    if archivo is None or not archivo.filename:
+        raise ErrorNegocio("Elige el archivo del respaldo (.db).")
+    mantener = int(leer_config(get_db()).get("respaldos_mantener") or 10)
+    cerrar_db()
+    nombre_previo = respaldos.restaurar(current_app.config["DATABASE"], current_app.config["RESPALDOS"],
+                                        archivo, mantener)
+    session.clear()
+    return jsonify(ok=True, respaldo_previo=nombre_previo)

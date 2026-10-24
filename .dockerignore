@@ -1,0 +1,15 @@
+.git
+.github
+.vscode
+datos
+build
+dist
+empaquetado
+tests
+docs
+corand_erp.py
+escritorio.py
+**/__pycache__
+*.db
+*.db-wal
+*.db-shm

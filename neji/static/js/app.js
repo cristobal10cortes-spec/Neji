@@ -113,12 +113,20 @@ async function mostrarVista() {
   for (const b of nav.querySelectorAll('button')) b.classList.toggle('activo', b.dataset.vista === vista.clave);
   const contenedor = h('div');
   vaciar(principal, contenedor);
-  document.title = `${vista.titulo} · Neji POS`;
+  document.title = `${vista.titulo} · ${nombreMarca()}`;
   try {
     vistaActual = (await vista.modulo.montar(contenedor, tomarParametros())) || null;
   } catch (e) {
     avisoError(e);
   }
+}
+
+/** El nombre que se muestra arriba: «Neji POS», o el del servidor (NEJI_MARCA, p. ej. «Farmacia Piedra»). */
+const nombreMarca = () => estado.marca || 'Neji POS';
+
+function marca() {
+  const [primera, ...resto] = nombreMarca().split(' ');
+  return h('div.marca', primera, resto.length ? h('span', ` ${resto.join(' ')}`) : null);
 }
 
 function dibujarAplicacion() {
@@ -128,7 +136,7 @@ function dibujarAplicacion() {
   principal = h('main');
   vaciar(raiz,
     h('header.barra',
-      h('div.marca', 'Neji', h('span', ' POS')),
+      marca(),
       nav,
       h('div.sesion',
         h('span.caja', { title: `${nombreCaja()}: caja de esta terminal (se cambia en Configuración)` }, nombreCaja()),
@@ -145,23 +153,26 @@ async function salir() {
   iniciar();
 }
 
-function pantallaAcceso(configurado, negocio) {
+function pantallaAcceso(configurado, negocio, pideCodigo) {
   const error = h('div.error-modal.oculto', { role: 'alert' });
   const mostrarError = (msg) => { error.textContent = msg; error.classList.remove('oculto'); };
 
   if (!configurado) {
     const campos = {
-      negocio_nombre: h('input', { required: true, autofocus: true, placeholder: 'Ej: Minimarket Don Pepe' }),
+      negocio_nombre: h('input', { required: true, autofocus: true, placeholder: 'Ej: Minimarket Don Pepe', value: estado.marca || '' }),
       negocio_rut: h('input', { placeholder: '76.123.456-7 (opcional)' }),
       nombre: h('input', { placeholder: 'Tu nombre' }),
       usuario: h('input', { required: true, value: 'admin', autocomplete: 'username' }),
       password: h('input', { type: 'password', required: true, autocomplete: 'new-password' }),
-      modulo_farmacia: h('input', { type: 'checkbox' }),
+      modulo_farmacia: h('input', { type: 'checkbox', checked: Boolean(estado.marca && /farmacia/i.test(estado.marca)) }),
     };
+    // En internet, solo quien tiene el código de instalación (lo puso quien subió el servidor) crea el administrador.
+    if (pideCodigo) campos.codigo = h('input', { required: true, autocomplete: 'off', placeholder: 'Lo da quien instaló el servidor' });
     const form = h('form.tarjeta-login',
-      h('div.marca', 'Neji', h('span', ' POS')),
+      marca(),
       h('p.suave', 'Bienvenido. Configura tu negocio y el usuario administrador para empezar.'),
       error,
+      pideCodigo ? h('label.campo', 'Código de instalación', campos.codigo) : null,
       h('label.campo', 'Nombre del negocio', campos.negocio_nombre),
       h('label.campo', 'RUT del negocio', campos.negocio_rut),
       h('label.campo', 'Tu nombre', campos.nombre),
@@ -188,7 +199,7 @@ function pantallaAcceso(configurado, negocio) {
   const usuario = h('input', { required: true, autofocus: true, autocomplete: 'username' });
   const password = h('input', { type: 'password', required: true, autocomplete: 'current-password' });
   const form = h('form.tarjeta-login',
-    h('div.marca', 'Neji', h('span', ' POS')),
+    marca(),
     h('p.suave', negocio),
     error,
     h('label.campo', 'Usuario', usuario),
@@ -214,8 +225,11 @@ async function iniciar() {
     const r = await api.get('/api/estado');
     estado.usuario = r.usuario;
     estado.version = r.version || '';
+    estado.marca = r.marca || '';
+    estado.web = Boolean(r.web);
+    document.title = nombreMarca();
     if (!r.usuario) {
-      pantallaAcceso(r.configurado, r.negocio);
+      pantallaAcceso(r.configurado, r.negocio, r.pide_codigo);
       return;
     }
     await cargarSesion();

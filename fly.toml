@@ -1,0 +1,33 @@
+# Farmacia Piedra en Fly.io, en Santiago (scl). Ver README, «Farmacia Piedra en internet».
+# Una sola máquina: la base de datos es un archivo SQLite en el disco «datos».
+app = "farmacia-piedra"
+primary_region = "scl"
+
+[build]
+
+[env]
+  NEJI_MARCA = "Farmacia Piedra"
+  TZ = "America/Santiago"
+
+[[mounts]]
+  source = "datos"
+  destination = "/datos"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # La caja tiene que responder al tiro: la máquina queda siempre encendida.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/api/estado"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

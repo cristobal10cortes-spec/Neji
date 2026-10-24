@@ -1,0 +1,32 @@
+# Sube Farmacia Piedra a Fly.io. Solo se ejecuta a mano (pestaña Actions → «Farmacia Piedra (web)» →
+# Run workflow) y necesita el secreto FLY_API_TOKEN del repositorio. Ver README, «Farmacia Piedra en internet».
+name: Farmacia Piedra (web)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-fly
+  cancel-in-progress: false
+
+jobs:
+  desplegar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Pruebas
+        run: |
+          pip install -r requirements-web.txt "pytest>=8.0"
+          python -m pytest -q
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Desplegar
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
