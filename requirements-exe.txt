@@ -3,6 +3,7 @@
 Flask>=3.0
 waitress>=3.0
 pywebview==6.2.1
+pyserial==3.5        # lectores de códigos por puerto COM USB (neji/lector_serie.py)
 pythonnet==3.0.5; sys_platform == "win32"
 pyinstaller==6.22.3
 pyinstaller-hooks-contrib==2026.8

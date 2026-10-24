@@ -14,10 +14,15 @@ Dos formas de imprimir:
 El ticket llega como bloques (ver impresion.js, bloquesTicket) y aquí se arma en columnas.
 """
 
+import logging
 import re
 import sys
 import textwrap
 import unicodedata
+
+from . import impresora_usb
+
+registro = logging.getLogger("neji.impresoras")
 
 MODOS = ("escpos", "windows")
 # Página de códigos de la impresora -> (códec de Python, número para ESC t n)
@@ -181,6 +186,7 @@ def leer_trabajo(trabajo):
         "cortar": trabajo.get("cortar", True) is not False, "cajon": bool(trabajo.get("cajon")),
         "codigo": trabajo.get("codigo") if trabajo.get("codigo") in CODIGOS else "cp850",
         "copias": max(1, min(copias, 5)), "bloques": bloques, "sin_chino": bool(sin_chino),
+        "usb_directo": trabajo.get("usb_directo", True) is not False,
         "papel_mm": 48 if columnas <= 32 else 72,
     }
 
@@ -192,20 +198,74 @@ def imprimir_trabajo(trabajo):
     """
     t = leer_trabajo(trabajo)
     renglones = componer(t["bloques"], t["columnas"])
+    # Una impresora leída directo del USB no tiene controlador de Windows: siempre ESC/POS.
+    modo = "escpos" if es_usb_directo(t["impresora"]) else t["modo"]
     aviso = None
     for copia in range(t["copias"] if renglones else 1):
         cajon = t["cajon"] and copia == 0
-        if t["modo"] == "escpos" or not renglones:
-            imprimir_crudo(t["impresora"], escpos(renglones, t["cortar"], cajon, t["codigo"], t["sin_chino"]))
+        if modo == "escpos" or not renglones:
+            mandar_escpos(t["impresora"], escpos(renglones, t["cortar"], cajon, t["codigo"], t["sin_chino"]),
+                          usb_directo=t["usb_directo"])
         else:
             imprimir_windows(t["impresora"], renglones, t["columnas"], t["papel_mm"])
             if cajon:   # el controlador de Windows no abre el cajón: se manda el pulso aparte
                 try:
-                    imprimir_crudo(t["impresora"], INICIAR + ABRIR_CAJON, "Cajón Neji POS")
+                    mandar_escpos(t["impresora"], INICIAR + ABRIR_CAJON, "Cajón Neji POS", usb_directo=t["usb_directo"])
                 except ErrorImpresora as e:
                     # El ticket ya salió: que falle el cajón no es un error de impresión.
                     aviso = f"El ticket se imprimió, pero no se pudo abrir el cajón: {e}"
     return aviso
+
+
+# --- USB directo ---------------------------------------------------------------------------------------
+# Una impresora USB se puede usar aunque no esté instalada en Windows («Nombre (USB directo)»). Y una que sí
+# está instalada en un puerto USB recibe el ticket directo por el USB («forzado»), sin pasar por la cola de
+# Windows: si su controlador no acepta ESC/POS o la cola quedó trabada, igual imprime. Si el USB no se puede
+# abrir (lo está usando Windows), se usa la cola de siempre.
+
+def es_usb_directo(nombre):
+    return str(nombre).endswith(impresora_usb.SUFIJO)
+
+
+def _usb():
+    if sys.platform != "win32":
+        return []
+    try:
+        return impresora_usb.listar()
+    except Exception:  # noqa: BLE001 (sin SetupAPI, sin permisos...): se sigue con la cola de Windows
+        registro.exception("No se pudieron leer las impresoras USB")
+        return []
+
+
+def ruta_usb(nombre, impresoras_windows=None):
+    """Ruta del USB de esa impresora: la de «X (USB directo)», o la del puerto USB donde está instalada «X»."""
+    usb = _usb()
+    if es_usb_directo(nombre):
+        return next((u["ruta"] for u in usb if u["nombre"] + impresora_usb.SUFIJO == nombre), None)
+    try:
+        puerto = next((p["puerto"] for p in (impresoras_windows or _listar_windows()) if p["nombre"] == nombre), "")
+    except ErrorImpresora:
+        return None
+    puerto = puerto.rstrip(":").upper()
+    return next((u["ruta"] for u in usb if puerto.startswith("USB") and u["puerto"].upper() == puerto), None)
+
+
+def mandar_escpos(nombre, datos, documento="Ticket Neji POS", usb_directo=True):
+    """ESC/POS a la impresora: directo por USB si se puede, si no por la cola de Windows."""
+    ruta = ruta_usb(nombre) if (usb_directo or es_usb_directo(nombre)) else None
+    if es_usb_directo(nombre) and not ruta:
+        raise ErrorImpresora(f"No se encontró la impresora «{nombre}». Revisa que esté encendida y conectada por USB.")
+    if ruta:
+        try:
+            impresora_usb.escribir(ruta, datos)
+            return
+        except impresora_usb.ErrorAbrirUSB as e:
+            if es_usb_directo(nombre):
+                raise ErrorImpresora(str(e)) from None
+            registro.info("USB directo no disponible para «%s» (%s): se usa la cola de Windows", nombre, e)
+        except impresora_usb.ErrorUSB as e:
+            raise ErrorImpresora(str(e)) from None
+    imprimir_crudo(nombre, datos, documento)
 
 
 # --- Windows -----------------------------------------------------------------------------------------
@@ -266,7 +326,38 @@ def clasificar(nombre, puerto, controlador):
 
 
 def listar():
-    """Impresoras instaladas en este computador: [{nombre, puerto, controlador, conexion, termica, ...}]."""
+    """Impresoras de este computador: las instaladas en Windows y las USB sin instalar («X (USB directo)»).
+
+    [{nombre, puerto, controlador, conexion, termica, usb_directo, ...}]
+    """
+    try:
+        impresoras, error = _listar_windows(), None
+    except ErrorImpresora as e:
+        impresoras, error = None, e   # p. ej. la Cola de impresión detenida: las USB directas igual funcionan
+    usb = _usb()
+    if impresoras is None:
+        if not usb:
+            raise error
+        impresoras = []
+    por_puerto = {p["puerto"].rstrip(":").upper(): p for p in impresoras}
+    for u in usb:
+        instalada = por_puerto.get(u["puerto"].upper()) if u["puerto"] else None
+        if instalada:   # ya está en Windows: se imprime directo por su USB (ver mandar_escpos)
+            instalada["usb_directo"] = True
+            continue
+        impresoras.append({
+            "nombre": u["nombre"] + impresora_usb.SUFIJO, "puerto": u["puerto"] or "USB",
+            "controlador": "Sin controlador: directo por USB", "predeterminada": False, "sin_conexion": False,
+            "sin_papel": False, "con_error": False, "virtual": False, "conexion": "USB",
+            "termica": not u["oficina"], "usb_directo": True, "solo_usb": True,
+        })
+    impresoras.sort(key=lambda x: (not x["termica"], x["virtual"], not x["predeterminada"], bool(x.get("solo_usb")),
+                                   x["nombre"].lower()))
+    return impresoras
+
+
+def _listar_windows():
+    """Impresoras instaladas en Windows: [{nombre, puerto, controlador, conexion, termica, ...}]."""
     ctypes, wintypes, w = _winspool()
 
     class PRINTER_INFO_2W(ctypes.Structure):
@@ -314,7 +405,6 @@ def listar():
             "sin_papel": bool(p.Status & 0x10), "con_error": bool(p.Status & 0x2),
             **clasificar(nombre, puerto, controlador),
         })
-    impresoras.sort(key=lambda x: (not x["termica"], x["virtual"], not x["predeterminada"], x["nombre"].lower()))
     return impresoras
 
 

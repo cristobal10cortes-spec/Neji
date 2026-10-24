@@ -2,6 +2,7 @@
 
 import { api, cuandoSeCierreSesion } from './api.js';
 import { cargarSesion, esFarmacia, estado, nombreCaja, puede } from './estado.js';
+import { iniciarLector } from './lector.js';
 import { aviso, avisoError, cerrarModales, h, modalAbierto, teclaEnModal, vaciar } from './ui.js';
 import * as caja from './vistas/caja.js';
 import * as clientes from './vistas/clientes.js';
@@ -273,6 +274,14 @@ document.addEventListener('keydown', (e) => {
 });
 
 window.addEventListener('hashchange', mostrarVista);
+
+// Lo que lee el lector de códigos va a la venta: a la que está abierta o, desde otra pantalla, a una nueva.
+iniciarLector({
+  llevarCodigo(codigo) {
+    if ((location.hash.slice(1) || 'ventas') === 'ventas' && vistaActual?.recibirCodigo) vistaActual.recibirCodigo(codigo);
+    else ir('ventas', { codigo });
+  },
+});
 
 // Soltar un archivo fuera de un campo de archivo haría que la ventana lo abra y reemplace a Neji.
 for (const tipo of ['dragover', 'drop']) {

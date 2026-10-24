@@ -8,6 +8,7 @@ import {
   impresoraSugerida, imprimir, imprimirConDialogo, leerImpresora, listarImpresoras, papelDe, ticketVenta, trabajoImpresion,
 } from '../impresion.js';
 import { aviso, avisoError, confirmar, fecha, formulario, h, numero, pestanas, tabla, vaciar } from '../ui.js';
+import { guardarLector, leerLector, probarLector } from '../lector.js';
 import { componerRenglones } from '../renglones.js';
 import { importadorCsv } from './productos.js';
 
@@ -522,6 +523,7 @@ function vistaTerminal() {
         type: 'button',
         onclick: async () => { fijarCaja(parseInt(sel.value, 10)); aviso('Caja de esta terminal actualizada.', 'ok'); await recargarConfiguracion({ pestana: pestanaActual }); },
       }, 'Usar esta caja')),
+    panelLector(),
     h('h3', { style: { marginTop: '1.4rem' } }, 'Atajos de teclado'),
     tabla([{ titulo: 'Tecla', valor: (f) => h('kbd', f[0]) }, { titulo: 'Acción', valor: (f) => f[1] }], [
       ['F1 / F2 / F3 / F4', 'Ir a Ventas / Clientes / Productos / Inventario'],
@@ -541,6 +543,54 @@ function vistaTerminal() {
       ['F9', 'Verificador de precios'],
       ['F12', 'Cobrar (en el cobro: F1 efectivo … F6 mixto)'],
     ]));
+}
+
+/** Lector de códigos de barras de este computador: siempre a la venta, prueba y lectores por puerto COM. */
+function panelLector() {
+  const forzar = h('input', { type: 'checkbox', checked: leerLector().forzar });
+  forzar.addEventListener('change', () => {
+    guardarLector({ forzar: forzar.checked });
+    aviso(forzar.checked ? 'Lo que lea el lector va a ir siempre a la venta.' : 'El lector escribe donde está el cursor.', 'ok');
+  });
+  const leido = h('div.prueba-lector', { 'aria-live': 'polite' }, 'Escanea cualquier código para probar el lector: aquí se ve lo que leyó.');
+  const puertos = h('div');
+  const panel = h('div', { style: { marginTop: '1.4rem' } },
+    h('h3', 'Lector de códigos de barras'),
+    h('label.check', forzar, 'Lo que lee el lector va siempre a la venta, aunque estés en otra pantalla o con el cursor en otro campo'),
+    h('p.ayuda', 'Solo se queda donde está el cursor en los campos para códigos: el código de un producto nuevo, el verificador de precios (F9) o el buscador del inventario. Con el cobro u otra ventana abierta, no se escribe en ella: se avisa.'),
+    leido,
+    puertos);
+  probarLector(panel, (codigo, origen) => vaciar(leido, 'Leído: ', h('b.mono', codigo), h('span.suave', ` · ${origen}`)));
+
+  // En NejiPOS.exe: los lectores que se conectan como puerto COM (los de teclado no necesitan nada).
+  (async () => {
+    const api = await escritorio();
+    if (!api?.lectores) return;
+    const pintar = (r) => {
+      const lista = r?.puertos || [];
+      vaciar(puertos,
+        h('h4', { style: { margin: '1rem 0 .4rem' } }, 'Lectores por puerto COM (USB)'),
+        r?.ok === false || r?.disponible === false ? h('div.error-modal', r.error || 'No se pudieron revisar los puertos COM.') : null,
+        lista.length ? tabla([
+          {
+            titulo: 'Usar',
+            valor: (p) => h('input', {
+              type: 'checkbox', checked: Boolean(p.usar), disabled: Boolean(p.impresora) || !p.conectado,
+              'aria-label': `Usar ${p.puerto} como lector`,
+              onchange: async (e) => pintar(await api.lector_usar(p.puerto, e.target.checked)),
+            }),
+          },
+          { titulo: 'Puerto', valor: (p) => h('b', p.puerto) },
+          { titulo: 'Equipo', valor: (p) => [p.descripcion, p.impresora ? h('span.etiqueta', ' es de una impresora') : null] },
+          { titulo: 'Estado', valor: (p) => p.estado },
+          { titulo: 'Última lectura', valor: (p) => h('span.mono', p.ultima || '—') },
+        ], lista) : h('p.suave', 'No hay lectores conectados por puerto COM.'),
+        h('p.ayuda', 'La mayoría de los lectores USB funcionan como teclado: esos no aparecen aquí y no necesitan nada más. Aquí salen los que se conectan como puerto COM («USB COM» o «USB serie»). Neji usa solo los que reconoce como lector; si el tuyo no está marcado, márcalo.'),
+        h('button.btn.chico', { type: 'button', onclick: async () => pintar(await api.lectores()) }, 'Buscar de nuevo'));
+    };
+    pintar(await api.lectores());
+  })();
+  return panel;
 }
 
 function vistaImportar() {
@@ -604,6 +654,7 @@ async function vistaImpresora(zona) {
       copias: Number(campos.copias.value) || 1,
       codigo: campos.codigo.value,
       sin_chino: campos.sinChino.checked,
+      usb_directo: campos.usbDirecto.checked,
       columnas: campos.columnas.value ? Math.max(16, Math.min(80, Number(campos.columnas.value) || 0)) || null : null,
       automatica: false,
     };
@@ -628,8 +679,9 @@ async function vistaImpresora(zona) {
     const alElegir = (nombre) => {
       const i = impresoras.find((x) => x.nombre === nombre);
       if (i) {
-        // Una que no parece de tickets va mejor con su controlador y sin pulso de cajón.
-        campos.modo.value = i.termica ? 'escpos' : 'windows';
+        // Una que no parece de tickets va mejor con su controlador y sin pulso de cajón. Una leída directo del
+        // USB no tiene controlador: siempre directa.
+        campos.modo.value = i.termica || i.solo_usb ? 'escpos' : 'windows';
         campos.cajon.checked = Boolean(i.termica);
         if (esDe58(i)) campos.papel.value = '58';
       }
@@ -638,6 +690,7 @@ async function vistaImpresora(zona) {
     const general = estado.config.ticket_ancho === '58' ? '58' : '80';
     const etiquetas = (i) => [
       i.termica ? h('span.etiqueta.ok', 'de tickets') : null,
+      i.solo_usb ? h('span.etiqueta.ok', 'USB directo, sin controlador') : i.usb_directo ? h('span.etiqueta', 'también directo por USB') : null,
       i.predeterminada ? h('span.etiqueta', 'predeterminada') : null,
       i.virtual ? h('span.etiqueta', 'virtual') : null,
       i.sin_conexion ? h('span.etiqueta.mal', 'sin conexión') : null,
@@ -659,6 +712,7 @@ async function vistaImpresora(zona) {
         [['cp850', 'PC850 Latino (recomendada)'], ['cp858', 'PC858 (con €)'], ['cp1252', 'Windows-1252'], ['cp437', 'PC437 (de fábrica)']]
           .map(([v, t]) => h('option', { value: v, selected: (config.codigo || 'cp850') === v }, t))),
       columnas: h('input', { inputmode: 'numeric', value: config.columnas || '', placeholder: 'Automático', style: { maxWidth: '140px' } }),
+      usbDirecto: h('input', { type: 'checkbox', checked: config.usb_directo !== false }),
       sinChino: h('input', {
         type: 'checkbox', checked: typeof config.sin_chino === 'boolean' ? config.sin_chino : chinoPorDefecto(config.nombre),
         onchange: () => { chinoTocado = true; },
@@ -674,7 +728,7 @@ async function vistaImpresora(zona) {
         h('p', h('b', 'Estás usando Neji POS en el navegador. '), 'Aquí la impresora se elige en el cuadro de impresión.'),
         estado.web
           ? h('p.ayuda', 'Para que el ticket salga sin el cuadro de impresión, deja la impresora de tickets como predeterminada de este computador y abre la caja con el acceso directo de Chrome con --kiosk-printing (instrucciones en el README, «Farmacia Piedra en internet»).')
-          : h('p.ayuda', 'Con el programa NejiPOS.exe, Neji encuentra solo las impresoras instaladas en este computador (USB, red o serie: POS-80, POS-58, SLK, Epson, Xprinter…) e imprime directo, sin preguntar.'))
+          : h('p.ayuda', 'Con el programa NejiPOS.exe, Neji encuentra solo las impresoras de este computador (instaladas en Windows o conectadas por USB aunque no tengan controlador: POS-80, POS-58, SLK, Epson, Xprinter…) e imprime directo, sin preguntar.'))
       : !detectadas.ok
         ? h('div.error-modal', detectadas.error || 'No se pudieron leer las impresoras.')
         : tabla([
@@ -731,7 +785,8 @@ async function vistaImpresora(zona) {
         h('div.rejilla', { style: { marginTop: '.6rem' } },
           h('label.campo', 'Página de códigos (tildes y ñ)', campos.codigo, h('span.ayuda', 'Si las tildes salen mal, prueba otra.')),
           h('label.campo', 'Letras por línea', campos.columnas, h('span.ayuda', 'Vacío = según el papel. Algunas de 80 mm usan 42.'))),
-        h('label.check', campos.sinChino, 'Apagar el modo chino (si las tildes o la ñ salen como letras chinas)')),
+        h('label.check', campos.sinChino, 'Apagar el modo chino (si las tildes o la ñ salen como letras chinas)'),
+        h('label.check', campos.usbDirecto, 'Si la impresora está conectada por USB, mandar el ticket directo por el USB (sin la cola de impresión de Windows)')),
       h('div.fila.fin', { style: { marginTop: '1rem' } },
         h('button.btn', { type: 'button', onclick: probar }, 'Imprimir prueba'),
         guardar),

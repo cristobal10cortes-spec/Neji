@@ -1247,6 +1247,8 @@ export async function montar(contenedor, parametros = {}) {
       },
       alCerrar: () => { enfocar(); },
     });
+    // Si se escanea el producto del cliente siguiente, esta ventana se cierra sola (lector.js).
+    m.el.dataset.lector = 'cerrar';
   }
 
   // --- Cargar desde una cotización ----------------------------------------------------
@@ -1297,6 +1299,11 @@ export async function montar(contenedor, parametros = {}) {
   return {
     desmontar() {
       ajusteTeclas.disconnect();
+    },
+    /** Un código del lector de barras (lector.js): va directo al ticket, esté donde esté el foco. */
+    recibirCodigo(c) {
+      codigo.value = c;
+      procesarCodigo();
     },
     alTeclear(e) {
       const enCodigo = document.activeElement === codigo;

@@ -297,3 +297,34 @@ def test_el_programa_compilado_no_toma_la_version_del_entorno(tmp_path, monkeypa
     assert v.version() == "desconocida"
     assert v.numeros("0.1.14") == (0, 1, 14) and v.numeros("0.1.14") < v.numeros("0.1.16")
     assert v.numeros("desarrollo") is None and v.numeros(None) is None
+
+
+def test_la_ventana_pide_los_codigos_de_los_lectores_com(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEJI_DATOS", str(tmp_path))
+
+    class LectorFalso:
+        disponible, error = True, ""
+
+        def __init__(self):
+            self.codigos = ["7800001"]
+
+        def esperar(self, segundos):
+            assert segundos <= 25
+            codigos, self.codigos = self.codigos, []
+            return codigos
+
+        def revisar(self):
+            pass
+
+        def estado(self):
+            elegidos = escritorio.leer_lectores_elegidos()
+            return [{"puerto": "COM5", "usar": elegidos.get("COM5", True)}]
+
+    falso = LectorFalso()
+    monkeypatch.setattr(escritorio, "lector_serie", lambda: falso)
+    api = escritorio.ApiEscritorio()
+    assert api.lecturas(999) == {"ok": True, "codigos": ["7800001"]}
+    assert api.lecturas(0) == {"ok": True, "codigos": []}
+    assert api.lectores()["puertos"] == [{"puerto": "COM5", "usar": True}]
+    assert api.lector_usar("com5", False)["puertos"] == [{"puerto": "COM5", "usar": False}]
+    assert (tmp_path / "lectores.json").read_text(encoding="utf-8") == '{"COM5": false}'

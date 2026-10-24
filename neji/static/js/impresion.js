@@ -124,7 +124,7 @@ export function trabajoImpresion(config, bloques, { abrirCajon = false, papelGen
     impresora: config.nombre, modo: config.modo === 'windows' ? 'windows' : 'escpos',
     columnas: Number(config.columnas) || PAPEL_COLUMNAS[papel], papel, cortar: config.cortar !== false,
     cajon: Boolean(abrirCajon && config.cajon), codigo: config.codigo || 'cp850', copias: Number(config.copias) || 1,
-    sin_chino: typeof config.sin_chino === 'boolean' ? config.sin_chino : undefined, bloques,
+    sin_chino: typeof config.sin_chino === 'boolean' ? config.sin_chino : undefined, usb_directo: config.usb_directo !== false, bloques,
   };
 }
 

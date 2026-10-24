@@ -127,6 +127,11 @@ también las que se conectan a otro equipo con `--conectar`.
   **Configuración → Ticket** (80 mm de fábrica).
 - A las POS-58/POS-80 genéricas les apaga el «modo chino» para que las tildes y la ñ no
   salgan como letras chinas (se puede cambiar en **Avanzado**).
+- **USB directo:** si la impresora de tickets está conectada por USB, Neji le manda el
+  ticket por el mismo cable USB, sin pasar por la cola de impresión de Windows (no quedan
+  trabajos atascados). Una impresora USB **sin controlador instalado** igual aparece en la
+  lista, como «POS-80 (USB directo)», y se puede usar. Si el envío directo no resulta, usa el
+  controlador de Windows. Se apaga en **Avanzado** («mandar el ticket directo por el USB»).
 - Para soporte: `NejiPOS.exe --listar-impresoras` muestra las impresoras que ve y
   `NejiPOS.exe --prueba-impresora "POS-80"` imprime un ticket de prueba.
 
@@ -156,9 +161,25 @@ El ancho del ticket se elige en **Configuración → Ticket**.
 
 ### Lector de código de barras
 
-Los lectores USB funcionan como un teclado: escanea en la pantalla de ventas y
-el producto se agrega solo. Si el cursor no está en el campo de código, cualquier
-tecla lo devuelve ahí.
+Lo que lee el lector **va siempre a la venta**: escanea en cualquier pantalla y el producto
+se agrega al ticket, aunque el cursor esté en un botón, en el buscador de clientes o en
+otra pantalla (Neji vuelve a Ventas). Lo escaneado no queda escrito donde estaba el cursor.
+
+- Solo se queda donde está el cursor en los campos para códigos: el código de un producto
+  nuevo, el verificador de precios (F9), «Varios» o el buscador del inventario.
+- Con el cobro u otra ventana abierta no se escribe en ella: avisa «Hay una ventana abierta».
+  Con la ventana «Venta registrada», el producto siguiente la cierra y empieza la venta nueva.
+- Los lectores **USB de teclado** (la mayoría) no necesitan nada: Neji reconoce la ráfaga
+  rápida de letras del lector y la distingue de alguien escribiendo.
+- Los lectores **USB COM** («USB serie», «USB CDC») los lee NejiPOS.exe directo del puerto:
+  los de marcas conocidas (Honeywell, Zebra/Symbol, Datalogic, Newland, Zebex…) se usan
+  solos y los demás se activan en **Configuración → Esta terminal → Lectores por puerto COM**.
+  En el navegador solo funcionan los lectores de teclado.
+- En **Configuración → Esta terminal** está «Probar el lector» (muestra lo leído sin vender)
+  y se puede apagar «siempre a la venta» para que escriba donde está el cursor.
+- Los lectores en modo «HID POS» (no teclado ni COM) no se leen: cámbialos a modo teclado
+  o COM con el código de configuración de su manual. Si Neji no es la ventana activa, lo
+  escaneado va al otro programa.
 
 ### Varias cajas (multicaja)
 
