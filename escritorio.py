@@ -613,7 +613,12 @@ def prueba_de_humo(salida=None):
                 from neji import impresora_usb
                 usb = impresora_usb.listar()
                 puertos = list(serial.tools.list_ports.comports())
-                resultados.append({"usb": f"{len(usb)} impresoras USB", "serie": f"{len(puertos)} puertos COM", "ok": True})
+                # Sin impresoras USB en el equipo de prueba, el mismo recorrido se prueba con los discos.
+                discos = impresora_usb.rutas("{53F56307-B6BF-11D0-94F2-00A0C91EFB8B}")   # GUID_DEVINTERFACE_DISK
+                if not discos or not all(d["ruta"].startswith("\\\\?\\") for d in discos):
+                    raise RuntimeError(f"recorrido de dispositivos USB mal leído: {discos!r}")
+                resultados.append({"usb": f"{len(usb)} impresoras USB", "serie": f"{len(puertos)} puertos COM",
+                                   "discos": [d["ruta"][:60] for d in discos], "ok": True})
             except Exception as e:  # noqa: BLE001
                 ok = False
                 resultados.append({"usb_serie": f"{type(e).__name__}: {e}", "ok": False})

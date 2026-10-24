@@ -10,7 +10,6 @@ podría ser, por ejemplo, el de una máquina de pagos.
 """
 
 import logging
-import queue
 import re
 import threading
 import time
@@ -69,7 +68,9 @@ class LectorSerie:
 
     def __init__(self, excluir=lambda: set(), elegidos=lambda: {}, revisar_cada=3.0):
         self.excluir, self.elegidos, self.revisar_cada = excluir, elegidos, revisar_cada
-        self.cola = queue.Queue()
+        self._codigos = []                     # leídos y aún no entregados a la ventana
+        self._aviso = threading.Condition()
+        self._turno = 0                         # la espera más nueva es la de la ventana que está abierta
         self.puertos = {}
         self._hilos = {}
         self._parar = threading.Event()
@@ -139,8 +140,11 @@ class LectorSerie:
                         self.recibir(nombre, codigo)
             self._estado(nombre, "sin usar")
         except (serial.SerialException, OSError, ValueError) as e:
-            registro.warning("Lector en %s: %s", nombre, e)
-            self._estado(nombre, f"no se pudo abrir: {e}")
+            estado = f"no se pudo abrir: {e}"
+            # Se reintenta cada pocos segundos (p. ej. otro programa tiene el puerto): al registro va una vez.
+            if self.puertos.get(nombre, {}).get("estado") != estado:
+                registro.warning("Lector en %s: %s", nombre, e)
+            self._estado(nombre, estado)
 
     def _estado(self, nombre, estado):
         with self._candado:
@@ -151,18 +155,30 @@ class LectorSerie:
         with self._candado:
             if nombre in self.puertos:
                 self.puertos[nombre]["ultima"] = codigo
-        self.cola.put(codigo)
+        with self._aviso:
+            self._codigos.append(codigo)
+            self._aviso.notify_all()
 
     def esperar(self, segundos):
-        """Los códigos leídos; si no hay, espera hasta `segundos` a que llegue alguno."""
-        codigos = []
-        try:
-            codigos.append(self.cola.get(timeout=max(0.0, segundos)))
-            while True:
-                codigos.append(self.cola.get_nowait())
-        except queue.Empty:
-            pass
-        return codigos
+        """Los códigos leídos; si no hay, espera hasta `segundos` a que llegue alguno.
+
+        Si mientras tanto empieza otra espera (la ventana se recargó y la de antes quedó sin nadie que la
+        reciba), la anterior vuelve vacía: los códigos son para la nueva y no se pierden.
+        """
+        fin = time.monotonic() + max(0.0, segundos)
+        with self._aviso:
+            self._turno += 1
+            turno = self._turno
+            self._aviso.notify_all()   # la espera anterior, si quedó alguna, se retira
+            while not self._codigos and self._turno == turno:
+                restante = fin - time.monotonic()
+                if restante <= 0:
+                    break
+                self._aviso.wait(restante)
+            if self._turno != turno:
+                return []
+            codigos, self._codigos = self._codigos, []
+            return codigos
 
     def estado(self):
         with self._candado:

@@ -1,6 +1,8 @@
 """Impresoras leídas directo del USB y lectores de códigos por puerto COM (NejiPOS.exe)."""
 
+import logging
 import sys
+import threading
 import time
 import types
 
@@ -193,3 +195,37 @@ def test_lee_los_lectores_y_respeta_lo_elegido(monkeypatch):
         assert {p["puerto"]: p["estado"] for p in lector.estado()}["COM3"] == "desconectado"
     finally:
         lector.detener()
+
+
+def test_si_la_ventana_se_recarga_la_espera_anterior_no_se_lleva_el_codigo():
+    lector = ls.LectorSerie()
+    vieja = {}
+    hilo = threading.Thread(target=lambda: vieja.setdefault("codigos", lector.esperar(5)))
+    hilo.start()
+    time.sleep(0.2)
+    nueva = {}
+    hilo2 = threading.Thread(target=lambda: nueva.setdefault("codigos", lector.esperar(5)))
+    hilo2.start()
+    hilo.join(2)
+    assert not hilo.is_alive() and vieja["codigos"] == []    # la de la página que ya no está se retira
+    lector.recibir("COM5", "7800001")
+    hilo2.join(2)
+    assert nueva["codigos"] == ["7800001"]
+
+
+def test_un_puerto_ocupado_se_anota_una_vez_en_el_registro(monkeypatch, caplog):
+    class Ocupado:
+        def __init__(self, *a, **k):
+            raise OSError("Acceso denegado")
+
+    falso = types.ModuleType("serial")
+    falso.Serial = Ocupado
+    falso.SerialException = OSError
+    monkeypatch.setitem(sys.modules, "serial", falso)
+    lector = ls.LectorSerie()
+    lector.puertos["COM5"] = {"puerto": "COM5", "estado": "sin usar", "ultima": "", "usar": True}
+    with caplog.at_level(logging.WARNING, logger="neji.lector"):
+        for _ in range(3):   # los reintentos de revisar()
+            lector._leer("COM5")
+    assert len([r for r in caplog.records if "COM5" in r.getMessage()]) == 1
+    assert lector.estado()[0]["estado"].startswith("no se pudo abrir")

@@ -101,8 +101,9 @@ const esLectura = (r, ahora, limite, minimo = MINIMO) => Boolean(r) && r.letras.
  * se escriben en el campo, donde iban.
  */
 function soltar(r) {
-  if (!r?.tragadas || !r.campo?.isConnected) return;
-  const c = r.campo;
+  // Sin campo al empezar (p. ej. un botón de la venta), las primeras letras las llevó la venta a su buscador.
+  const c = r?.campo?.isConnected ? r.campo : editable(document.activeElement) ? document.activeElement : null;
+  if (!r?.tragadas || !c) return;
   const desde = c.selectionStart ?? c.value.length;
   const hasta = c.selectionEnd ?? desde;
   c.value = c.value.slice(0, desde) + r.tragadas + c.value.slice(hasta);

@@ -163,14 +163,15 @@ def _leer_1284_de(ctypes, wintypes, k, ruta):
         k.CloseHandle(manejador)
 
 
-def listar():
-    """Impresoras USB de este computador: [{nombre, ruta, puerto, id_1284, oficina}] (vacío si no hay)."""
-    ctypes, wintypes, s, k, a, GUID, SP_DEVICE_INTERFACE_DATA = _api()
-    guid = GUID.from_buffer_copy(uuid.UUID(GUID_USBPRINT).bytes_le)
+def _dispositivos(guid_texto, leer):
+    """Recorre los dispositivos presentes con esa interfaz: [leer(api, conjunto, interfaz, ruta), ...]."""
+    api = _api()
+    ctypes, wintypes, s, k, a, GUID, SP_DEVICE_INTERFACE_DATA = api
+    guid = GUID.from_buffer_copy(uuid.UUID(guid_texto).bytes_le)
     conjunto = s.SetupDiGetClassDevsW(ctypes.byref(guid), None, None, 0x2 | 0x10)  # DIGCF_PRESENT | DEVICEINTERFACE
     if _es_invalido(ctypes, conjunto):
         return []
-    impresoras = []
+    resultado = []
     try:
         indice = 0
         while True:
@@ -189,13 +190,31 @@ def listar():
             if not s.SetupDiGetDeviceInterfaceDetailW(conjunto, ctypes.byref(interfaz), detalle, necesario, None, None):
                 continue
             ruta = ctypes.wstring_at(ctypes.addressof(detalle) + 4)
-            id_1284 = _leer_1284_de(ctypes, wintypes, k, ruta)
-            impresoras.append({
-                "nombre": nombre_impresora(id_1284, ruta), "ruta": ruta, "id_1284": id_1284,
-                "puerto": _puerto(ctypes, wintypes, s, a, conjunto, interfaz), "oficina": es_de_oficina(id_1284),
-            })
+            resultado.append(leer(api, conjunto, interfaz, ruta))
     finally:
         s.SetupDiDestroyDeviceInfoList(conjunto)
+    return resultado
+
+
+def rutas(guid_texto):
+    """[{ruta, puerto}] de los dispositivos con esa interfaz. Lo usa la prueba del programa compilado con los
+    discos del equipo, para comprobar en Windows este recorrido sin tener una impresora USB."""
+    def leer(api, conjunto, interfaz, ruta):
+        ctypes, wintypes, s, _, a, _, _ = api
+        return {"ruta": ruta, "puerto": _puerto(ctypes, wintypes, s, a, conjunto, interfaz)}
+    return _dispositivos(guid_texto, leer)
+
+
+def listar():
+    """Impresoras USB de este computador: [{nombre, ruta, puerto, id_1284, oficina}] (vacío si no hay)."""
+    def leer(api, conjunto, interfaz, ruta):
+        ctypes, wintypes, s, k, a, _, _ = api
+        id_1284 = _leer_1284_de(ctypes, wintypes, k, ruta)
+        return {
+            "nombre": nombre_impresora(id_1284, ruta), "ruta": ruta, "id_1284": id_1284,
+            "puerto": _puerto(ctypes, wintypes, s, a, conjunto, interfaz), "oficina": es_de_oficina(id_1284),
+        }
+    impresoras = _dispositivos(GUID_USBPRINT, leer)
     # Dos impresoras iguales: «POS-80», «POS-80 (2)»
     vistos = {}
     for imp in impresoras:
