@@ -352,6 +352,8 @@ tbody tr.clic:focus-visible { outline: 2px solid var(--primario); outline-offset
 .papel-termico .renglon.g { font-weight: 700; }
 .papel-termico .renglon.xl { font-size: 2em; line-height: 1.15; font-weight: 700; }
 .nota-papel:empty { display: none; }
+.prueba-lector { border: 1px dashed var(--borde); border-radius: 8px; padding: .7rem .9rem; margin-top: .6rem; color: var(--suave); }
+.prueba-lector b { color: var(--texto); font-size: 1.1rem; }
 .sin-guardar { color: var(--acento-oscuro, #b45309); font-size: .88rem; font-weight: 600; align-self: center; }
 .aviso-version {
   position: fixed; left: 50%; bottom: 1rem; transform: translateX(-50%); z-index: 50; display: flex; gap: .8rem;

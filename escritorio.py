@@ -437,6 +437,51 @@ def configurar_webview():
     return webview
 
 
+# --- Lectores de códigos por puerto COM USB ---------------------------------------------------------------
+
+_lector = None
+_candado_lector = threading.Lock()
+ARCHIVO_LECTORES = "lectores.json"   # en la carpeta de datos: qué puertos COM usar como lector
+
+
+def _archivo_lectores():
+    return carpeta_datos() / ARCHIVO_LECTORES
+
+
+def leer_lectores_elegidos():
+    try:
+        datos = json.loads(_archivo_lectores().read_text(encoding="utf-8"))
+        return {str(k).upper(): bool(v) for k, v in datos.items()} if isinstance(datos, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def guardar_lector_elegido(puerto, usar):
+    elegidos = leer_lectores_elegidos()
+    elegidos[str(puerto).upper()] = bool(usar)
+    _archivo_lectores().parent.mkdir(parents=True, exist_ok=True)
+    _archivo_lectores().write_text(json.dumps(elegidos, ensure_ascii=False), encoding="utf-8")
+
+
+def puertos_de_impresoras():
+    """Puertos COM de las impresoras instaladas: no se abren como lector (la impresora dejaría de imprimir)."""
+    from neji import impresoras
+    try:
+        return {p["puerto"].rstrip(":").upper() for p in impresoras._listar_windows() if p["puerto"].upper().startswith("COM")}
+    except impresoras.ErrorImpresora:
+        return set()
+
+
+def lector_serie():
+    """El que lee los lectores COM (se pone en marcha la primera vez que la ventana lo pide)."""
+    global _lector
+    with _candado_lector:
+        if _lector is None:
+            from neji.lector_serie import LectorSerie
+            _lector = LectorSerie(excluir=puertos_de_impresoras, elegidos=leer_lectores_elegidos).iniciar()
+        return _lector
+
+
 class ApiEscritorio:
     """Lo que la interfaz le pide a este computador (window.pywebview.api): sus impresoras de tickets.
 
@@ -468,6 +513,36 @@ class ApiEscritorio:
         except Exception as e:  # noqa: BLE001
             registro.exception("Error al imprimir")
             return {"ok": False, "error": f"Error al imprimir: {e}"}
+
+    def lecturas(self, segundos=20):
+        """Códigos leídos por los lectores COM. Espera hasta `segundos` (la ventana vuelve a preguntar)."""
+        try:
+            espera = max(0.0, min(float(segundos or 0), 25.0))
+            return {"ok": True, "codigos": lector_serie().esperar(espera)}
+        except Exception as e:  # noqa: BLE001
+            registro.exception("Error al leer los lectores")
+            return {"ok": False, "codigos": [], "error": str(e)}
+
+    def lectores(self):
+        """Puertos COM USB de este computador y cuáles se están leyendo como lector de códigos."""
+        try:
+            lector = lector_serie()
+            if lector.disponible:
+                lector.revisar()
+            return {"ok": True, "disponible": lector.disponible, "error": lector.error, "puertos": lector.estado()}
+        except ImportError:
+            return {"ok": True, "disponible": False, "error": "Falta el módulo pyserial.", "puertos": []}
+        except Exception as e:  # noqa: BLE001
+            registro.exception("Error al revisar los lectores")
+            return {"ok": False, "error": str(e), "puertos": []}
+
+    def lector_usar(self, puerto, usar):
+        """Usar (o no) ese puerto COM como lector de códigos. Queda guardado en este computador."""
+        try:
+            guardar_lector_elegido(puerto, usar)
+        except OSError as e:
+            return {"ok": False, "error": f"No se pudo guardar: {e}", "puertos": []}
+        return self.lectores()
 
 
 def crear_ventana(webview, url, confirmar_cierre=True, titulo=None):
@@ -532,6 +607,21 @@ def prueba_de_humo(salida=None):
         pedir("/api/equipo", 200, "application/json", b"carpeta_datos")
 
         if sys.platform == "win32":
+            # Impresoras USB directas (SetupAPI) y lectores COM (pyserial) empaquetados y funcionando.
+            try:
+                import serial.tools.list_ports
+                from neji import impresora_usb
+                usb = impresora_usb.listar()
+                puertos = list(serial.tools.list_ports.comports())
+                # Sin impresoras USB en el equipo de prueba, el mismo recorrido se prueba con los discos.
+                discos = impresora_usb.rutas("{53F56307-B6BF-11D0-94F2-00A0C91EFB8B}")   # GUID_DEVINTERFACE_DISK
+                if not discos or not all(d["ruta"].startswith("\\\\?\\") for d in discos):
+                    raise RuntimeError(f"recorrido de dispositivos USB mal leído: {discos!r}")
+                resultados.append({"usb": f"{len(usb)} impresoras USB", "serie": f"{len(puertos)} puertos COM",
+                                   "discos": [d["ruta"][:60] for d in discos], "ok": True})
+            except Exception as e:  # noqa: BLE001
+                ok = False
+                resultados.append({"usb_serie": f"{type(e).__name__}: {e}", "ok": False})
             # Carga pythonnet y las DLL de WebView2 empaquetadas, sin abrir la ventana.
             try:
                 import webview.platforms.edgechromium  # noqa: F401
@@ -631,6 +721,7 @@ def listar_impresoras(salida=None):
         return "Impresoras de este computador:\n\n" + "\n".join(
             f"• {i['nombre']} ({i['conexion']}){' · de tickets' if i['termica'] else ''}"
             f"{' · predeterminada' if i['predeterminada'] else ''}{' · sin conexión' if i['sin_conexion'] else ''}"
+            f"{' · directo por USB' if i.get('usb_directo') else ''}"
             for i in r["impresoras"])
     return informar(salida, resultado, resumen)
 
