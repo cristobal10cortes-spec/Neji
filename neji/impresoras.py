@@ -64,6 +64,10 @@ PATRON_VIRTUAL = re.compile(r"pdf|xps|onenote|fax|send to|enviar a|microsoft pri
                             re.IGNORECASE)
 
 
+# En el identificador IEEE 1284 de una impresora de tickets: «CMD:ESC/POS» (o ESCPOS, ESC POS)
+PATRON_ESCPOS_1284 = re.compile(r"\bESC\s?/?\s?POS\b", re.IGNORECASE)
+
+
 class ErrorImpresora(Exception):
     """Problema al imprimir, con un mensaje para mostrar en la caja."""
 
@@ -237,6 +241,13 @@ def _usb():
         return []
 
 
+def es_de_tickets_usb(u):
+    """Una USB sin controlador se elige sola para los tickets solo si su nombre o su identificador lo dicen (una
+    de tinta sin controlador, p. ej. «EPSON L3150», nunca)."""
+    cmd = impresora_usb.leer_1284(u.get("id_1284", "")).get("CMD", "")
+    return not u["oficina"] and (clasificar(u["nombre"], "USB", "")["termica"] or bool(PATRON_ESCPOS_1284.search(cmd)))
+
+
 def ruta_usb(nombre, impresoras_windows=None):
     """Ruta del USB de esa impresora: la de «X (USB directo)», o la del puerto USB donde está instalada «X»."""
     usb = _usb()
@@ -349,7 +360,7 @@ def listar():
             "nombre": u["nombre"] + impresora_usb.SUFIJO, "puerto": u["puerto"] or "USB",
             "controlador": "Sin controlador: directo por USB", "predeterminada": False, "sin_conexion": False,
             "sin_papel": False, "con_error": False, "virtual": False, "conexion": "USB",
-            "termica": not u["oficina"], "usb_directo": True, "solo_usb": True,
+            "termica": es_de_tickets_usb(u), "usb_directo": True, "solo_usb": True,
         })
     impresoras.sort(key=lambda x: (not x["termica"], x["virtual"], not x["predeterminada"], bool(x.get("solo_usb")),
                                    x["nombre"].lower()))

@@ -48,6 +48,19 @@ def test_lista_las_usb_sin_controlador_y_no_repite_las_instaladas(monkeypatch):
     assert not next(i for i in lista if i["nombre"] == "Canon LBP (USB directo)")["termica"]
 
 
+def test_una_usb_sin_controlador_es_de_tickets_solo_si_lo_dice(monkeypatch):
+    monkeypatch.setattr(imp, "_listar_windows", lambda: [])
+    monkeypatch.setattr(imp, "_usb", lambda: [
+        {"nombre": "EPSON L3150 Series", "ruta": "r1", "puerto": "", "oficina": False,
+         "id_1284": "MFG:EPSON;CMD:ESCPL2,BDC,D4,D4PX,ESCPR7;MDL:L3150 Series;"},             # de tinta
+        {"nombre": "Printer USB Printer", "ruta": "r2", "puerto": "", "oficina": False,
+         "id_1284": "MFG:Printer;CMD:ESC/POS;MDL:USB Printer;"},                               # dice ESC/POS
+        {"nombre": "Impresora USB 0FE6:811E", "ruta": "r3", "puerto": "", "oficina": False, "id_1284": ""},
+    ])
+    termicas = {i["nombre"] for i in imp.listar() if i["termica"]}
+    assert termicas == {"Printer USB Printer (USB directo)"}
+
+
 def test_con_la_cola_de_impresion_detenida_igual_se_ven_las_usb(monkeypatch):
     def detenida():
         raise imp.ErrorImpresora("El servicio «Cola de impresión» de Windows está detenido.")
