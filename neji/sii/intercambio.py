@@ -10,6 +10,8 @@ nombre, y el postulante debe responder con tres XML firmados (formato_mensaje_re
 Un documento a nombre de otro RUT se informa como no recibido / rechazado; lo demás se acepta.
 """
 
+import re
+
 from ..chile import limpiar_rut
 from . import NS_SII, NS_XSI, ErrorSII
 from .dte import marca_de_tiempo
@@ -51,13 +53,21 @@ def leer_envio(xml):
         })
     if not documentos:
         raise ErrorSII("El envío no trae documentos.")
+    for d in documentos:
+        # Lo que se copia a las respuestas tiene que tener la forma que pide el esquema (y nada más).
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d["fecha"]) or not d["rut_emisor"] or not d["rut_receptor"]:
+            raise ErrorSII(f"El documento {d['tipo']} N° {d['folio']} del envío no tiene la fecha o los RUT bien "
+                           "escritos.")
     firma_set = raiz.find(f"{{{DS}}}Signature", None)
     digest = firma_set.findtext(f".//{{{DS}}}DigestValue") if firma_set is not None else None
     try:
         firma_valida = verificar_xml(raiz) > 0
     except ErrorSII:
         firma_valida = False
-    return {"id": set_dte.get("ID") or "SetDoc", "rut_emisor": limpiar_rut(texto(caratula, "s:RutEmisor")),
+    ident = set_dte.get("ID") or "SetDoc"
+    if not re.fullmatch(r"[A-Za-z_][\w.\-]{0,79}", ident):
+        ident = "SetDoc"
+    return {"id": ident, "rut_emisor": limpiar_rut(texto(caratula, "s:RutEmisor")),
             "rut_receptor": limpiar_rut(texto(caratula, "s:RutReceptor")), "digest": (digest or "").strip(),
             "documentos": documentos, "firma_valida": firma_valida}
 

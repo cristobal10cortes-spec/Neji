@@ -1,11 +1,12 @@
 # Solo para compilar NejiPOS.exe (ver README, «Para desarrolladores»). Lleva solo lo que usa
 # Neji POS: sin PyQt6 ni pandas de CORAND, para que el programa no pese de más.
-Flask>=3.0
-waitress>=3.0
+Flask>=3.1.1         # 3.1: límite de tamaño por pedido (neji/seguridad.py)
+Werkzeug>=3.1.4      # corrige rutas con nombres de dispositivo de Windows (CVE-2025-66221)
+waitress>=3.0.2      # corrige CVE-2024-49768 y CVE-2024-49769
 pywebview==6.2.1
 pyserial==3.5        # lectores de códigos por puerto COM USB (neji/lector_serie.py)
 lxml==6.1.3          # boleta electrónica (neji/sii): XML firmado
-cryptography==50.0.1 # boleta electrónica (neji/sii): firma electrónica y timbre
+cryptography==50.0.2 # boleta electrónica (neji/sii): firma electrónica y timbre
 pythonnet==3.0.5; sys_platform == "win32"
 pyinstaller==6.22.3
 pyinstaller-hooks-contrib==2026.8

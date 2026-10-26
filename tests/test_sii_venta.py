@@ -412,3 +412,9 @@ def test_conversacion_con_el_servidor_de_correo(app, api, sii, monkeypatch):
     assert "contraseña de aplicación" in r["error"]
     r = api.put("/api/sii", {"correo_puerto": "abc"}, esperado=400)
     assert "puerto" in r["error"]
+    # Un servidor sin STARTTLS: la contraseña no se manda sin cifrar.
+    llamadas.clear()
+    monkeypatch.setattr(SMTPFalso, "has_extn", lambda self, nombre: False)
+    api.put("/api/sii", {"correo_puerto": "587", "correo_clave": "secreta"})
+    r = api.post("/api/sii/correo/probar", {}, esperado=400)
+    assert "conexión cifrada" in r["error"] and not [x for x in llamadas if x[0] == "login"]

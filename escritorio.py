@@ -366,12 +366,34 @@ def preparar_motor():
     return "ok", "", datos
 
 
-def instalar_webview2():
-    """Descarga y ejecuta el instalador oficial de Microsoft. True si terminó bien."""
+def firmado_por_microsoft(ruta):
+    """¿El archivo trae una firma Authenticode válida de Microsoft? (antes de ejecutar algo descargado)."""
     import subprocess
-    destino = Path(tempfile.gettempdir()) / "MicrosoftEdgeWebview2Setup.exe"
+    comando = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+               "$f = Get-AuthenticodeSignature -LiteralPath $env:NEJI_ARCHIVO; "
+               "Write-Output $f.Status; Write-Output $f.SignerCertificate.Subject"]
+    try:
+        r = subprocess.run(comando, capture_output=True, timeout=60, check=False, text=True,
+                           env={**os.environ, "NEJI_ARCHIVO": str(ruta)}, creationflags=SIN_VENTANA_CONSOLA)
+    except (OSError, subprocess.SubprocessError):
+        registro.exception("No se pudo revisar la firma del instalador")
+        return False
+    lineas = [x.strip() for x in r.stdout.splitlines() if x.strip()]
+    ok = len(lineas) >= 2 and lineas[0] == "Valid" and "O=Microsoft Corporation" in lineas[1]
+    if not ok:
+        registro.warning("El instalador descargado no tiene una firma válida de Microsoft: %s", lineas)
+    return ok
+
+
+def instalar_webview2():
+    """Descarga y ejecuta el instalador oficial de Microsoft (si su firma es de Microsoft). True si terminó bien."""
+    import subprocess
+    carpeta = Path(tempfile.mkdtemp(prefix="neji-webview2-"))    # carpeta propia: nadie la cambia entremedio
+    destino = carpeta / "MicrosoftEdgeWebview2Setup.exe"
     try:
         urllib.request.urlretrieve(WEBVIEW2_URL, destino)
+        if not firmado_por_microsoft(destino):
+            return False
         resultado = subprocess.run([str(destino), "/install"], timeout=1200, check=False)
     except (OSError, subprocess.SubprocessError):
         registro.exception("No se pudo instalar WebView2")

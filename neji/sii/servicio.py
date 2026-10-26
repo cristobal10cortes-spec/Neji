@@ -677,9 +677,12 @@ def transporte_correo(cfg, secreto):
             with cliente:
                 if puerto != 465:
                     cliente.ehlo()
-                    if cliente.has_extn("starttls"):
-                        cliente.starttls(context=contexto)
-                        cliente.ehlo()
+                    # La contraseña nunca viaja sin cifrar: sin STARTTLS no se manda nada.
+                    if not cliente.has_extn("starttls"):
+                        raise ErrorSII(f"El servidor de correo {servidor} no ofrece conexión cifrada (STARTTLS) en "
+                                       f"el puerto {puerto}: usa el puerto 587 o 465 de tu proveedor.")
+                    cliente.starttls(context=contexto)
+                    cliente.ehlo()
                 if usuario:
                     cliente.login(usuario, clave)
                 cliente.send_message(mensaje)

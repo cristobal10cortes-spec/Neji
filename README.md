@@ -468,6 +468,17 @@ declaración de cumplimiento en sii.cl y, con la resolución, se pasa a producci
   «Cajero 1 · Cristóbal Araya Cortés»), con una vista previa del ticket al lado.
 - **Respaldo automático diario**, que guarda los últimos 10 (configurable),
   más respaldo y descarga manual.
+- **Protecciones**: contraseñas con hash (scrypt) y freno a quien prueba contraseñas; al cambiar la
+  contraseña de alguien se cierran sus otras sesiones; la página no carga nada de otros sitios (CSP),
+  no se puede meter dentro de otra (clickjacking) ni recibe pedidos de otras páginas (CSRF) o de
+  dominios ajenos (DNS rebinding); en Windows, la clave con la que se cifran la contraseña de la firma
+  electrónica y la del correo queda protegida por Windows para ese computador (una copia de la carpeta
+  de datos no sirve en otro); el correo solo se manda por conexión cifrada; los XML y planillas subidos
+  no pueden traer entidades externas; y antes de instalar WebView2 se revisa que el instalador esté
+  firmado por Microsoft.
+- Si se abre Neji desde otro equipo con un nombre de dominio propio (por ejemplo
+  `caja.mifarmacia.cl`), hay que agregarlo en la variable de entorno `NEJI_DOMINIOS`. Con la IP o el
+  nombre del computador (`http://CAJA1:5000`) funciona sin hacer nada.
 
 ---
 

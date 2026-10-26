@@ -96,6 +96,7 @@ def restaurar(ruta_db, carpeta, archivo, mantener=10):
             raise ErrorNegocio("El archivo no es un respaldo de Neji (debe ser un archivo .db).")
         if not usuarios_en(temporal):
             raise ErrorNegocio("El respaldo no tiene usuarios: no podrías entrar después de restaurarlo.")
+        quitar_extras(temporal)
         previo = crear_respaldo(ruta_db, carpeta, max(int(mantener), 1) + 1)
         origen = sqlite3.connect(temporal)
         destino = conectar(ruta_db)
@@ -117,5 +118,19 @@ def usuarios_en(ruta):
     con = sqlite3.connect(f"file:{ruta}?mode=ro", uri=True)
     try:
         return con.execute("SELECT COUNT(*) FROM usuarios WHERE activo = 1").fetchone()[0] > 0
+    finally:
+        con.close()
+
+
+def quitar_extras(ruta):
+    """Neji no usa triggers ni vistas: si un respaldo los trae (un archivo preparado para que, por ejemplo, un
+    trigger cambie permisos o precios a escondidas), se quitan antes de restaurarlo."""
+    con = sqlite3.connect(ruta)
+    try:
+        extras = con.execute("SELECT type, name FROM sqlite_master WHERE type IN ('trigger', 'view')").fetchall()
+        for tipo, nombre in extras:
+            con.execute(f'DROP {"TRIGGER" if tipo == "trigger" else "VIEW"} IF EXISTS "{nombre.replace(chr(34), chr(34) * 2)}"')
+        con.commit()
+        return len(extras)
     finally:
         con.close()

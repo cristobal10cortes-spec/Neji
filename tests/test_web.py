@@ -100,3 +100,22 @@ def _db_vacia(tmp_path):
     ruta = tmp_path / "vacia.db"
     sqlite3.connect(ruta).execute("CREATE TABLE x (a)").connection.commit()
     return ruta.read_bytes()
+
+
+def test_restaurar_quita_triggers_escondidos(tmp_path):
+    otro = _app(tmp_path / "otro")
+    Cliente(otro.test_client()).post("/api/setup", {**SETUP, "usuario": "jefa"})
+    ruta = tmp_path / "otro" / "neji.db"
+    con = sqlite3.connect(ruta)
+    con.execute("CREATE TRIGGER regalo AFTER INSERT ON ventas BEGIN UPDATE usuarios SET rol = 'admin'; END")
+    con.execute("CREATE VIEW espia AS SELECT * FROM usuarios")
+    con.commit()
+    con.close()
+    app = _app(tmp_path / "web")
+    c = Cliente(app.test_client())
+    c.post("/api/setup", SETUP)
+    r = c.http.post("/api/respaldos/restaurar", data={"archivo": (io.BytesIO(ruta.read_bytes()), "neji.db")},
+                    content_type="multipart/form-data")
+    assert r.status_code == 200, r.get_json()
+    restaurada = sqlite3.connect(tmp_path / "web" / "neji.db")
+    assert restaurada.execute("SELECT name FROM sqlite_master WHERE type IN ('trigger', 'view')").fetchall() == []
