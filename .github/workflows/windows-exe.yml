@@ -51,8 +51,39 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "NEJI_VERSION=$v"
           Write-Host "Versión: $v"
 
+      # Con licencia de PyArmor (secreto PYARMOR_LICENCIA: el archivo pyarmor-ci-XXXX.zip en base64, ver README,
+      # «Código cifrado con PyArmor»), el código de Neji va cifrado dentro del programa. Sin ella, se compila igual
+      # que siempre (la versión de prueba de PyArmor no sirve para un programa del tamaño de Neji).
       - name: Compilar NejiPOS.exe
-        run: python -m PyInstaller --noconfirm --clean empaquetado/NejiPOS.spec
+        env:
+          PYARMOR_LICENCIA: ${{ secrets.PYARMOR_LICENCIA }}
+          PYARMOR_OPCIONES: ${{ vars.PYARMOR_OPCIONES }}
+        run: |
+          if (-not $env:PYARMOR_LICENCIA) {
+            Write-Host "::notice::Sin licencia de PyArmor (secreto PYARMOR_LICENCIA): el código no va cifrado."
+            python -m PyInstaller --noconfirm --clean empaquetado/NejiPOS.spec
+            if ($LASTEXITCODE -ne 0) { throw 'PyInstaller falló' }
+            Add-Content $env:GITHUB_STEP_SUMMARY 'Código **sin cifrar** (falta la licencia de PyArmor).'
+            exit 0
+          }
+          python -m pip install "pyarmor==9.2.8"
+          $licencia = Join-Path $env:RUNNER_TEMP 'pyarmor-ci.zip'
+          [IO.File]::WriteAllBytes($licencia, [Convert]::FromBase64String($env:PYARMOR_LICENCIA))
+          try {
+            pyarmor reg $licencia
+            if ($LASTEXITCODE -ne 0) { throw 'La licencia de PyArmor no se pudo registrar' }
+          } finally { Remove-Item $licencia -ErrorAction SilentlyContinue }
+          pyarmor --version
+          # Cifra escritorio.py y todo el paquete neji y arma el programa con la receta de siempre (PyArmor le agrega
+          # al .spec el cambio de los módulos por sus versiones cifradas y su runtime).
+          $opciones = @()
+          if ($env:PYARMOR_OPCIONES) { $opciones = $env:PYARMOR_OPCIONES -split '\s+' | Where-Object { $_ } }
+          pyarmor gen @opciones --pack empaquetado/NejiPOS.spec -r escritorio.py neji
+          if ($LASTEXITCODE -ne 0) { throw 'PyArmor no pudo cifrar y compilar el programa' }
+          if (-not (Get-ChildItem 'dist\NejiPOS\_internal' -Recurse -Filter 'pyarmor_runtime*' | Select-Object -First 1)) {
+            throw 'El programa compilado no trae el runtime de PyArmor'
+          }
+          Add-Content $env:GITHUB_STEP_SUMMARY 'Código **cifrado con PyArmor**.'
 
       - name: Prueba sin ventana (servidor, archivos y motor WebView2 empaquetado)
         timeout-minutes: 5

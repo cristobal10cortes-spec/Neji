@@ -18,3 +18,10 @@ Thumbs.db
 # Compilación de NejiPOS.exe
 build/
 dist/
+
+# PyArmor (código cifrado en NejiPOS.exe): sus archivos de trabajo y la licencia
+.pyarmor/
+*.patched.spec
+pyarmor-reg*
+pyarmor-ci*
+pyarmor.bug.log
