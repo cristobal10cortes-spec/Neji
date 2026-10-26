@@ -10,6 +10,7 @@ Neji emite los documentos tributarios electrónicos (DTE) con la firma electrón
 - ``conexion.py``: semilla, token, envío y consulta de estado contra los servidores del SII.
 - ``pdf417/``: el código de barras del timbre que va impreso en el ticket (de pdf417gen, licencia MIT).
 - ``autoprueba.py``: prueba rápida de que todo funciona en el equipo (NejiPOS.exe --prueba).
+- ``demostracion.py``: el modo demostración (folios y firma de mentira; los documentos nunca van al SII).
 - ``servicio.py``: lo que usa el resto de Neji (configuración, emitir al vender, enviar en segundo plano).
 - Certificación ante el SII: ``set_pruebas.py`` (lee el set), ``certificacion.py`` (emite el set, la simulación
   y las boletas de prueba), ``libros.py`` (libros de compras y ventas), ``rcof.py`` (consumo de folios),

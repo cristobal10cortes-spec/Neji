@@ -221,7 +221,7 @@ def ver_config():
     config = leer_config(con)
     # Lo que la caja necesita saber de la boleta electrónica (lo demás está en /api/sii, solo administrador).
     config["sii_activo"] = "1" if sii.activo(con) else "0"
-    config["sii_ambiente"] = sii.leer(con)["ambiente"]
+    config["sii_ambiente"] = sii.ambiente_emision(sii.leer(con))
     return jsonify(config)
 
 

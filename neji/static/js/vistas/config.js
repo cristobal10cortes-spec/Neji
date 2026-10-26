@@ -5,7 +5,7 @@ import { recargarConfiguracion } from '../app.js';
 import { esAdmin, esFarmacia, estado, fijarCaja, nombreCaja } from '../estado.js';
 import {
   DATOS_NEGOCIO, PARTES_TICKET, bloquesTicket, columnasDe, configAutomatica, disenoPredeterminado, disenoTicket, esDe58, escritorio, guardarImpresora,
-  impresoraSugerida, imprimir, imprimirConDialogo, leerImpresora, listarImpresoras, papelDe, ticketVenta, trabajoImpresion,
+  impresoraSugerida, imprimir, imprimirConDialogo, leerImpresora, listarImpresoras, papelDe, rutConPuntos, ticketVenta, trabajoImpresion,
 } from '../impresion.js';
 import { aviso, avisoError, confirmar, fecha, formulario, h, hoy, numero, pesos, pestanas, selectorFechas, tabla, vaciar } from '../ui.js';
 import { guardarLector, leerLector, probarLector } from '../lector.js';
@@ -880,7 +880,9 @@ async function vistaSii(zona) {
     return h('div.panel',
       h('div.fila.entre',
         h('h3', 'Boleta y factura electrónica (SII)'),
-        h(`span.etiqueta.${activa ? 'ok' : 'mal'}`, activa ? `Activada · ${datos.ambientes[c.ambiente]}` : 'No activada')),
+        h('div.fila',
+          datos.demo?.activo ? h('span.etiqueta.aviso', 'Modo demostración') : null,
+          h(`span.etiqueta.${activa ? 'ok' : 'mal'}`, activa ? `Activada · ${datos.ambientes[c.ambiente]}` : 'No activada'))),
       h('p', 'Opcional. Con tu firma electrónica y los folios que autoriza el SII, cada venta lleva su boleta electrónica (o factura, si la pides al cobrar), las devoluciones su nota de crédito, y Neji las envía solas al SII. Si no la activas, Neji sigue con el comprobante interno de siempre.'),
       datos.falta_modulo ? h('div.error-modal', datos.falta_modulo) : null,
       !produccion ? h('p.ayuda', 'Ambiente de certificación: los documentos van al SII de pruebas (maullin.sii.cl) y no valen como venta real. Úsalo para el set de pruebas del SII; cuando el SII te autorice, cambia a producción con tu resolución y folios de producción.') : null,
@@ -892,6 +894,36 @@ async function vistaSii(zona) {
             ejecutar(() => api.put('/api/sii', { activo: false }), 'Boleta electrónica desactivada.');
           } }, 'Desactivar')
           : h('button.btn.primario', { type: 'button', disabled: datos.pendientes.length > 0, onclick: () => ejecutar(() => api.put('/api/sii', { activo: true }), 'Boleta electrónica activada: las ventas salen con boleta electrónica.') }, 'Activar boleta electrónica')));
+  }
+
+  // Para ver la boleta con su timbre antes de que el SII autorice al negocio: folios y firma de mentira, la leyenda
+  // «sin valor tributario» y nada se envía al SII. La firma, los folios y el ambiente de verdad no se tocan.
+  function panelDemo() {
+    const d = datos.demo;
+    if (!d) return null;
+    const cambiar = async (activo) => {
+      if (activo && !(await confirmar('Modo demostración', 'Desde ahora las ventas salen con una boleta (o factura) de demostración: timbrada como la real, pero con la leyenda «SIN VALOR TRIBUTARIO», y no se envía al SII. Tu firma, tus folios y el ambiente no cambian. Apágalo cuando termines de probar.', { aceptar: 'Encender' }))) return;
+      try {
+        await api.put('/api/sii/demo', { activo });
+        aviso(activo ? 'Modo demostración encendido: haz una venta para ver la boleta con su timbre.' : 'Modo demostración apagado.', 'ok', 6000);
+        // La caja (cobro y ticket) tiene que enterarse.
+        await recargarConfiguracion({ pestana: 'sii' });
+      } catch (e) {
+        avisoError(e);
+      }
+    };
+    return h('div.panel',
+      h('div.fila.entre',
+        h('h3', 'Modo demostración'),
+        h(`span.etiqueta${d.activo ? '.aviso' : ''}`, d.activo ? 'Encendido' : 'Apagado')),
+      h('p', 'Para ver y mostrar cómo sale la boleta con el timbre electrónico antes de que el SII autorice al negocio. Neji inventa en este computador unos folios y una firma de prueba: cada venta sale con su boleta timbrada (o factura, si la pides al cobrar) y cada devolución con su nota de crédito, con la leyenda «DEMOSTRACIÓN · SIN VALOR TRIBUTARIO». Nada se envía al SII, y tu firma, tus folios y el ambiente quedan como están.'),
+      d.activo ? h('p', `Los documentos salen a nombre de ${d.emisor.razon_social} (RUT ${rutConPuntos(d.emisor.rut)}): para cambiarlo, completa «Datos de la empresa» más abajo. Emitidos en demostración: ${numero(d.documentos)}.`) : null,
+      d.activo && d.de_ejemplo?.length ? h('p.ayuda', `Van de ejemplo, porque faltan en «Datos de la empresa»: ${d.de_ejemplo.join(', ')}.`) : null,
+      d.activo ? h('p.rojo', 'No sirve para vender de verdad: mientras esté encendido, las ventas no llevan una boleta válida.') : null,
+      !d.activo && d.bloqueo ? h('div.error-modal', d.bloqueo) : null,
+      h('div.fila.fin', { style: { marginTop: '.6rem' } },
+        d.activo ? h('button.btn.peligro', { type: 'button', onclick: () => cambiar(false) }, 'Apagar modo demostración')
+          : h('button.btn', { type: 'button', disabled: Boolean(d.bloqueo || datos.falta_modulo), onclick: () => cambiar(true) }, 'Probar en modo demostración')));
   }
 
   function panelEmisor() {
@@ -1081,12 +1113,13 @@ async function vistaSii(zona) {
   function pintar() {
     vaciar(zona,
       panelEstado(),
+      panelDemo(),
       panelEmisor(),
       h('div.columnas', panelFirma(), panelEnvios()),
       panelFolios(),
       panelCorreo(),
       h('div.panel',
-        h('h3', 'Documentos emitidos'),
+        h('h3', datos.demo?.activo ? 'Documentos emitidos en demostración' : 'Documentos emitidos'),
         selectorFechas(filtroDocumentosSii, (f) => { filtroDocumentosSii = f; cargarDocumentos(); }),
         h('div', { style: { height: '.6rem' } }),
         listaDocumentos));
