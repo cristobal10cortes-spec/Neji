@@ -9,7 +9,8 @@ from ..sii import servicio as sii
 from ..validar import ErrorNegocio, entero
 from . import bp, datos_json, rango_fechas
 
-OCULTOS = {"firma_pfx", "firma_clave", "correo_clave"}
+OCULTOS = {"firma_pfx", "firma_clave", "correo_clave", "cert_set", "cert_set_boletas", "cert_intercambio",
+           "cert_receptor"}
 
 
 def _error(e):
@@ -236,3 +237,158 @@ def emitir_pendiente(venta_id):
         raise _error(e) from None
     _avisar_enviador()
     return jsonify(svc_ventas.obtener_venta(con, venta_id)), 201
+
+
+# --- Certificación ---------------------------------------------------------------------------------------------
+
+def _texto_del_set(datos):
+    texto = str(datos.get("texto") or "").strip()
+    if not texto:
+        raise ErrorNegocio("Pega el texto del set de pruebas que descargaste del SII.")
+    if len(texto) > 500_000:
+        raise ErrorNegocio("El texto es demasiado largo para ser un set de pruebas.")
+    return texto
+
+
+def _certificar(funcion, *args, **kwargs):
+    from ..sii import falta_modulo as falta
+
+    if falta():
+        raise ErrorNegocio(falta())
+    try:
+        resultado = funcion(get_db(), current_app.secret_key, *args, **kwargs)
+    except ErrorSII as e:
+        raise _error(e) from None
+    _avisar_enviador()
+    return resultado
+
+
+@bp.get("/sii/certificacion")
+@solo_admin
+def estado_certificacion():
+    from ..sii import certificacion
+
+    return jsonify(certificacion.estado(get_db()))
+
+
+@bp.put("/sii/certificacion/receptor")
+@solo_admin
+def receptor_certificacion():
+    from ..sii import certificacion
+
+    con = get_db()
+    try:
+        with transaccion(con):
+            certificacion.guardar_receptor(con, datos_json())
+    except ErrorSII as e:
+        raise _error(e) from None
+    return estado_certificacion()
+
+
+@bp.post("/sii/certificacion/set")
+@solo_admin
+def certificar_set():
+    """Emite los documentos del set de pruebas (básico y exenta) y los deja enviándose al SII."""
+    from ..sii import certificacion
+
+    resultado = _certificar(certificacion.emitir_sets, _texto_del_set(datos_json()))
+    return jsonify(resultado=resultado, **certificacion.estado(get_db()))
+
+
+@bp.post("/sii/certificacion/libros")
+@solo_admin
+def certificar_libros():
+    from ..sii import certificacion
+
+    datos = datos_json()
+    cuales = [c for c in (datos.get("cuales") or ["ventas", "compras"]) if c in ("ventas", "compras")]
+    if not cuales:
+        raise ErrorNegocio("Elige qué libros enviar.")
+    resultado = _certificar(
+        certificacion.emitir_libros, periodo=str(datos.get("periodo") or "").strip() or None,
+        tipo_envio=str(datos.get("tipo_envio") or "TOTAL").upper(),
+        tipo_libro=str(datos.get("tipo_libro") or "MENSUAL").upper(),
+        folio_notificacion=str(datos.get("folio_notificacion") or "").strip() or None, cuales=cuales,
+        texto=str(datos.get("texto") or "").strip()[:500_000] or None)
+    return jsonify(resultado=resultado, **certificacion.estado(get_db()))
+
+
+@bp.post("/sii/certificacion/simulacion")
+@solo_admin
+def certificar_simulacion():
+    from ..sii import certificacion
+
+    resultado = _certificar(certificacion.emitir_simulacion)
+    return jsonify(resultado=resultado, **certificacion.estado(get_db()))
+
+
+@bp.post("/sii/certificacion/boletas")
+@solo_admin
+def certificar_boletas():
+    from ..sii import certificacion
+
+    resultado = _certificar(certificacion.emitir_boletas, _texto_del_set(datos_json()))
+    return jsonify(resultado=resultado, **certificacion.estado(get_db()))
+
+
+@bp.post("/sii/certificacion/intercambio")
+@solo_admin
+def certificar_intercambio():
+    """Arma las tres respuestas firmadas al EnvioDTE que el SII mandó al correo de intercambio. Quedan guardadas
+    en un ZIP para descargarlo (GET): así la descarga funciona igual en el navegador y en la ventana de Neji."""
+    import base64
+
+    from ..sii import certificacion
+    from ..sii.servicio import _poner
+
+    archivo = request.files.get("archivo")
+    if archivo is None or not archivo.filename:
+        raise ErrorNegocio("Elige el archivo XML que te llegó del SII.")
+    contenido = archivo.read(20 * 1024 * 1024 + 1)
+    if len(contenido) > 20 * 1024 * 1024:
+        raise ErrorNegocio("El archivo es demasiado grande para ser un envío de documentos.")
+    zip_, leido = _certificar(certificacion.responder_intercambio, contenido, archivo.filename)
+    con = get_db()
+    with transaccion(con):
+        _poner(con, "cert_intercambio", base64.b64encode(zip_).decode())
+    return jsonify(documentos=leido["documentos"], firma_valida=leido["firma_valida"],
+                   emisor=leido["rut_emisor"], receptor=leido["rut_receptor"])
+
+
+@bp.get("/sii/certificacion/intercambio")
+@solo_admin
+def descargar_intercambio():
+    import base64
+
+    guardado = sii.leer(get_db()).get("cert_intercambio")
+    if not guardado:
+        raise ErrorNegocio("Primero sube el archivo que te mandó el SII.", status=404)
+    return Response(base64.b64decode(guardado), mimetype="application/zip",
+                    headers={"Content-Disposition": "attachment; filename=respuestas_intercambio.zip"})
+
+
+@bp.get("/sii/certificacion/muestras")
+@solo_admin
+def certificar_muestras():
+    """Las muestras impresas (un PDF por documento, con la copia cedible de las facturas), en un ZIP."""
+    from ..sii import muestras
+
+    con = get_db()
+    try:
+        contenido = muestras.zip_de_certificacion(con)
+    except ErrorSII as e:
+        raise _error(e) from None
+    return Response(contenido, mimetype="application/zip",
+                    headers={"Content-Disposition": "attachment; filename=muestras_impresas.zip"})
+
+
+@bp.get("/sii/envios/<int:envio_id>/xml")
+@solo_admin
+def descargar_envio(envio_id):
+    fila = get_db().execute("SELECT id, etapa, clase, trackid, xml FROM sii_envios WHERE id = ?",
+                            (envio_id,)).fetchone()
+    if fila is None:
+        raise ErrorNegocio("Envío no encontrado.", status=404)
+    nombre = f"{fila['etapa'] or fila['clase']}_{fila['trackid'] or fila['id']}.xml"
+    return Response(fila["xml"], mimetype="application/xml",
+                    headers={"Content-Disposition": f"attachment; filename={nombre}"})

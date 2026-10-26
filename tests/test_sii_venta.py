@@ -170,13 +170,14 @@ def test_venta_con_devolucion_no_se_emite_despues(api, productos, turno):
 
 class SIIFalso:
     def __init__(self, codigo="EPR", rechazados=0):
-        self.codigo, self.rechazados, self.subidos = codigo, rechazados, []
+        self.codigo, self.rechazados, self.subidos, self.clases = codigo, rechazados, [], []
 
-    def enviar(self, xml, boleta):
+    def enviar(self, xml, boleta, clase="documentos"):
         self.subidos.append((xml, boleta))
+        self.clases.append(clase)
         return str(1000 + len(self.subidos))
 
-    def estado(self, trackid, boleta):
+    def estado(self, trackid, boleta, clase="documentos"):
         return {"estado": self.codigo, "final": True, "glosa": "", "informados": 1, "aceptados": 1 - self.rechazados,
                 "rechazados": self.rechazados, "reparos": 0, "detalle": []}
 
@@ -216,7 +217,7 @@ def test_envio_rechazado_y_sin_conexion(app, api, productos, turno, sii):
     vender(api, productos, turno)
 
     class SinRed(SIIFalso):
-        def enviar(self, xml, boleta):
+        def enviar(self, xml, boleta, clase="documentos"):
             raise ErrorSII("No se pudo conectar con el SII (sin red). Se reintentará solo.")
 
     r = servicio.ciclo(app.config["DATABASE"], app.secret_key, conexion=SinRed())
@@ -225,7 +226,7 @@ def test_envio_rechazado_y_sin_conexion(app, api, productos, turno, sii):
     assert "sin red" in api.get("/api/sii")["envios"]["error"]
 
     class Esquema(SIIFalso):
-        def enviar(self, xml, boleta):
+        def enviar(self, xml, boleta, clase="documentos"):
             raise ErrorSII("El SII no recibió el envío: El sobre no cumple el esquema del SII.", definitivo=True)
 
     from neji.db import conectar

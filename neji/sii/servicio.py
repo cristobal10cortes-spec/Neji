@@ -401,6 +401,11 @@ ESTADOS = {"pendiente": "Por enviar al SII", "enviado": "Enviado, esperando resp
            "reparo": "Aceptado con reparos", "rechazado": "Rechazado por el SII"}
 
 
+def _entero_o_texto(valor):
+    """Las referencias del set de pruebas traen «SET» donde va el tipo (o el código, en la boleta)."""
+    return int(valor) if valor.isdigit() else (valor or 0)
+
+
 def _impreso(xml):
     """Del documento firmado, lo que va impreso: receptor, líneas y referencias (lo mismo que recibe el SII)."""
     try:
@@ -430,8 +435,8 @@ def _impreso(xml):
                     "exento": texto(d, "s:IndExe") == "1"} for d in doc.findall("s:Detalle", ns)],
         "descuento": sum(int(numero(d, "s:ValorDR")) for d in doc.findall("s:DscRcgGlobal", ns)
                          if texto(d, "s:TpoMov") == "D"),
-        "referencias": [{"tipo": int(texto(r, "s:TpoDocRef") or 0), "folio": texto(r, "s:FolioRef"),
-                         "fecha": texto(r, "s:FchRef"), "codigo": int(texto(r, "s:CodRef") or 0),
+        "referencias": [{"tipo": _entero_o_texto(texto(r, "s:TpoDocRef")), "folio": texto(r, "s:FolioRef"),
+                         "fecha": texto(r, "s:FchRef"), "codigo": _entero_o_texto(texto(r, "s:CodRef")),
                          "razon": texto(r, "s:RazonRef")} for r in doc.findall("s:Referencia", ns)],
     }
 
@@ -534,6 +539,22 @@ def _aplicar_estado(con, envio, r):
                      f"rechazados, {reparos} con reparos", ahora(), envio["id"]))
 
 
+def _aplicar_estado_libro(con, envio, r):
+    """Lo que respondió el SII de un libro o de un consumo de folios (no tienen documentos propios)."""
+    from .conexion import ACEPTADO, RECHAZADO
+
+    estado = r["estado"]
+    if estado in RECHAZADO:
+        nuevo, glosa = "rechazado", f"El SII {RECHAZADO[estado]} ({estado})"
+    else:
+        nuevo, glosa = "procesado", f"{ACEPTADO.get(estado, estado).capitalize()} ({estado})"
+    if r.get("glosa"):
+        glosa += f": {r['glosa']}"
+    with transaccion(con):
+        con.execute("UPDATE sii_envios SET estado = ?, glosa = ?, revisado = ? WHERE id = ?",
+                    (nuevo, glosa, ahora(), envio["id"]))
+
+
 _candado_ciclo = threading.Lock()
 
 
@@ -553,16 +574,23 @@ def _ciclo(ruta_db, secreto, conexion, correo):
     con = conectar(ruta_db)
     try:
         cfg = leer(con)
-        if cfg.get("activo") != "1" or falta_modulo():
+        if falta_modulo():
+            return resumen
+        # Con la boleta electrónica desactivada solo se mueven los envíos de la certificación.
+        activo = cfg.get("activo") == "1"
+        if not activo and not con.execute("SELECT 1 FROM sii_envios WHERE ambiente = ? AND etapa IS NOT NULL AND "
+                                          "estado IN ('por_enviar', 'enviado')", (cfg["ambiente"],)).fetchone():
             return resumen
         firma = cargar_firma(cfg, secreto)
-        resumen["sobres"] = armar_sobres(con, cfg, firma)
+        if activo:
+            resumen["sobres"] = armar_sobres(con, cfg, firma)
         sii = conexion or ConexionSII(cfg["ambiente"], firma, cfg["rut"])
         momento = ahora()
         for envio in con.execute("SELECT * FROM sii_envios WHERE ambiente = ? AND estado = 'por_enviar' AND "
-                                 "(proximo IS NULL OR proximo <= ?) ORDER BY id", (cfg["ambiente"], momento)).fetchall():
+                                 "(proximo IS NULL OR proximo <= ?) AND (? OR etapa IS NOT NULL) ORDER BY id",
+                                 (cfg["ambiente"], momento, activo)).fetchall():
             try:
-                trackid = sii.enviar(envio["xml"], bool(envio["boletas"]))
+                trackid = sii.enviar(envio["xml"], bool(envio["boletas"]), envio["clase"])
             except ErrorSII as e:
                 definitivo = getattr(e, "definitivo", False)
                 espera = REINTENTOS[min(envio["intentos"], len(REINTENTOS) - 1)]
@@ -584,21 +612,24 @@ def _ciclo(ruta_db, secreto, conexion, correo):
                             (envio["id"],))
             resumen["subidos"] += 1
         for envio in con.execute("SELECT * FROM sii_envios WHERE ambiente = ? AND estado = 'enviado' AND "
-                                 "(proximo IS NULL OR proximo <= ?) ORDER BY id", (cfg["ambiente"], momento)).fetchall():
+                                 "(proximo IS NULL OR proximo <= ?) AND (? OR etapa IS NOT NULL) ORDER BY id",
+                                 (cfg["ambiente"], momento, activo)).fetchall():
             try:
-                r = sii.estado(envio["trackid"], bool(envio["boletas"]))
+                r = sii.estado(envio["trackid"], bool(envio["boletas"]), envio["clase"])
             except ErrorSII as e:
                 resumen["errores"].append(str(e))
                 break
             resumen["consultados"] += 1
-            if r.get("final"):
+            if r.get("final") and envio["clase"] != "documentos":
+                _aplicar_estado_libro(con, envio, r)
+            elif r.get("final"):
                 _aplicar_estado(con, envio, r)
             else:
                 espera = REINTENTOS[min(envio["intentos"], len(REINTENTOS) - 1)]
                 with transaccion(con):
                     con.execute("UPDATE sii_envios SET intentos = intentos + 1, proximo = ?, glosa = ? WHERE id = ?",
                                 (_mas(espera), f"En proceso en el SII ({r['estado']})", envio["id"]))
-        if correo_configurado(cfg):
+        if activo and correo_configurado(cfg):
             try:
                 resumen["correos"] = enviar_correos(con, cfg, firma, secreto, correo)
             except ErrorSII as e:

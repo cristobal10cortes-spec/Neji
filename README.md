@@ -363,8 +363,8 @@ Si el dueño lo activa, Neji emite los documentos tributarios electrónicos **co
 electrónica** y los manda solo al SII. Si no se activa, todo sigue igual que antes, con el
 comprobante interno.
 
-- **Boleta electrónica** (39), boleta exenta (41), **factura electrónica** (33), factura exenta (34)
-  y **nota de crédito** (61). Una venta solo con productos exentos sale como documento exento.
+- **Boleta electrónica** (39), boleta exenta (41), **factura electrónica** (33), factura exenta (34),
+  **nota de crédito** (61) y nota de débito (56, en la certificación). Una venta solo con productos exentos sale como documento exento.
 - **Al cobrar** se elige *Boleta* (lo normal) o *Factura* (tecla **F7**). La factura pide un cliente
   con RUT, giro, dirección y comuna (se completan en **Clientes**).
 - **El ticket** es la representación impresa del documento. Lleva el recuadro con el RUT, el tipo
@@ -386,10 +386,8 @@ comprobante interno.
 1. **La firma electrónica** (certificado digital `.pfx` o `.p12`) del dueño o de una persona
    autorizada ante el SII: E-Cert, Acepta, E-Sign u otra empresa certificadora.
 2. **La certificación del SII.** Para emitir con un sistema propio (como Neji), el SII pide
-   certificarlo una vez. Se postula en sii.cl (*Factura electrónica → Sistema de facturación
-   propio o de mercado*) y se emite el **set de pruebas** que entrega el SII en el *ambiente de
-   certificación*. También se envían las muestras impresas. Al aprobar, el SII autoriza a emitir
-   en *producción* (con una resolución).
+   certificarlo una vez. Neji hace todos los pasos desde **Configuración → Certificación SII**
+   (ver más abajo). Al aprobar, el SII autoriza a emitir en *producción* (con una resolución).
 3. En **Configuración → Boleta electrónica**:
    - Completa los datos de la empresa tal como están en el SII: RUT, razón social, giro, código
      de actividad (Acteco), dirección, comuna y oficina del SII.
@@ -406,16 +404,48 @@ producción.
 
 - La firma queda guardada en la base de Neji (va en los respaldos). Su contraseña queda cifrada con
   la clave de ese computador: si se restaura el respaldo en otro equipo, hay que volver a subir la firma.
-- El SII ya no pide el reporte de consumo de folios (RCOF) de las boletas, así que Neji no lo envía.
+- El SII ya no pide el reporte de consumo de folios (RCOF) de las boletas en la operación normal, así
+  que Neji solo lo envía en la certificación de la boleta, donde todavía se exige.
 - **Las facturas le llegan al cliente por correo** (intercambio de DTE, lo pide el SII): cuando el SII
   acepta una factura o la nota de crédito de una factura, Neji le manda el XML al correo que tiene el
   cliente en **Clientes**. Se configura la cuenta en **Configuración → Boleta electrónica → Correo para
   mandar las facturas** (con Gmail: `smtp.gmail.com`, puerto 587 y una «contraseña de aplicación»).
   Si el cliente no tiene correo, la factura queda marcada y se manda después con **Enviar XML**.
-- Neji no emite todavía guías de despacho (52) ni notas de débito (56).
+- Neji no emite guías de despacho (52), facturas de compra (46) ni documentos de exportación: al
+  postular, elige solo factura, factura exenta, nota de crédito, nota de débito y boleta.
 - Los documentos se validaron con los esquemas oficiales del SII y las firmas con xmlsec y con DTE
   reales aceptados por el SII. Pero desde el desarrollo no se pudo conectar con los servidores del
   SII: el set de pruebas de la certificación es la primera prueba real.
+
+**Certificación ante el SII, paso a paso** (Configuración → Certificación SII)
+
+Antes: en sii.cl → *Factura electrónica → Sistema de certificación* se postula con «software de
+mercado o desarrollo propio». En la pestaña **Boleta electrónica**, con el ambiente en
+*Certificación*, se cargan los datos de la empresa (tal como salen en sii.cl → *Datos para la
+construcción de DTE*), la fecha de resolución de la postulación (número 0), la firma y los folios de
+certificación de factura (33), nota de crédito (61), nota de débito (56) y, si se postula a ellas,
+factura exenta (34) y boleta (39 y 41). No hace falta activar la boleta electrónica para certificar.
+
+1. **Set de pruebas.** Se descarga de sii.cl el texto del set y se pega en Neji, que emite cada caso
+   (precios netos, descuentos por línea y globales, notas de crédito que anulan, corrigen el giro con
+   «donde dice… debe decir…» o devuelven, y la nota de débito) y los envía al SII, un envío por set.
+2. **Libros.** Con un botón se envían el libro de ventas (los documentos del set básico) y el de
+   compras (las facturas recibidas que trae el set: IVA de uso común con su factor de
+   proporcionalidad, IVA no recuperable, retención total del IVA y notas de crédito). Si el SII
+   responde que el período ya tiene un libro, se reenvían como *Ajuste*.
+3. **Simulación.** Neji emite diez documentos como los de la operación diaria (con productos del
+   inventario y precios con IVA, igual que al vender) y una factura exenta si hay folios de ella.
+4. **Intercambio.** El XML que el SII manda al correo de intercambio se sube a Neji, que arma y firma
+   las tres respuestas (recepción del envío, recibo de mercaderías y aceptación comercial) en un ZIP
+   para subirlas en sii.cl.
+5. **Muestras impresas.** Un ZIP con un PDF por documento (con el timbre legible, a 2 cm del borde, y
+   la copia cedible de las facturas con el acuse de recibo), para mandar a SII_dte_impresos@sii.cl.
+6. **Boleta electrónica.** Su set de pruebas (CASO-1, CASO-2…) se pega aparte: Neji emite las
+   boletas con la referencia que pide el SII y envía también el consumo de folios (RCOF).
+
+Neji sube cada envío y consulta su estado solo; en la pantalla se ve el **número de envío
+(TrackID)** de cada paso, que es el que se declara en sii.cl → *Revisar avance*. Al final se firma la
+declaración de cumplimiento en sii.cl y, con la resolución, se pasa a producción.
 
 ### Reportes (administrador)
 
