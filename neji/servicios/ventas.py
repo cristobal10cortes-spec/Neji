@@ -224,7 +224,7 @@ def _emitir_documento(con, venta_id, documento, avisos, tasa_iva):
     if avisos is not None:
         cfg = sii.leer(con)
         quedan = {}
-        for f in sii.folios(con, cfg["ambiente"]):
+        for f in sii.folios(con, sii.ambiente_emision(cfg)):
             quedan[f["tipo"]] = quedan.get(f["tipo"], 0) + f["disponibles"]
         for tipo, n in quedan.items():
             if tipo in (39, 33) and n <= 20:

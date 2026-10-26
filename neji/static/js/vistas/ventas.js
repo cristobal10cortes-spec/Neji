@@ -1161,6 +1161,8 @@ export async function montar(contenedor, parametros = {}) {
         h('div.metodos.documentos', [['boleta', 'Boleta'], ['factura', 'Factura']].map(([clave, nombre]) => h('button', {
           type: 'button', class: clave === documento ? 'activo' : null, title: 'Boleta o factura (F7)', onclick: () => elegirDocumento(clave),
         }, nombre))),
+        estado.config.sii_ambiente === 'demostracion'
+          ? h('p.ayuda', 'Modo demostración: el documento sale timbrado, pero sin valor tributario y no se envía al SII.') : null,
         documento === 'factura'
           ? (c ? h('p.ayuda', `Factura a ${c.nombre}. Debe tener RUT, giro, dirección y comuna, y su correo para mandarle la factura (se editan en Clientes).`)
             : h('div.fila', h('span.rojo', 'Para la factura elige el cliente.'),

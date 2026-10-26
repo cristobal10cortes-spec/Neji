@@ -400,6 +400,23 @@ comprobante interno.
 Para pasar a producción se cambia el ambiente, se pone la resolución y se cargan los folios de
 producción.
 
+**Modo demostración (sin el SII)**
+
+Para ver y mostrar cómo sale la boleta con su timbre antes de que el SII autorice al negocio, en
+**Configuración → Boleta electrónica → Modo demostración** se pulsa **Probar en modo demostración**.
+No hace falta firma, folios ni postulación: Neji inventa en ese computador unos folios y una firma de
+prueba, con la misma forma que los reales.
+
+- Cada venta sale con su boleta timbrada (o factura, si se pide al cobrar) y cada devolución con su
+  nota de crédito. El ticket dice **DEMOSTRACIÓN · SIN VALOR TRIBUTARIO** y no remite a sii.cl.
+- **Nada se envía al SII** ni al correo de los clientes. Los documentos quedan aparte, con su propia
+  numeración, y el envío automático nunca los toma.
+- La firma, los folios, el ambiente y la activación que haya no cambian: al apagarlo, todo sigue como
+  estaba. No se puede encender si la boleta electrónica está activada en producción, y activar
+  producción lo apaga.
+- Salen a nombre de los datos de la empresa de esa pestaña. Si faltan, se usan los de
+  **Configuración → Negocio** o unos de ejemplo, y el panel dice cuáles.
+
 **Bueno saber**
 
 - La firma queda guardada en la base de Neji (va en los respaldos). Su contraseña queda cifrada con
@@ -420,7 +437,10 @@ producción.
 **Certificación ante el SII, paso a paso** (Configuración → Certificación SII)
 
 Antes: en sii.cl → *Factura electrónica → Sistema de certificación* se postula con «software de
-mercado o desarrollo propio». En la pestaña **Boleta electrónica**, con el ambiente en
+mercado o desarrollo propio». La postulación es de la empresa (su RUT) y la hace su representante
+legal con su certificado digital. Ahí puede nombrar como usuario administrador a otra persona (por
+ejemplo, quien instala Neji), que después pide los folios y firma con su propio certificado. Con un
+RUT de persona sin inicio de actividades, el SII no deja pedir folios. En la pestaña **Boleta electrónica**, con el ambiente en
 *Certificación*, se cargan los datos de la empresa (tal como salen en sii.cl → *Datos para la
 construcción de DTE*), la fecha de resolución de la postulación (número 0), la firma y los folios de
 certificación de factura (33), nota de crédito (61), nota de débito (56) y, si se postula a ellas,

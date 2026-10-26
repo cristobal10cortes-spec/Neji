@@ -6,8 +6,9 @@ from datetime import datetime, timedelta, timezone
 RUT_PRUEBA = "11111111-1"
 
 
-def _pfx_temporal(clave):
-    """Una firma electrónica de mentira, con la forma de las reales (RUT del titular en la extensión del SII)."""
+def pfx_temporal(clave, nombre="Prueba Neji", dias=1):
+    """Una firma electrónica de mentira, con la forma de las reales (RUT del titular en la extensión del SII).
+    También la usa el modo demostración (demostracion.py)."""
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
@@ -15,12 +16,12 @@ def _pfx_temporal(clave):
     from cryptography.x509.oid import NameOID
 
     llave = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    nombre = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Prueba Neji")])
+    nombre = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, nombre)])
     ahora = datetime.now(timezone.utc)
     rut = RUT_PRUEBA.encode()
     cert = (x509.CertificateBuilder().subject_name(nombre).issuer_name(nombre).public_key(llave.public_key())
             .serial_number(x509.random_serial_number()).not_valid_before(ahora - timedelta(days=1))
-            .not_valid_after(ahora + timedelta(days=1))
+            .not_valid_after(ahora + timedelta(days=dias))
             .add_extension(x509.SubjectAlternativeName([x509.OtherName(
                 x509.ObjectIdentifier("1.3.6.1.4.1.8321.1"), bytes([0x16, len(rut)]) + rut)]), critical=False)
             .sign(llave, hashes.SHA256()))
@@ -40,7 +41,7 @@ def probar():
     from .firma import Firma, verificar_xml
     from .pdf417 import matriz, pixeles
 
-    firma = Firma(_pfx_temporal("prueba"), "prueba")
+    firma = Firma(pfx_temporal("prueba"), "prueba")
     if firma.rut != RUT_PRUEBA:
         raise RuntimeError(f"la firma de prueba trae el RUT {firma.rut!r}")
     raiz = etree.fromstring(f'<SetDTE xmlns="{NS_SII}" ID="SetDoc"><Caratula>Ñandú y Peña</Caratula></SetDTE>'.encode())

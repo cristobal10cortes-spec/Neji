@@ -323,6 +323,7 @@ function recuadroDte(doc) {
     h('div.c.g', `R.U.T.: ${rutConPuntos(e.rut)}`),
     h('div.c.g', doc.nombre),
     h('div.c.g', `N° ${doc.folio}`),
+    doc.demo ? h('div.c.g', 'DEMOSTRACIÓN') : null,
     e.oficina_sii ? h('div.c', `S.I.I. - ${e.oficina_sii.toUpperCase()}`) : null);
 }
 
@@ -359,7 +360,10 @@ function totalesDte(doc) {
   ];
 }
 
-/** El timbre electrónico y las leyendas que pide el SII. */
+/**
+ * El timbre electrónico y las leyendas que pide el SII. En modo demostración (folios y firma de mentira, no se
+ * envía al SII) dice que no vale y no invita a verificarlo en sii.cl.
+ */
 function timbreDte(doc, papel) {
   const r = doc.resolucion || {};
   return [
@@ -368,7 +372,8 @@ function timbreDte(doc, papel) {
       papel === '58' ? svgPdf417(doc.pdf417_58 || doc.pdf417, 3, true) : svgPdf417(doc.pdf417, 2.5)),
     h('div.c', 'Timbre Electrónico SII'),
     h('div.c', `Res. N° ${r.numero ?? 0}${r.anio ? ' de ' + r.anio : ''}`),
-    h('div.c', 'Verifique documento: www.sii.cl'),
+    doc.demo ? [h('div.c.g', 'DEMOSTRACIÓN'), h('div.c.g', 'SIN VALOR TRIBUTARIO')]
+      : h('div.c', 'Verifique documento: www.sii.cl'),
   ];
 }
 

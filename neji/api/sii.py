@@ -4,7 +4,7 @@ from flask import Response, current_app, jsonify, request
 
 from ..auth import con_permiso, solo_admin
 from ..db import get_db, transaccion
-from ..sii import NOMBRES, ErrorSII, falta_modulo
+from ..sii import NOMBRES, ErrorSII, demostracion, falta_modulo
 from ..sii import servicio as sii
 from ..validar import ErrorNegocio, entero
 from . import bp, datos_json, rango_fechas
@@ -31,6 +31,7 @@ def estado_sii():
         "pendientes": sii.pendientes_para_activar(con),
         "envios": sii.resumen_envios(con, cfg["ambiente"]),
         "correo": {"configurado": sii.correo_configurado(cfg), "clave_guardada": bool(cfg.get("correo_clave"))},
+        "demo": demostracion.estado(con, cfg),
         "tipos": NOMBRES,
     })
 
@@ -42,6 +43,19 @@ def guardar_sii():
     try:
         with transaccion(con):
             sii.guardar(con, datos_json(), current_app.secret_key)
+    except ErrorSII as e:
+        raise _error(e) from None
+    return estado_sii()
+
+
+@bp.put("/sii/demo")
+@solo_admin
+def cambiar_demo():
+    """Enciende o apaga el modo demostración (boletas con timbre de mentira, que no van al SII)."""
+    con = get_db()
+    try:
+        with transaccion(con):
+            sii.cambiar_demo(con, datos_json().get("activo") in (True, 1, "1"))
     except ErrorSII as e:
         raise _error(e) from None
     return estado_sii()
@@ -185,19 +199,20 @@ def listar_documentos():
     con = get_db()
     cfg = sii.leer(con)
     _, _, inicio, fin = rango_fechas()
-    condiciones, parametros = ["d.ambiente = ?", "d.emitido BETWEEN ? AND ?"], [cfg["ambiente"], inicio, fin]
+    condiciones = ["d.ambiente = ?", "d.emitido BETWEEN ? AND ?"]
+    parametros = [sii.ambiente_emision(cfg), inicio, fin]
     if request.args.get("estado"):
         condiciones.append("d.estado = ?")
         parametros.append(request.args["estado"])
     filas = con.execute(
-        f"""SELECT d.id, d.tipo, d.folio, d.fecha, d.emitido, d.total, d.estado, d.glosa, d.rut_receptor,
+        f"""SELECT d.id, d.ambiente, d.tipo, d.folio, d.fecha, d.emitido, d.total, d.estado, d.glosa, d.rut_receptor,
                    d.razon_receptor, d.venta_id, d.devolucion_id, v.folio AS venta_folio, e.trackid,
                    d.correo_receptor, d.correo_estado, d.correo_glosa, d.correo_enviado
             FROM sii_documentos d LEFT JOIN ventas v ON v.id = d.venta_id
             LEFT JOIN sii_envios e ON e.id = d.envio_id
             WHERE {' AND '.join(condiciones)} ORDER BY d.id DESC LIMIT 2000""", parametros).fetchall()
     return jsonify([dict(f) | {"nombre": NOMBRES.get(f["tipo"], ""),
-                               "estado_texto": sii.ESTADOS.get(f["estado"], f["estado"]),
+                               "estado_texto": sii.texto_estado(f),
                                "correo_texto": sii.ESTADOS_CORREO.get(f["correo_estado"])} for f in filas])
 
 

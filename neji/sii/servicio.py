@@ -9,6 +9,7 @@
   estado. Nada de red ocurre dentro de una venta.
 - Intercambio: cuando el SII acepta una factura (o la nota de crédito de una factura), el mismo hilo le
   manda el XML por correo al cliente, si se configuró la cuenta de correo.
+- Modo demostración (demostracion.py): se emite igual, con folios y firma de mentira, y nada va al SII.
 """
 
 import base64
@@ -20,7 +21,7 @@ from datetime import datetime, timedelta
 
 from ..chile import limpiar_rut, validar_rut
 from ..db import ahora, conectar, transaccion
-from . import BOLETAS, FACTURAS, NOMBRES, NS_SII, RUT_CONSUMIDOR_FINAL, ErrorSII, falta_modulo
+from . import BOLETAS, FACTURAS, NOMBRES, NS_SII, RUT_CONSUMIDOR_FINAL, ErrorSII, demostracion, falta_modulo
 
 registro = logging.getLogger("neji.sii")
 
@@ -40,6 +41,7 @@ def leer(con):
     cfg.setdefault("activo", "0")
     cfg.setdefault("ambiente", "certificacion")
     cfg.setdefault("numero_resolucion", "0")
+    cfg.setdefault("demo", "0")
     return cfg
 
 
@@ -49,7 +51,25 @@ def _poner(con, clave, valor):
 
 
 def activo(con):
-    return leer(con).get("activo") == "1" and not falta_modulo()
+    """Si las ventas llevan boleta electrónica (la de verdad o la de demostración)."""
+    cfg = leer(con)
+    return (cfg.get("activo") == "1" or cfg.get("demo") == "1") and not falta_modulo()
+
+
+def ambiente_emision(cfg):
+    """Dónde quedan los documentos que se emiten al vender: el ambiente configurado o el de demostración."""
+    return demostracion.AMBIENTE if cfg.get("demo") == "1" else cfg["ambiente"]
+
+
+def cambiar_demo(con, quiere):
+    """Enciende o apaga el modo demostración. No toca la firma, los folios, el ambiente ni la activación."""
+    if quiere:
+        if falta_modulo():
+            raise ErrorSII(falta_modulo())
+        motivo = demostracion.bloqueo(leer(con))
+        if motivo:
+            raise ErrorSII(motivo)
+    _poner(con, "demo", "1" if quiere else "0")
 
 
 def actecos(cfg):
@@ -118,7 +138,11 @@ def guardar(con, datos, secreto=None):
             if faltan:
                 raise ErrorSII("Para activar la boleta electrónica falta: " + "; ".join(faltan) + ".")
         _poner(con, "activo", "1" if quiere else "0")
-    return leer(con)
+    final = leer(con)
+    if final["activo"] == "1" and final["ambiente"] == "produccion" and final["demo"] == "1":
+        _poner(con, "demo", "0")          # en producción las ventas llevan la boleta de verdad
+        final = leer(con)
+    return final
 
 
 def pendientes_para_activar(con):
@@ -299,16 +323,29 @@ def _intercambio(doc):
     return correo, "pendiente", None
 
 
-def _guardar_documento(con, cfg, doc, resultado, venta_id=None, devolucion_id=None):
+def _para_emitir(con, cfg, tipo, secreto):
+    """(ambiente, emisor, folio, CAF, firma) de un documento nuevo: los de verdad o los de demostración."""
+    if cfg.get("demo") == "1":
+        datos = demostracion.emisor(con, cfg)
+        folio, caf = demostracion.tomar_folio(con, tipo, datos)
+        return demostracion.AMBIENTE, datos, folio, caf, demostracion.firma()
+    folio, caf = tomar_folio(con, cfg["ambiente"], tipo)
+    return cfg["ambiente"], emisor(cfg), folio, caf, cargar_firma(cfg, secreto)
+
+
+def _guardar_documento(con, cfg, doc, resultado, venta_id=None, devolucion_id=None, ambiente=None):
     receptor = doc.get("receptor") or {}
     t = resultado["totales"]
-    correo, correo_estado, correo_glosa = _intercambio(doc)
+    ambiente = ambiente or cfg["ambiente"]
+    # Lo de demostración no se manda a nadie (ni al SII ni al cliente).
+    demo = ambiente == demostracion.AMBIENTE
+    correo, correo_estado, correo_glosa = (None, None, None) if demo else _intercambio(doc)
     return con.execute(
         """INSERT INTO sii_documentos (ambiente, tipo, folio, fecha, emitido, venta_id, devolucion_id,
                rut_receptor, razon_receptor, neto, iva, exento, total, xml, ted, correo_receptor, correo_estado,
                correo_glosa)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (cfg["ambiente"], doc["tipo"], doc["folio"], doc["fecha"], ahora(), venta_id, devolucion_id,
+        (ambiente, doc["tipo"], doc["folio"], doc["fecha"], ahora(), venta_id, devolucion_id,
          limpiar_rut(receptor.get("rut")) or RUT_CONSUMIDOR_FINAL, receptor.get("razon_social") or "Consumidor Final",
          t["neto"], t["iva"], t["exento"], t["total"], resultado["xml"], resultado["ted"].decode("iso-8859-1"),
          correo, correo_estado, correo_glosa),
@@ -336,19 +373,19 @@ def emitir_venta(con, venta_id, documento, secreto, tasa_iva=19):
             receptor = {"rut": cliente["rut"], "razon_social": cliente["nombre"]}
     exento_bruto = sum(i["importe"] for i in items if i["exento"])
     descuento_exento = exento_bruto - venta["exento"] if venta["descuento"] else 0
-    folio, caf = tomar_folio(con, cfg["ambiente"], tipo)
+    ambiente, datos_emisor, folio, caf, firma = _para_emitir(con, cfg, tipo, secreto)
     fiado = con.execute("SELECT 1 FROM venta_pagos WHERE venta_id = ? AND metodo = 'fiado'", (venta_id,)).fetchone()
-    doc = {"tipo": tipo, "folio": folio, "fecha": venta["fecha"][:10], "emisor": emisor(cfg), "receptor": receptor,
+    doc = {"tipo": tipo, "folio": folio, "fecha": venta["fecha"][:10], "emisor": datos_emisor, "receptor": receptor,
            "lineas": [{"nombre": i["descripcion"], "codigo": i["codigo"], "cantidad": i["cantidad"],
                        "precio": i["precio_unitario"], "monto": i["importe"], "exento": bool(i["exento"])}
                       for i in items],
            "descuento_afecto": venta["descuento"] - descuento_exento, "descuento_exento": descuento_exento,
            "tasa_iva": tasa_iva, "credito": bool(fiado)}
-    resultado = dte.construir(doc, caf, cargar_firma(cfg, secreto))
+    resultado = dte.construir(doc, caf, firma)
     if resultado["totales"]["total"] != venta["total"]:     # no debería pasar: mismos cálculos que la venta
         raise ErrorSII(f"El total del documento ({resultado['totales']['total']}) no cuadra con la venta "
                        f"({venta['total']}).")
-    return _guardar_documento(con, cfg, doc, resultado, venta_id=venta_id)
+    return _guardar_documento(con, cfg, doc, resultado, venta_id=venta_id, ambiente=ambiente)
 
 
 def documento_de_venta(con, venta_id):
@@ -368,7 +405,7 @@ def emitir_nota_credito(con, devolucion_id, secreto, tasa_iva=19):
     if original is None:
         return None
     cfg = leer(con)
-    if original["ambiente"] != cfg["ambiente"]:
+    if original["ambiente"] != ambiente_emision(cfg):
         return None
     venta = con.execute("SELECT * FROM ventas WHERE id = ?", (devolucion["venta_id"],)).fetchone()
     lineas = []
@@ -385,20 +422,27 @@ def emitir_nota_credito(con, devolucion_id, secreto, tasa_iva=19):
                                                  (venta["cliente_id"],)).fetchone())
     elif original["rut_receptor"] and original["rut_receptor"] != RUT_CONSUMIDOR_FINAL:
         receptor = {"rut": original["rut_receptor"], "razon_social": original["razon_receptor"]}
-    folio, caf = tomar_folio(con, cfg["ambiente"], 61)
-    doc = {"tipo": 61, "folio": folio, "fecha": devolucion["fecha"][:10], "emisor": emisor(cfg), "receptor": receptor,
+    ambiente, datos_emisor, folio, caf, firma = _para_emitir(con, cfg, 61, secreto)
+    doc = {"tipo": 61, "folio": folio, "fecha": devolucion["fecha"][:10], "emisor": datos_emisor, "receptor": receptor,
            "lineas": lineas, "tasa_iva": tasa_iva,
            "referencias": [{"tipo": original["tipo"], "folio": original["folio"], "fecha": original["fecha"],
                             "codigo": 1 if anula else 3,
                             "razon": devolucion["motivo"] or "Devolución de mercadería"}]}
-    resultado = dte.construir(doc, caf, cargar_firma(cfg, secreto))
-    return _guardar_documento(con, cfg, doc, resultado, venta_id=devolucion["venta_id"], devolucion_id=devolucion_id)
+    resultado = dte.construir(doc, caf, firma)
+    return _guardar_documento(con, cfg, doc, resultado, venta_id=devolucion["venta_id"], devolucion_id=devolucion_id,
+                              ambiente=ambiente)
 
 
 ESTADOS_CORREO = {"pendiente": "XML por enviar al cliente", "enviado": "XML enviado al cliente",
                   "sin_correo": "Cliente sin correo"}
 ESTADOS = {"pendiente": "Por enviar al SII", "enviado": "Enviado, esperando respuesta", "aceptado": "Aceptado por el SII",
            "reparo": "Aceptado con reparos", "rechazado": "Rechazado por el SII"}
+
+
+def texto_estado(fila):
+    if fila["ambiente"] == demostracion.AMBIENTE:
+        return "Demostración: no se envía al SII"
+    return ESTADOS.get(fila["estado"], fila["estado"])
 
 
 def _entero_o_texto(valor):
@@ -454,7 +498,9 @@ def para_ticket(con, fila, cfg=None):
     emisor |= {k: v for k, v in impreso.pop("emisor", {}).items() if v}
     return {"id": fila["id"], "tipo": fila["tipo"], "nombre": NOMBRES.get(fila["tipo"], ""), "folio": fila["folio"],
             "fecha": fila["fecha"], "ambiente": fila["ambiente"], "estado": fila["estado"],
-            "estado_texto": ESTADOS.get(fila["estado"], fila["estado"]), "glosa": fila["glosa"],
+            "estado_texto": texto_estado(fila), "glosa": fila["glosa"],
+            # Demostración: el ticket lleva la leyenda «SIN VALOR TRIBUTARIO» y no remite a sii.cl.
+            "demo": fila["ambiente"] == demostracion.AMBIENTE,
             "neto": fila["neto"], "iva": fila["iva"], "exento": fila["exento"], "total": fila["total"],
             "rut_receptor": fila["rut_receptor"], "razon_receptor": fila["razon_receptor"],
             "devolucion_id": fila["devolucion_id"], "ted": fila["ted"],
