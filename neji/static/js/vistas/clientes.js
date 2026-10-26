@@ -15,7 +15,9 @@ export function formCliente(cliente = null) {
     { nombre: 'telefono', etiqueta: 'Teléfono', valor: cliente?.telefono },
     { nombre: 'email', etiqueta: 'Correo', tipo: 'email', valor: cliente?.email },
     { nombre: 'direccion', etiqueta: 'Dirección', valor: cliente?.direccion },
-    { nombre: 'giro', etiqueta: 'Giro', valor: cliente?.giro },
+    { nombre: 'comuna', etiqueta: 'Comuna', valor: cliente?.comuna },
+    { nombre: 'ciudad', etiqueta: 'Ciudad', valor: cliente?.ciudad },
+    { nombre: 'giro', etiqueta: 'Giro', valor: cliente?.giro, ayuda: estado.config.sii_activo === '1' ? 'Para la factura: RUT, razón social, giro, dirección y comuna.' : null },
   ];
   if (puede('clientes_credito')) {
     campos.push(

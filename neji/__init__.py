@@ -41,6 +41,7 @@ def create_app(config=None):
         DATABASE=os.path.join(datos, "neji.db"),
         RESPALDOS=os.path.join(datos, "respaldos"),
         RESPALDO_AUTOMATICO=True,
+        SII_ENVIO_AUTOMATICO=True,   # el hilo que manda al SII las boletas emitidas (si está activo)
         PERMANENT_SESSION_LIFETIME=timedelta(hours=14),
         SESSION_COOKIE_SAMESITE="Lax",
         JSON_SORT_KEYS=False,
@@ -79,6 +80,11 @@ def create_app(config=None):
         app.logger.exception("Error inesperado")
         return jsonify(error="Ocurrió un error inesperado. El detalle quedó en el registro de Neji "
                              "(neji.log en la carpeta de datos, o la consola si se inició con run.py)."), 500
+
+    if app.config["SII_ENVIO_AUTOMATICO"] and not app.config.get("TESTING"):
+        from .sii.servicio import Enviador
+
+        app.extensions["sii_enviador"] = Enviador(app.config["DATABASE"], app.secret_key).iniciar()
 
     if app.config["RESPALDO_AUTOMATICO"]:
         ultima_revision = {"t": 0.0}

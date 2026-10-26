@@ -11,11 +11,23 @@ from ..validar import ErrorNegocio, entero
 from . import bp, datos_json, rango_fechas, sin_costos
 
 
+def _avisar_envio_sii():
+    from flask import current_app
+
+    enviador = current_app.extensions.get("sii_enviador")
+    if enviador is not None:
+        enviador.avisar()
+
+
 @bp.post("/ventas")
 def crear_venta():
     con = get_db()
-    venta_id = svc.registrar_venta(con, datos_json(), usuario_actual())
-    return jsonify(sin_costos(svc.obtener_venta(con, venta_id))), 201
+    avisos = []
+    venta_id = svc.registrar_venta(con, datos_json(), usuario_actual(), avisos)
+    _avisar_envio_sii()
+    venta = svc.obtener_venta(con, venta_id)
+    venta["avisos"] = avisos
+    return jsonify(sin_costos(venta)), 201
 
 
 @bp.get("/ventas")
@@ -62,8 +74,12 @@ def venta_por_folio(folio):
 @con_permiso("devoluciones")
 def devolver_venta(venta_id):
     con = get_db()
-    svc.devolver(con, venta_id, datos_json(), usuario_actual())
-    return jsonify(sin_costos(svc.obtener_venta(con, venta_id))), 201
+    avisos = []
+    svc.devolver(con, venta_id, datos_json(), usuario_actual(), avisos)
+    _avisar_envio_sii()
+    venta = svc.obtener_venta(con, venta_id)
+    venta["avisos"] = avisos
+    return jsonify(sin_costos(venta)), 201
 
 
 # --- Cotizaciones ------------------------------------------------------------

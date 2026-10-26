@@ -354,6 +354,63 @@ una planilla guardada como CSV desde Excel, eleventa u otro sistema:
 - Reembolsan en efectivo o como reversa de tarjeta.
 - En una venta fiada, descuentan la deuda del cliente.
 
+### Boleta y factura electrónica (SII, opcional)
+
+Si el dueño lo activa, Neji emite los documentos tributarios electrónicos **con su propia firma
+electrónica** y los manda solo al SII. Si no se activa, todo sigue igual que antes, con el
+comprobante interno.
+
+- **Boleta electrónica** (39), boleta exenta (41), **factura electrónica** (33), factura exenta (34)
+  y **nota de crédito** (61). Una venta solo con productos exentos sale como documento exento.
+- **Al cobrar** se elige *Boleta* (lo normal) o *Factura* (tecla **F7**). La factura pide un cliente
+  con RUT, giro, dirección y comuna (se completan en **Clientes**).
+- **El ticket** es la representación impresa del documento. Lleva el recuadro con el RUT, el tipo
+  y el folio, los datos de la empresa y del cliente, el IVA y el **timbre electrónico** (el código
+  PDF417 que se puede verificar en sii.cl). Sale directo en la impresora de tickets, de 80 o 58 mm.
+- **Una devolución** emite su nota de crédito. Si se devuelve todo, la nota anula la boleta; si se
+  devuelve una parte, corrige el monto. La nota se imprime desde el **Historial**.
+- **El envío al SII es automático**: cada minuto, con las boletas en grupos de hasta 50. Si se
+  corta internet se sigue vendiendo, y lo pendiente se manda cuando vuelve la conexión. En el
+  Historial y en Configuración se ve el estado de cada documento: por enviar, enviado, aceptado,
+  con reparos o rechazado.
+- Si una boleta no se puede emitir (por ejemplo, porque se acabaron los folios), la venta queda
+  igual con su comprobante interno y la caja ve un aviso. La boleta se emite después desde el
+  Historial con **Emitir boleta**. La factura, en cambio, no se vende sin emitirse.
+- Cuando quedan 20 folios o menos, la caja avisa para que se pidan más al SII.
+
+**Qué se necesita y cómo se activa**
+
+1. **La firma electrónica** (certificado digital `.pfx` o `.p12`) del dueño o de una persona
+   autorizada ante el SII: E-Cert, Acepta, E-Sign u otra empresa certificadora.
+2. **La certificación del SII.** Para emitir con un sistema propio (como Neji), el SII pide
+   certificarlo una vez. Se postula en sii.cl (*Factura electrónica → Sistema de facturación
+   propio o de mercado*) y se emite el **set de pruebas** que entrega el SII en el *ambiente de
+   certificación*. También se envían las muestras impresas. Al aprobar, el SII autoriza a emitir
+   en *producción* (con una resolución).
+3. En **Configuración → Boleta electrónica**:
+   - Completa los datos de la empresa tal como están en el SII: RUT, razón social, giro, código
+     de actividad (Acteco), dirección, comuna y oficina del SII.
+   - Elige el ambiente. En certificación va la fecha de la postulación y el número de resolución 0;
+     en producción, los de tu resolución.
+   - Sube la firma con su contraseña y los **folios (CAF)** que se descargan del SII, uno por tipo
+     de documento. Los folios de certificación no sirven en producción.
+   - Pulsa **Probar conexión** y después **Activar**.
+
+Para pasar a producción se cambia el ambiente, se pone la resolución y se cargan los folios de
+producción.
+
+**Bueno saber**
+
+- La firma queda guardada en la base de Neji (va en los respaldos). Su contraseña queda cifrada con
+  la clave de ese computador: si se restaura el respaldo en otro equipo, hay que volver a subir la firma.
+- El SII ya no pide el reporte de consumo de folios (RCOF) de las boletas, así que Neji no lo envía.
+- A quien recibe una factura hay que hacerle llegar el XML (intercambio de DTE). Neji no lo manda
+  por correo: el XML se descarga en Configuración → Boleta electrónica → Documentos emitidos.
+- Neji no emite todavía guías de despacho (52) ni notas de débito (56).
+- Los documentos se validaron con los esquemas oficiales del SII y las firmas con xmlsec y con DTE
+  reales aceptados por el SII. Pero desde el desarrollo no se pudo conectar con los servidores del
+  SII: el set de pruebas de la certificación es la primera prueba real.
+
 ### Reportes (administrador)
 
 - Ventas netas, número de tickets, ticket promedio, ganancia y margen, IVA débito,
@@ -400,7 +457,7 @@ una planilla guardada como CSV desde Excel, eleventa u otro sistema:
 | `RePág` `AvPág` | Cambiar de ticket |
 | `F7` `F8` | Entrada y salida de efectivo |
 | `F9` | Verificador de precios |
-| `F12` | Cobrar. En el cobro, `F1`–`F6` eligen la forma de pago y `Enter` confirma |
+| `F12` | Cobrar. En el cobro, `F1`–`F6` eligen la forma de pago, `F7` cambia entre boleta y factura (con la boleta electrónica activada) y `Enter` confirma |
 
 > Si alguna tecla F hace otra cosa en tu navegador (por ejemplo, `F11` pone pantalla
 > completa), usa el acceso directo en modo aplicación o la tecla alternativa.
@@ -450,6 +507,7 @@ neji/
   chile.py             RUT, IVA y redondeo Ley 20.956
   validar.py           lectura segura de datos y errores de negocio
   respaldos.py         respaldo automático
+  sii/                 boleta y factura electrónica: firma, folios (CAF), DTE, timbre PDF417, envío al SII
   auth.py              sesión y permisos
   servicios/           reglas de negocio (ventas, devoluciones, caja, inventario, fiado)
   api/                 rutas JSON bajo /api
@@ -493,8 +551,9 @@ Para agregar una función nueva:
 
 ## Hoja de ruta
 
-- [ ] **Boleta y factura electrónica SII**, a través de un proveedor certificado
-  (LibreDTE, OpenFactura, etc.) o con certificación propia.
+- [x] **Boleta y factura electrónica SII** con la firma del dueño (certificación propia; ver
+  [Boleta y factura electrónica](#boleta-y-factura-electrónica-sii-opcional)).
+- [ ] Guía de despacho, nota de débito y envío del XML de la factura al cliente por correo.
 - [ ] Integración con máquinas de tarjeta (Transbank, Getnet, Mercado Pago, SumUp).
 - [ ] Lotes con fecha de vencimiento propia (hoy hay una fecha por producto).
 - [ ] Kits, paquetes y promociones (2x1, 3x2).

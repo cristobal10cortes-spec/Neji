@@ -130,14 +130,15 @@ export function trabajoImpresion(config, bloques, { abrirCajon = false, papelGen
 
 /**
  * Ticket en pantalla → bloques que entiende la impresora: texto (izquierda o centrado), par
- * (izquierda y derecha), línea y espacio. «.g» es negrita y «.xl» letra grande.
+ * (izquierda y derecha), línea, espacio y el timbre del SII. «.g» es negrita y «.xl» letra grande.
  */
 export function bloquesTicket(raiz) {
   const bloques = [];
   const estilo = (el) => ({ negrita: el.matches('.g, .xl, b, strong') || Boolean(el.querySelector(':scope > b, :scope > strong')), grande: el.matches('.xl') });
   const visitar = (el) => {
     for (const hijo of el.children) {
-      if (hijo.matches('hr')) bloques.push({ tipo: 'linea' });
+      if (hijo.matches('.timbre')) bloques.push({ tipo: 'timbre', ted: hijo.dataset.ted || '' });
+      else if (hijo.matches('hr')) bloques.push({ tipo: 'linea' });
       else if (hijo.matches('.ln')) {
         const [izq, der] = hijo.children;
         bloques.push({ tipo: 'par', izq: izq?.textContent || '', der: der?.textContent || '', ...estilo(hijo) });
@@ -268,21 +269,134 @@ function encabezadoNegocio(diseno = disenoTicket()) {
 
 const claseTicket = () => `div.ticket${papelTicket() === '58' ? '.t58' : ''}`;
 
+// --- Boleta y factura electrónica (SII) -------------------------------------------------------------------
+// Con la boleta electrónica activada, el ticket es la representación impresa del documento: el recuadro con
+// el RUT, el tipo y el folio, los datos del emisor (y del cliente en la factura), el IVA y el timbre (PDF417).
+
+const TIPOS_VENTA = [33, 34, 39, 41];
+const FACTURAS = [33, 34];
+const SIN_IVA = [34, 41];
+const NOMBRE_CORTO = { 33: 'Factura electrónica', 34: 'Factura exenta electrónica', 39: 'Boleta electrónica', 41: 'Boleta exenta electrónica', 61: 'Nota de crédito electrónica' };
+const RUT_CONSUMIDOR_FINAL = '66666666-6';
+
+/** La boleta o factura electrónica de la venta (no cuentan las que rechazó el SII), o null. */
+export const documentoDeVenta = (v) => [...(v?.documentos || [])].reverse()
+  .find((d) => TIPOS_VENTA.includes(d.tipo) && d.estado !== 'rechazado') || null;
+
+/** 76354771-K → 76.354.771-K */
+export function rutConPuntos(rut) {
+  const m = /^(\d+)-([\dkK])$/.exec(String(rut || '').replace(/\./g, '').trim());
+  return m ? `${m[1].replace(/\B(?=(\d{3})+(?!\d))/g, '.')}-${m[2].toUpperCase()}` : String(rut || '');
+}
+
+/**
+ * El timbre (PDF417) como imagen: `filas` de '0' y '1' que arma el servidor; cada fila mide `altoFila` módulos de
+ * alto. `girado`: a lo largo del papel (en 58 mm no cabe derecho con módulos que la impresora alcance a marcar).
+ */
+export function svgPdf417(filas, altoFila = 3, girado = false) {
+  const margen = 2;
+  const ancho = filas[0]?.length || 0;
+  const alto = filas.length * altoFila;
+  let trazo = '';
+  filas.forEach((fila, y) => {
+    for (let x = 0; x < ancho;) {
+      if (fila[x] !== '1') { x++; continue; }
+      let w = 1;
+      while (fila[x + w] === '1') w++;
+      // Girado 90° a la derecha: las filas quedan de derecha a izquierda y el largo del código, hacia abajo.
+      trazo += girado ? `M${margen + alto - (y + 1) * altoFila} ${x + margen}h${altoFila}v${w}h-${altoFila}z`
+        : `M${x + margen} ${margen + y * altoFila}h${w}v${altoFila}h-${w}z`;
+      x += w;
+    }
+  });
+  const [vw, vh] = girado ? [alto, ancho] : [ancho, alto];
+  const svg = new DOMParser().parseFromString(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${vw + 2 * margen} ${vh + 2 * margen}" shape-rendering="crispEdges"><rect width="100%" height="100%" fill="#fff"/><path fill="#000" d="${trazo}"/></svg>`,
+    'image/svg+xml').documentElement;
+  return document.importNode(svg, true);
+}
+
+/** El recuadro del documento: RUT del emisor, tipo y número, y la oficina del SII. */
+function recuadroDte(doc) {
+  const e = doc.emisor || {};
+  return h('div.recuadro-dte',
+    h('div.c.g', `R.U.T.: ${rutConPuntos(e.rut)}`),
+    h('div.c.g', doc.nombre),
+    h('div.c.g', `N° ${doc.folio}`),
+    e.oficina_sii ? h('div.c', `S.I.I. - ${e.oficina_sii.toUpperCase()}`) : null);
+}
+
+/** Razón social, giro y dirección del emisor que no salgan ya en el encabezado del ticket. */
+function datosEmisor(doc, encabezado) {
+  const e = doc.emisor || {};
+  const textos = encabezado.filter(Boolean).map((el) => el.textContent.toLowerCase());
+  const falta = (valor) => Boolean(valor) && !textos.some((t) => t.includes(String(valor).toLowerCase()));
+  return [
+    falta(e.razon_social) ? h('div.c.g', e.razon_social) : null,
+    falta(e.giro) ? h('div.c', `Giro: ${e.giro}`) : null,
+    falta(e.direccion) || falta(e.comuna) ? h('div.c', [e.direccion, e.comuna].filter(Boolean).join(', ')) : null,
+  ];
+}
+
+/** Datos del cliente (en la factura y en la nota de crédito de una factura). */
+function datosReceptor(doc) {
+  const r = doc.receptor;
+  if (!r?.rut || r.rut === RUT_CONSUMIDOR_FINAL) return null;
+  return [
+    h('div', `Señor(es): ${r.razon_social}`),
+    h('div', `R.U.T.: ${rutConPuntos(r.rut)}`),
+    r.giro ? h('div', `Giro: ${r.giro}`) : null,
+    r.direccion || r.comuna ? h('div', `Dirección: ${[r.direccion, r.comuna].filter(Boolean).join(', ')}`) : null,
+  ];
+}
+
+function totalesDte(doc) {
+  const tasa = estado.config.iva_porcentaje || 19;
+  return [
+    doc.neto ? ln('Neto', pesos(doc.neto)) : null,
+    doc.exento ? ln('Exento', pesos(doc.exento)) : null,
+    SIN_IVA.includes(doc.tipo) ? null : ln(`IVA (${tasa}%)`, pesos(doc.iva)),
+  ];
+}
+
+/** El timbre electrónico y las leyendas que pide el SII. */
+function timbreDte(doc, papel) {
+  const r = doc.resolucion || {};
+  return [
+    // Como en la impresión directa: en 80 mm, filas de 2,5 módulos (unos 6,6 x 3,5 cm); en 58 mm, girado (3,8 x 7,8 cm).
+    h('div.timbre', { class: papel === '58' ? 'girado' : null, 'data-ted': doc.ted },
+      papel === '58' ? svgPdf417(doc.pdf417_58 || doc.pdf417, 3, true) : svgPdf417(doc.pdf417, 2.5)),
+    h('div.c', 'Timbre Electrónico SII'),
+    h('div.c', `Res. N° ${r.numero ?? 0}${r.anio ? ' de ' + r.anio : ''}`),
+    h('div.c', 'Verifique documento: www.sii.cl'),
+  ];
+}
+
+// Con documento electrónico, el ticket ya no es un «comprobante interno».
+const LEYENDA_INTERNA = /comprobante interno|no v[aá]lido como (boleta|factura|documento)/i;
+
 /**
  * Ticket de venta. `diseno` y `papel` sirven para la vista previa de Configuración → Ticket (lo que
- * todavía no se guarda); si no, se usan los guardados.
+ * todavía no se guarda); si no, se usan los guardados. Si la venta tiene boleta o factura electrónica, el
+ * ticket la lleva (recuadro, datos del emisor y del cliente, IVA y timbre).
  */
 export function ticketVenta(v, { destacarAtendio = false, diseno = disenoTicket(), papel = null } = {}) {
   const c = estado.config;
   const ver = diseno.mostrar;
+  const doc = documentoDeVenta(v);
+  const factura = doc && FACTURAS.includes(doc.tipo);
   const pagos = v.pagos.map((p) => ln(nombreMetodo(p.metodo), pesos(p.monto)));
   const efectivo = v.pagos.find((p) => p.metodo === 'efectivo');
+  const encabezado = encabezadoNegocio(diseno);
+  const pie = doc ? diseno.pie.filter((l) => !LEYENDA_INTERNA.test(l.texto)) : diseno.pie;
   return h(papel ? `div.ticket${papel === '58' ? '.t58' : ''}` : claseTicket(),
-    encabezadoNegocio(diseno),
+    encabezado,
+    doc ? [h('hr'), recuadroDte(doc), h('hr'), datosEmisor(doc, encabezado)] : null,
     h('hr'),
-    ln(`Folio: ${v.folio}`, fecha(v.fecha)),
+    doc ? ln(fecha(v.fecha), `Venta ${v.folio}`) : ln(`Folio: ${v.folio}`, fecha(v.fecha)),
     ver.atendio || destacarAtendio ? h('div', { class: destacarAtendio ? 'atendio' : null }, `${v.caja} · Atendió: ${v.atendio || v.usuario}`) : null,
-    v.cliente && ver.cliente ? h('div', `Cliente: ${v.cliente}${v.cliente_rut ? ' · ' + v.cliente_rut : ''}`) : null,
+    factura ? datosReceptor(doc)
+      : v.cliente && ver.cliente ? h('div', `Cliente: ${v.cliente}${v.cliente_rut ? ' · ' + v.cliente_rut : ''}`) : null,
     h('hr'),
     v.items.map((i) => [
       h('div', i.descripcion),
@@ -291,7 +405,7 @@ export function ticketVenta(v, { destacarAtendio = false, diseno = disenoTicket(
     h('hr'),
     v.descuento ? [ln('Subtotal', pesos(v.subtotal)), ln('Descuento', `-${pesos(v.descuento)}`)] : null,
     ln('TOTAL', pesos(v.total), 'xl'),
-    ver.neto_iva ? [
+    doc ? totalesDte(doc) : ver.neto_iva ? [
       ln(`Neto`, pesos(v.neto)),
       ln(`IVA (${c.iva_porcentaje || 19}%)`, pesos(v.iva)),
       v.exento ? ln('Exento', pesos(v.exento)) : null,
@@ -305,7 +419,33 @@ export function ticketVenta(v, { destacarAtendio = false, diseno = disenoTicket(
     ] : null,
     v.pagos.some((p) => p.metodo === 'fiado') && v.cliente_saldo != null ? ln('Saldo pendiente cliente', pesos(v.cliente_saldo)) : null,
     v.devuelto ? ln('Devuelto', `-${pesos(v.devuelto)}`) : null,
-    diseno.pie.length ? [h('hr'), lineasTicket(diseno.pie, c)] : null,
+    doc ? [h('hr'), timbreDte(doc, papel || papelTicket())] : null,
+    pie.length ? [h('hr'), lineasTicket(pie, c)] : null,
+    h('div', { style: { height: '8mm' } }));
+}
+
+/** Nota de crédito electrónica de una devolución (`doc`: uno de `venta.documentos`). */
+export function ticketNotaCredito(v, doc) {
+  const encabezado = encabezadoNegocio();
+  return h(claseTicket(),
+    encabezado,
+    h('hr'), recuadroDte(doc), h('hr'), datosEmisor(doc, encabezado),
+    h('hr'),
+    ln(fecha(doc.fecha, false), `Venta ${v.folio}`),
+    datosReceptor(doc),
+    (doc.referencias || []).map((r) => [
+      h('div', `Referencia: ${NOMBRE_CORTO[r.tipo] || 'Documento'} N° ${r.folio} del ${fecha(r.fecha, false)}`),
+      h('div', r.codigo === 1 ? 'Anula el documento de referencia' : 'Corrige montos (devolución parcial)'),
+      r.razon ? h('div', `Motivo: ${r.razon}`) : null,
+    ]),
+    h('hr'),
+    (doc.lineas || []).map((l) => [h('div', l.nombre), ln(`  ${numero(l.cantidad)} x ${pesos(l.precio)}`, pesos(l.monto))]),
+    h('hr'),
+    doc.descuento ? ln('Descuento', `-${pesos(doc.descuento)}`) : null,
+    ln('TOTAL', pesos(doc.total), 'xl'),
+    totalesDte(doc),
+    h('hr'),
+    timbreDte(doc, papelTicket()),
     h('div', { style: { height: '8mm' } }));
 }
 

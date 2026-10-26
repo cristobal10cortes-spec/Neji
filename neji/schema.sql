@@ -81,6 +81,8 @@ CREATE TABLE IF NOT EXISTS clientes (
     email          TEXT,
     direccion      TEXT,
     giro           TEXT,
+    comuna         TEXT,
+    ciudad         TEXT,
     limite_credito INTEGER,            -- NULL = sin límite
     saldo          INTEGER NOT NULL DEFAULT 0,  -- lo que el cliente debe
     notas          TEXT,
@@ -304,3 +306,68 @@ CREATE TABLE IF NOT EXISTS recetas_magistrales (
     venta_id        INTEGER REFERENCES ventas(id)
 );
 CREATE INDEX IF NOT EXISTS idx_recetas_fecha ON recetas_magistrales(fecha);
+
+-- Boleta y factura electrónica con el SII (opcional; ver neji/sii). Separada de config: tiene la firma.
+CREATE TABLE IF NOT EXISTS sii_config (
+    clave TEXT PRIMARY KEY,
+    valor TEXT
+);
+
+-- Folios autorizados por el SII (archivo CAF), por ambiente: los de certificación no sirven en producción.
+CREATE TABLE IF NOT EXISTS sii_caf (
+    id         INTEGER PRIMARY KEY,
+    ambiente   TEXT NOT NULL CHECK (ambiente IN ('certificacion', 'produccion')),
+    tipo       INTEGER NOT NULL,
+    desde      INTEGER NOT NULL,
+    hasta      INTEGER NOT NULL,
+    usar_desde INTEGER NOT NULL,      -- primer folio que usa Neji (si otros ya se usaron en otro sistema)
+    fecha      TEXT,                  -- fecha de autorización (FA)
+    xml        BLOB NOT NULL,
+    cargado    TEXT NOT NULL,
+    UNIQUE (ambiente, tipo, desde)
+);
+
+-- Sobres subidos al SII.
+CREATE TABLE IF NOT EXISTS sii_envios (
+    id        INTEGER PRIMARY KEY,
+    ambiente  TEXT NOT NULL,
+    boletas   INTEGER NOT NULL,       -- 1 = EnvioBOLETA (39/41), 0 = EnvioDTE
+    creado    TEXT NOT NULL,
+    xml       BLOB NOT NULL,
+    trackid   TEXT,
+    estado    TEXT NOT NULL DEFAULT 'por_enviar'
+              CHECK (estado IN ('por_enviar', 'enviado', 'procesado', 'rechazado')),
+    glosa     TEXT,
+    intentos  INTEGER NOT NULL DEFAULT 0,
+    proximo   TEXT,                   -- cuándo reintentar o volver a consultar
+    revisado  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sii_envios_estado ON sii_envios(estado);
+
+-- Documentos tributarios electrónicos emitidos (boletas, facturas, notas de crédito).
+CREATE TABLE IF NOT EXISTS sii_documentos (
+    id             INTEGER PRIMARY KEY,
+    ambiente       TEXT NOT NULL,
+    tipo           INTEGER NOT NULL,
+    folio          INTEGER NOT NULL,
+    fecha          TEXT NOT NULL,     -- fecha de emisión (AAAA-MM-DD)
+    emitido        TEXT NOT NULL,     -- fecha y hora
+    venta_id       INTEGER REFERENCES ventas(id),
+    devolucion_id  INTEGER REFERENCES devoluciones(id),
+    rut_receptor   TEXT,
+    razon_receptor TEXT,
+    neto           INTEGER NOT NULL DEFAULT 0,
+    iva            INTEGER NOT NULL DEFAULT 0,
+    exento         INTEGER NOT NULL DEFAULT 0,
+    total          INTEGER NOT NULL,
+    xml            BLOB NOT NULL,
+    ted            TEXT NOT NULL,     -- el timbre (va en el PDF417 del ticket)
+    estado         TEXT NOT NULL DEFAULT 'pendiente'
+                   CHECK (estado IN ('pendiente', 'enviado', 'aceptado', 'reparo', 'rechazado')),
+    envio_id       INTEGER REFERENCES sii_envios(id),
+    glosa          TEXT,
+    UNIQUE (ambiente, tipo, folio)
+);
+CREATE INDEX IF NOT EXISTS idx_sii_documentos_venta ON sii_documentos(venta_id);
+CREATE INDEX IF NOT EXISTS idx_sii_documentos_devolucion ON sii_documentos(devolucion_id);
+CREATE INDEX IF NOT EXISTS idx_sii_documentos_estado ON sii_documentos(estado, envio_id);

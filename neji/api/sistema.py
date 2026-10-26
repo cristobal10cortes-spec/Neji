@@ -196,7 +196,14 @@ def logout():
 
 @bp.get("/config")
 def ver_config():
-    return jsonify(leer_config(get_db()))
+    from ..sii import servicio as sii
+
+    con = get_db()
+    config = leer_config(con)
+    # Lo que la caja necesita saber de la boleta electrónica (lo demás está en /api/sii, solo administrador).
+    config["sii_activo"] = "1" if sii.activo(con) else "0"
+    config["sii_ambiente"] = sii.leer(con)["ambiente"]
+    return jsonify(config)
 
 
 @bp.put("/config")

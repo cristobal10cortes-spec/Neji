@@ -1,6 +1,9 @@
 # Neji POS (run.py, iniciar.bat)
 Flask>=3.0
 waitress>=3.0
+# Boleta y factura electrónica con el SII (opcional): firma, XML y timbre
+lxml>=5.3
+cryptography>=43
 
 # CORAND.ERP, el programa anterior (corand_erp.py en VS Code)
 PyQt6

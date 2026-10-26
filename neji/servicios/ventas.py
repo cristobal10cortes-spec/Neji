@@ -1,6 +1,7 @@
 """Cálculo y registro de ventas, cotizaciones y devoluciones."""
 
 import json
+import logging
 from decimal import Decimal
 
 from ..auth import tiene_permiso
@@ -11,6 +12,8 @@ from .caja import exigir_caja, exigir_turno, resumen_turno
 from .clientes import exigir_cliente, mover_saldo
 from .inventario import formatear_cantidad, mover_existencia
 from .recetario import describir as describir_receta
+
+registro = logging.getLogger("neji.ventas")
 
 METODOS_NO_EFECTIVO = ("debito", "credito", "transferencia", "fiado")
 NOMBRE_METODO = {
@@ -185,8 +188,55 @@ def siguiente_folio(con, tabla):
     return con.execute(f"SELECT COALESCE(MAX(folio), 0) + 1 FROM {tabla}").fetchone()[0]
 
 
-def registrar_venta(con, datos, usuario):
+def _secreto():
+    from flask import current_app
+
+    return current_app.secret_key
+
+
+def _emitir_documento(con, venta_id, documento, avisos, tasa_iva):
+    """Boleta o factura electrónica de la venta (si el SII está activo), dentro de la transacción de la venta.
+
+    Si la boleta no se puede emitir, la venta queda con su comprobante interno y se avisa. La factura pedida,
+    en cambio, no se vende sin ella.
+    """
+    from ..sii import ErrorSII
+    from ..sii import servicio as sii
+
+    if not sii.activo(con):
+        if documento == "factura":
+            raise ErrorNegocio("La factura electrónica no está activada (Configuración → Boleta electrónica).")
+        return
+    con.execute("SAVEPOINT documento_sii")
+    try:
+        sii.emitir_venta(con, venta_id, documento, _secreto(), tasa_iva)
+        con.execute("RELEASE documento_sii")
+    except Exception as e:  # noqa: BLE001 (que una falla de la boleta no impida vender)
+        con.execute("ROLLBACK TO documento_sii")
+        con.execute("RELEASE documento_sii")
+        if not isinstance(e, ErrorSII):
+            registro.exception("Error al emitir el documento electrónico de la venta %s", venta_id)
+        if documento == "factura":
+            raise ErrorNegocio(f"No se pudo emitir la factura: {e}") from None
+        if avisos is not None:
+            avisos.append(f"La venta quedó registrada, pero sin boleta electrónica: {e}")
+        return
+    if avisos is not None:
+        cfg = sii.leer(con)
+        quedan = {}
+        for f in sii.folios(con, cfg["ambiente"]):
+            quedan[f["tipo"]] = quedan.get(f["tipo"], 0) + f["disponibles"]
+        for tipo, n in quedan.items():
+            if tipo in (39, 33) and n <= 20:
+                avisos.append(f"Quedan {n} folios de {sii.NOMBRES[tipo].lower()}: pide más al SII.")
+
+
+def registrar_venta(con, datos, usuario, avisos=None):
+    """Registra la venta. `avisos` (lista) recibe lo que hay que advertir a la caja (p. ej. sin boleta)."""
     caja_id = entero(datos.get("caja_id"), "caja", minimo=1)
+    documento = datos.get("documento") or "boleta"
+    if documento not in ("boleta", "factura"):
+        raise ErrorNegocio("El documento debe ser boleta o factura.")
     with transaccion(con):
         exigir_caja(con, caja_id)
         turno = exigir_turno(con, caja_id)
@@ -289,6 +339,7 @@ def registrar_venta(con, datos, usuario):
         if cotizacion_id:
             con.execute("UPDATE cotizaciones SET estado = 'vendida' WHERE id = ? AND estado = 'vigente'",
                         (cotizacion_id,))
+        _emitir_documento(con, venta_id, documento, avisos, int(config["iva_porcentaje"]))
     return venta_id
 
 
@@ -312,11 +363,17 @@ def obtener_venta(con, venta_id):
         """SELECT d.*, u.nombre AS usuario FROM devoluciones d
            JOIN usuarios u ON u.id = d.usuario_id WHERE d.venta_id = ? ORDER BY d.id""",
         (venta_id,)))
+    from ..sii import servicio as sii
+
+    venta["documentos"] = sii.documentos_de_venta(con, venta_id)
     return venta
 
 
-def devolver(con, venta_id, datos, usuario):
-    """Devolución parcial o total. El dinero sale del turno abierto de la caja indicada."""
+def devolver(con, venta_id, datos, usuario, avisos=None):
+    """Devolución parcial o total. El dinero sale del turno abierto de la caja indicada.
+
+    Si la venta tiene boleta o factura electrónica, se emite la nota de crédito.
+    """
     caja_id = entero(datos.get("caja_id"), "caja", minimo=1)
     reembolso = datos.get("reembolso") or "efectivo"
     if reembolso not in ("efectivo", "otro"):
@@ -421,7 +478,25 @@ def devolver(con, venta_id, datos, usuario):
         estado = "devuelta" if not queda_algo else "devuelta_parcial"
         con.execute("UPDATE ventas SET devuelto = ?, estado = ? WHERE id = ?",
                     (devuelto, estado, venta_id))
+        _emitir_nota_credito(con, devolucion_id, avisos)
     return devolucion_id
+
+
+def _emitir_nota_credito(con, devolucion_id, avisos):
+    from ..sii import servicio as sii
+
+    if not sii.activo(con):
+        return
+    con.execute("SAVEPOINT nota_credito_sii")
+    try:
+        sii.emitir_nota_credito(con, devolucion_id, _secreto(), int(leer_config(con)["iva_porcentaje"]))
+        con.execute("RELEASE nota_credito_sii")
+    except Exception as e:  # noqa: BLE001 (la devolución se hace igual)
+        con.execute("ROLLBACK TO nota_credito_sii")
+        con.execute("RELEASE nota_credito_sii")
+        registro.warning("Sin nota de crédito para la devolución %s: %s", devolucion_id, e)
+        if avisos is not None:
+            avisos.append(f"La devolución quedó registrada, pero sin nota de crédito electrónica: {e}")
 
 
 def crear_cotizacion(con, datos, usuario):

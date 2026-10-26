@@ -135,6 +135,10 @@ def migrar(con):
     if "corte_general_id" not in _columnas(con, "turnos"):
         con.execute("ALTER TABLE turnos ADD COLUMN corte_general_id INTEGER REFERENCES cortes_generales(id)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_turnos_corte_general ON turnos(corte_general_id)")
+    clientes = _columnas(con, "clientes")
+    for columna in ("comuna", "ciudad"):     # para la factura electrónica
+        if columna not in clientes:
+            con.execute(f"ALTER TABLE clientes ADD COLUMN {columna} TEXT")
     usuarios = _columnas(con, "usuarios")
     if "nombre_ticket" not in usuarios:
         con.execute("ALTER TABLE usuarios ADD COLUMN nombre_ticket TEXT")

@@ -1,12 +1,29 @@
 // Historial de ventas: buscar tickets, reimprimir y hacer devoluciones.
 
 import { api, qs } from '../api.js';
-import { esAdmin, estado, puede } from '../estado.js';
-import { imprimir, nombreMetodo, ticketVenta } from '../impresion.js';
+import { esAdmin, estado, opcion, puede } from '../estado.js';
+import { documentoDeVenta, imprimir, nombreMetodo, ticketNotaCredito, ticketVenta } from '../impresion.js';
 import { aviso, avisoError, fecha, h, hoy, leerCantidad, modal, numero, pesos, selectorFechas, tabla, vaciar } from '../ui.js';
 
 const ESTADOS = { completada: ['ok', 'Completada'], devuelta_parcial: ['aviso', 'Devolución parcial'], devuelta: ['mal', 'Devuelta'] };
 export const etiquetaEstado = (e) => h(`span.etiqueta.${ESTADOS[e][0]}`, ESTADOS[e][1]);
+
+// Estado de un documento electrónico en el SII.
+const CLASE_SII = { pendiente: '', enviado: '', aceptado: 'ok', reparo: 'aviso', rechazado: 'mal' };
+export const etiquetaSii = (d) => h(`span.etiqueta${CLASE_SII[d.estado] ? '.' + CLASE_SII[d.estado] : ''}`, { title: d.glosa || '' }, d.estado_texto);
+
+/** Emite la boleta (o factura) de una venta que quedó sin documento electrónico. */
+async function emitirDocumento(venta, documento, alTerminar) {
+  try {
+    const v = await api.post(`/api/sii/ventas/${venta.id}/emitir`, { documento });
+    const doc = documentoDeVenta(v);
+    aviso(doc ? `${doc.nombre} N° ${doc.folio} emitida.` : 'Documento emitido.', 'ok', 6000);
+    imprimir(ticketVenta(v));
+    alTerminar(v);
+  } catch (e) {
+    avisoError(e);
+  }
+}
 
 function devolver(venta, alTerminar) {
   const entradas = new Map();
@@ -62,6 +79,13 @@ function devolver(venta, alTerminar) {
             });
             const ultima = v.devoluciones[v.devoluciones.length - 1];
             aviso(ultima.monto_efectivo ? `Devolución registrada. Entrega ${pesos(ultima.monto_efectivo)} al cliente.` : 'Devolución registrada.', 'ok', 6000);
+            for (const a of v.avisos || []) aviso(a, 'error', 9000);
+            // Con boleta o factura electrónica, la devolución lleva su nota de crédito.
+            const nota = (v.documentos || []).find((d) => d.tipo === 61 && d.devolucion_id === ultima.id);
+            if (nota) {
+              aviso(`${nota.nombre} N° ${nota.folio} emitida.`, 'ok', 6000);
+              if (opcion('imprimir_automatico')) imprimir(ticketNotaCredito(v, nota));
+            }
             m.cerrar();
             alTerminar(v);
           } catch (e) {
@@ -81,6 +105,9 @@ export async function verVenta(id, alCambiar = () => {}) {
     avisoError(e);
     return;
   }
+  // Una venta sin boleta electrónica (o con la boleta rechazada por el SII) se puede emitir después.
+  const sinDocumento = estado.config.sii_activo === '1' && v.estado === 'completada' && !documentoDeVenta(v) && puede('devoluciones');
+  const recargar = () => { m.cerrar(); alCambiar(); verVenta(id, alCambiar); };
   const m = modal({
     titulo: `Venta folio ${v.folio}`,
     ancho: 'muy-ancho',
@@ -107,12 +134,20 @@ export async function verVenta(id, alCambiar = () => {}) {
           h('div.fila.entre', h('span', 'Neto'), h('span.num', pesos(v.neto))),
           h('div.fila.entre', h('span', 'IVA'), h('span.num', pesos(v.iva))),
           v.exento ? h('div.fila.entre', h('span', 'Exento'), h('span.num', pesos(v.exento))) : null),
+        v.documentos?.length ? h('div.panel', h('h3', 'Documentos SII'), v.documentos.map((d) => h('div',
+          h('div.fila.entre', h('span', `${d.nombre} N° ${d.folio}`), etiquetaSii(d)),
+          d.glosa ? h('div.ayuda', d.glosa) : null,
+          d.tipo === 61 ? h('button.btn.chico', { type: 'button', onclick: () => imprimir(ticketNotaCredito(v, d)) }, 'Imprimir nota de crédito') : null))) : null,
         v.devoluciones.length ? h('div.panel', h('h3', 'Devoluciones'), v.devoluciones.map((d) => h('div',
           h('div.fila.entre', h('span', `${fecha(d.fecha)} · ${d.usuario}`), h('b.num', pesos(d.monto))),
           h('div.ayuda', [d.monto_efectivo ? `efectivo ${pesos(d.monto_efectivo)}` : '', d.monto_fiado ? `fiado ${pesos(d.monto_fiado)}` : '', d.monto_otro ? `tarjeta/transf. ${pesos(d.monto_otro)}` : '', d.motivo].filter(Boolean).join(' · '))))) : null),
     ],
     botones: [
       { texto: 'Reimprimir ticket', accion: () => imprimir(ticketVenta(v)) },
+      ...(sinDocumento ? [
+        { texto: 'Emitir boleta', accion: () => emitirDocumento(v, 'boleta', recargar) },
+        v.cliente ? { texto: 'Emitir factura', accion: () => emitirDocumento(v, 'factura', recargar) } : null,
+      ] : []),
       v.estado !== 'devuelta' && puede('devoluciones')
         ? { texto: 'Devolución', clase: 'peligro', accion: () => devolver(v, () => { m.cerrar(); alCambiar(); verVenta(id, alCambiar); }) }
         : null,
