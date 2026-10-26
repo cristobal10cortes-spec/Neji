@@ -369,19 +369,26 @@ def preparar_motor():
 def firmado_por_microsoft(ruta):
     """¿El archivo trae una firma Authenticode válida de Microsoft? (antes de ejecutar algo descargado)."""
     import subprocess
-    comando = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+    # Con la ruta completa (no el que aparezca primero en el PATH) y sin el PSModulePath de PowerShell 7, que
+    # no le sirve a Windows PowerShell (no podría cargar su módulo de firmas).
+    powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / \
+        "powershell.exe"
+    entorno = {k: v for k, v in os.environ.items() if k.upper() != "PSMODULEPATH"}
+    entorno["NEJI_ARCHIVO"] = str(ruta)
+    comando = [str(powershell), "-NoProfile", "-NonInteractive", "-Command",
                "$f = Get-AuthenticodeSignature -LiteralPath $env:NEJI_ARCHIVO; "
                "Write-Output $f.Status; Write-Output $f.SignerCertificate.Subject"]
     try:
-        r = subprocess.run(comando, capture_output=True, timeout=60, check=False, text=True,
-                           env={**os.environ, "NEJI_ARCHIVO": str(ruta)}, creationflags=SIN_VENTANA_CONSOLA)
+        r = subprocess.run(comando, capture_output=True, timeout=60, check=False, text=True, env=entorno,
+                           creationflags=SIN_VENTANA_CONSOLA)
     except (OSError, subprocess.SubprocessError):
         registro.exception("No se pudo revisar la firma del instalador")
         return False
     lineas = [x.strip() for x in r.stdout.splitlines() if x.strip()]
     ok = len(lineas) >= 2 and lineas[0] == "Valid" and "O=Microsoft Corporation" in lineas[1]
     if not ok:
-        registro.warning("El instalador descargado no tiene una firma válida de Microsoft: %s", lineas)
+        registro.warning("El instalador descargado no tiene una firma válida de Microsoft: %s %s", lineas,
+                         (r.stderr or "").strip()[:500])
     return ok
 
 
