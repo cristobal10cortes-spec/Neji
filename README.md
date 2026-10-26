@@ -296,10 +296,10 @@ Se activa en **Configuración → Opciones → Farmacia**, o al configurar Neji 
 - Cada producto puede tener **proveedor/distribuidor** y **fecha de vencimiento**.
 - **Inventario → Vencimientos** lista lo que vence pronto.
 
-**Importar el inventario desde CSV**
+**Importar el inventario desde Excel o CSV**
 
-En **Configuración → Importar inventario (CSV)** (o en Productos → Importar CSV) se sube
-una planilla guardada como CSV desde Excel, eleventa u otro sistema:
+En **Configuración → Importar inventario** (o en Productos → Importar Excel o CSV) se sube
+la planilla de Excel (`.xlsx`) tal como la exporta eleventa u otro sistema, o un CSV:
 
 - Crea los productos nuevos y actualiza los que ya existen (por código), con su
   principio activo, distribuidor, vencimiento y stock.
@@ -307,6 +307,9 @@ una planilla guardada como CSV desde Excel, eleventa u otro sistema:
   (entrada de mercadería). Cada cambio queda en el kardex.
 - Trae una **planilla de ejemplo** para descargar con todas las columnas.
 - Entiende planillas guardadas por Excel en Windows (con tildes, comillas y €).
+- Los departamentos que solo cambian en mayúsculas, tildes o la s del plural
+  («INYECTABLES» e «inyectable») quedan como uno solo.
+- Los códigos con espacios («COBAN 2») se importan juntos («COBAN2») y se avisa.
 
 ### Productos e inventario
 
@@ -321,9 +324,9 @@ una planilla guardada como CSV desde Excel, eleventa u otro sistema:
 - **Kardex**: el historial de cada producto.
 - **Compras sugeridas**: productos bajo el mínimo, con lo vendido en los últimos 30 días.
 - Opción de permitir inventario negativo.
-- **Importar y exportar CSV**, para traer el catálogo desde Excel o eleventa.
-  - Entiende columnas como «Código», «Precio Venta», «Costo», «Stock» o «Categoría».
-  - Acepta archivos separados por `;` o por `,`.
+- **Importar el catálogo desde Excel (`.xlsx`) o CSV** y exportarlo a CSV, para traerlo desde eleventa u otro sistema.
+  - Entiende columnas como «Código», «Producto», «P. Venta», «Costo», «Stock», «Inv. Mínimo» o «Categoría».
+  - Los CSV pueden ir separados por `;` o por `,`.
 
 ### Clientes y crédito
 
@@ -484,8 +487,9 @@ sube el archivo (antes se guarda un respaldo de lo que había). O, a mano:
 
 1. En eleventa: **Productos → Exportar a Excel**. En otros sistemas, usa su
    exportación de productos.
-2. Abre el archivo en Excel y guárdalo como **CSV (delimitado por punto y coma)**.
-3. En Neji: **Configuración → Importar inventario (CSV)** (o **Productos → Importar CSV**).
+2. En Neji: **Configuración → Importar inventario** (o **Productos → Importar Excel o CSV**)
+   y sube ese archivo tal cual, sin abrirlo ni convertirlo. También sirve un CSV.
+   Un Excel antiguo (`.xls`) hay que guardarlo antes como `.xlsx`.
    - Si el código ya existe, el producto se actualiza.
    - Si no existe, se crea.
    - Elige si la existencia reemplaza el stock o se suma a él.
@@ -573,7 +577,7 @@ Para pasar su inventario a Neji POS (el programa no tiene una opción para expor
 
 1. Abre `corand_erp_pro.db` con [DB Browser for SQLite](https://sqlitebrowser.org/) (gratis).
 2. **Archivo → Exportar → Tabla(s) como archivo CSV…**, elige la tabla `inventario` y guárdala.
-3. En Neji POS, súbela en **Configuración → Importar inventario (CSV)**. Neji reconoce sus
+3. En Neji POS, súbela en **Configuración → Importar inventario**. Neji reconoce sus
    columnas (código, nombre, costo, precio de venta, stock, distribuidor, departamento,
    vencimiento y principio activo).
 

@@ -596,7 +596,7 @@ function panelLector() {
 function vistaImportar() {
   const importador = importadorCsv();
   return h('div.panel',
-    h('h3', 'Importar inventario desde CSV'),
+    h('h3', 'Importar inventario (Excel o CSV)'),
     importador.el,
     h('div.fila.fin', { style: { marginTop: '1rem' } },
       h('button.btn.primario', {
@@ -1053,7 +1053,7 @@ export async function montar(contenedor, parametros = {}) {
   const admin = esAdmin();
   const opciones = admin
     ? [['negocio', 'Negocio'], ['ticket', 'Ticket'], ['opciones', 'Opciones'], ['usuarios', 'Usuarios'], ['cajas', 'Cajas'], ['terminal', 'Esta terminal'],
-      ['impresora', 'Impresora de tickets'], ['respaldos', 'Respaldos'], ['importar', 'Importar inventario (CSV)'], ['sii', 'Boleta electrónica']]
+      ['impresora', 'Impresora de tickets'], ['respaldos', 'Respaldos'], ['importar', 'Importar inventario'], ['sii', 'Boleta electrónica']]
     : [['terminal', 'Esta terminal'], ['impresora', 'Impresora de tickets']];
   let actual = opciones.some(([k]) => k === parametros.pestana) ? parametros.pestana : opciones[0][0];
   const barra = h('div');

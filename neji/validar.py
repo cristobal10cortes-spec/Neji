@@ -20,7 +20,7 @@ def texto(datos, campo, requerido=False, nombre=None, max_largo=500):
     if requerido and not valor:
         raise ErrorNegocio(f"Falta {nombre or campo}.")
     if len(valor) > max_largo:
-        raise ErrorNegocio(f"{(nombre or campo).capitalize()} es demasiado largo.")
+        raise ErrorNegocio(f"{(nombre or campo).capitalize()} tiene más de {max_largo} letras.")
     return valor or None
 
 

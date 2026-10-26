@@ -123,11 +123,14 @@ async function verKardex(p) {
 }
 
 /**
- * Importación del catálogo y del inventario desde CSV (Excel, eleventa u otro sistema). Devuelve
- * { el, importar() }: se usa en Productos (en una ventana) y en Configuración → Importar inventario.
+ * Importación del catálogo y del inventario desde una planilla: Excel (.xlsx) o CSV (eleventa u otro sistema).
+ * Devuelve { el, importar() }: se usa en Productos (en una ventana) y en Configuración → Importar inventario.
  */
 export function importadorCsv({ alTerminar = () => {} } = {}) {
-  const archivo = h('input', { type: 'file', accept: '.csv,text/csv', 'aria-label': 'Archivo CSV' });
+  const archivo = h('input', {
+    type: 'file', 'aria-label': 'Planilla Excel o CSV',
+    accept: '.xlsx,.csv,.txt,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
   const reemplazar = h('input', { type: 'radio', name: 'existencias-csv', value: 'reemplazar', checked: true });
   const sumar = h('input', { type: 'radio', name: 'existencias-csv', value: 'sumar' });
   const resultado = h('div');
@@ -140,7 +143,7 @@ export function importadorCsv({ alTerminar = () => {} } = {}) {
   /** Sube el archivo. Un segundo clic mientras sube no hace nada (con «Se suma al stock» sumaría dos veces). */
   async function importar() {
     if (enviando) return null;
-    if (!archivo.files[0]) return mostrarError('Elige el archivo CSV.');
+    if (!archivo.files[0]) return mostrarError('Elige la planilla (Excel .xlsx o CSV).');
     const datos = new FormData();
     datos.append('archivo', archivo.files[0]);
     datos.append('existencias', sumar.checked ? 'sumar' : 'reemplazar');
@@ -151,7 +154,7 @@ export function importadorCsv({ alTerminar = () => {} } = {}) {
       const r = await api.subir('/api/productos/importar', datos);
       vaciar(resultado, h('div.panel',
         h('p', h('b', `${r.creados} creados, ${r.actualizados} actualizados.`)),
-        r.errores.length ? [h('p.rojo', `${r.errores.length} filas con problemas:`),
+        r.errores.length ? [h('p.rojo', r.errores.length === 1 ? 'Revisa esta fila:' : `Revisa estas ${r.errores.length} filas:`),
           h('ul', r.errores.map((e) => h('li', `Fila ${e.fila}: ${e.error}`)))] : null));
       archivo.value = '';
       alTerminar(r);
@@ -165,8 +168,8 @@ export function importadorCsv({ alTerminar = () => {} } = {}) {
   }
 
   const el = h('div.importador-csv',
-    h('p', 'Sirve para traer tu catálogo y tu inventario desde Excel, eleventa u otro sistema. Guarda la planilla como CSV (separado por punto y coma o coma).'),
-    h('p.ayuda', 'Columnas reconocidas: codigo, descripcion, precio_venta, precio_costo, precio_mayoreo, cantidad_mayoreo, departamento, tipo_venta (unidad/granel), existencia, minimo, maximo, usa_inventario (si/no), exento (si/no), principio_activo, proveedor y vencimiento. También entiende nombres como "Código", "Precio Venta", "Costo", "Stock", "Categoría", "Distribuidor" o "Principio Activo".'),
+    h('p', 'Sirve para traer tu catálogo y tu inventario desde Excel, eleventa u otro sistema. Sube la planilla de Excel (.xlsx) tal como la exporta tu sistema, o un CSV (separado por punto y coma o coma).'),
+    h('p.ayuda', 'Columnas reconocidas: codigo, descripcion, precio_venta, precio_costo, precio_mayoreo, cantidad_mayoreo, departamento, tipo_venta (unidad/granel), existencia, minimo, maximo, usa_inventario (si/no), exento (si/no), principio_activo, proveedor y vencimiento. También entiende los nombres de eleventa ("Código", "Producto", "P. Costo", "P. Venta", "Existencia", "Inv. Mínimo") y otros como "Stock", "Categoría", "Distribuidor" o "Principio Activo".'),
     h('p.ayuda', 'Si el código ya existe, el producto se actualiza con las columnas que traigan datos. Para cargar solo el stock basta con las columnas codigo, descripcion y existencia.'),
     h('div.fila',
       h('button.btn.chico', { type: 'button', onclick: () => descargar('/api/productos/plantilla.csv') }, 'Descargar planilla de ejemplo'),
@@ -186,7 +189,7 @@ export function importadorCsv({ alTerminar = () => {} } = {}) {
 async function importarCsv(alTerminar) {
   const importador = importadorCsv({ alTerminar });
   modal({
-    titulo: 'Importar productos desde CSV',
+    titulo: 'Importar productos (Excel o CSV)',
     ancho: 'ancho',
     cuerpo: importador.el,
     botones: [
@@ -298,7 +301,7 @@ export async function montar(contenedor) {
         btnEtiquetas,
         admin ? [
           h('button.btn', { type: 'button', onclick: () => administrarDepartamentos(cargarDepartamentos) }, 'Departamentos'),
-          h('button.btn', { type: 'button', onclick: () => importarCsv(() => cargar()) }, 'Importar CSV'),
+          h('button.btn', { type: 'button', onclick: () => importarCsv(() => cargar()) }, 'Importar Excel o CSV'),
           h('button.btn', { type: 'button', onclick: () => descargar('/api/productos/exportar') }, 'Exportar CSV'),
           h('button.btn.primario', { type: 'button', onclick: async () => { if (await formProducto()) { aviso('Producto guardado.', 'ok'); cargar(); } } }, 'Nuevo producto'),
         ] : null)),
@@ -348,7 +351,7 @@ export async function montar(contenedor) {
       },
     ].filter(Boolean);
     vaciar(lista, tabla(columnas, ultimos, {
-      vacio: 'No hay productos. Crea uno nuevo o importa tu catálogo desde CSV.',
+      vacio: 'No hay productos. Crea uno nuevo o importa tu catálogo desde Excel o CSV.',
       alClic: admin ? async (p) => { if (await formProducto(p)) { aviso('Producto guardado.', 'ok'); cargar(); } } : null,
     }));
     const paginas = Math.max(1, Math.ceil(r.total / POR_PAGINA));
