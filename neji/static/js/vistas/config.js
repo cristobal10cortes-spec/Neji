@@ -596,7 +596,7 @@ function panelLector() {
 function vistaImportar() {
   const importador = importadorCsv();
   return h('div.panel',
-    h('h3', 'Importar inventario desde CSV'),
+    h('h3', 'Importar inventario (Excel o CSV)'),
     importador.el,
     h('div.fila.fin', { style: { marginTop: '1rem' } },
       h('button.btn.primario', {
@@ -957,6 +957,33 @@ async function vistaSii(zona) {
         h('button.btn', { type: 'button', onclick: subir }, f ? 'Cambiar firma' : 'Subir firma')));
   }
 
+  function panelCorreo() {
+    const c = datos.config;
+    const campos = {
+      servidor: h('input', { value: c.correo_servidor || '', placeholder: 'smtp.gmail.com' }),
+      puerto: h('input', { value: c.correo_puerto || '587', inputmode: 'numeric' }),
+      usuario: h('input', { value: c.correo_usuario || '', placeholder: 'farmacia@gmail.com', autocomplete: 'off' }),
+      clave: h('input', { type: 'password', autocomplete: 'new-password', placeholder: datos.correo.clave_guardada ? 'Guardada (escribe otra para cambiarla)' : '' }),
+      remitente: h('input', { value: c.correo_remitente || '', placeholder: 'Vacío = el mismo usuario' }),
+    };
+    const guardar = (e) => {
+      e.preventDefault();
+      return ejecutar(() => api.put('/api/sii', {
+        correo_servidor: campos.servidor.value, correo_puerto: campos.puerto.value, correo_usuario: campos.usuario.value,
+        correo_clave: campos.clave.value, correo_remitente: campos.remitente.value,
+      }), 'Correo guardado.');
+    };
+    return h('form.panel', { onsubmit: guardar },
+      h('h3', 'Correo para mandar las facturas'),
+      h('p.ayuda', 'Cuando el SII acepta una factura (o la nota de crédito de una factura), Neji le manda el XML al correo del cliente, como pide el SII (intercambio). Las boletas no se mandan. Con Gmail: servidor smtp.gmail.com, puerto 587, tu correo y una «contraseña de aplicación» (se crea en tu cuenta de Google → Seguridad → Verificación en dos pasos → Contraseñas de aplicaciones).'),
+      h('div.rejilla',
+        campo('Servidor (SMTP)', campos.servidor), campo('Puerto', campos.puerto, '587 (o 465 con SSL).'),
+        campo('Usuario', campos.usuario), campo('Contraseña', campos.clave), campo('Correo remitente (opcional)', campos.remitente)),
+      h('div.fila.fin', { style: { marginTop: '.6rem' } },
+        h('button.btn', { type: 'button', disabled: !datos.correo.configurado, onclick: () => ejecutar(() => api.post('/api/sii/correo/probar', {}), (r) => r.mensaje) }, 'Probar correo'),
+        h('button.btn.primario', { type: 'submit' }, 'Guardar correo')));
+  }
+
   function panelFolios() {
     const archivo = h('input', { type: 'file', accept: '.xml', multiple: true });
     const cargar = () => {
@@ -1006,12 +1033,26 @@ async function vistaSii(zona) {
         h('div.kpi', h('div.titulo', 'Aceptados'), h('div.valor', numero(n('aceptado') + n('reparo')))),
         h('div.kpi', { class: n('rechazado') ? 'destacado' : null }, h('div.titulo', 'Rechazados'), h('div.valor', numero(n('rechazado'))))),
       e.error ? h('div.error-modal', `Último problema al enviar: ${e.error}`) : null,
+      e.correos_pendientes ? h('p', { class: e.error_correo ? 'rojo' : 'suave' },
+        `${e.correos_pendientes} facturas por mandar a los clientes por correo`,
+        datos.correo.configurado ? (e.error_correo ? `: ${e.error_correo}` : '.') : ': falta configurar el correo (más abajo).') : null,
       h('div.fila.fin', { style: { marginTop: '.6rem' } },
         h('button.btn', { type: 'button', disabled: !datos.firma || Boolean(datos.firma?.error), onclick: () => ejecutar(() => api.post('/api/sii/probar'), (r) => r.mensaje) }, 'Probar conexión'),
         h('button.btn.primario', { type: 'button', disabled: datos.config.activo !== '1', onclick: () => ejecutar(() => api.post('/api/sii/enviar'), (r) => {
           const x = r.resumen || {};
           return x.errores?.length ? `Envío con problemas: ${x.errores[0]}` : `Listo: ${x.subidos || 0} sobres subidos, ${x.consultados || 0} consultados.`;
         }) }, 'Enviar ahora')));
+  }
+
+  async function mandarXml(d) {
+    const r = await formulario({
+      titulo: `Mandar ${d.nombre} N° ${d.folio} al cliente`,
+      intro: h('p.ayuda', datos.correo.configurado ? 'Se manda cuando el SII la haya aceptado.' : 'Primero configura el correo en esta misma pantalla: se manda cuando esté listo y el SII la haya aceptado.'),
+      campos: [{ nombre: 'correo', etiqueta: 'Correo del cliente', tipo: 'email', valor: d.correo_receptor || '', requerido: true, autofocus: true }],
+      aceptar: 'Mandar',
+      alEnviar: (v) => api.post(`/api/sii/documentos/${d.id}/correo`, v),
+    });
+    if (r) { aviso('Quedó para mandar al cliente.', 'ok'); cargarDocumentos(); }
   }
 
   const listaDocumentos = h('div');
@@ -1029,7 +1070,11 @@ async function vistaSii(zona) {
       { titulo: 'Receptor', valor: (d) => (d.rut_receptor === '66666666-6' ? '' : `${d.razon_receptor} · ${d.rut_receptor}`) },
       { titulo: 'Total', valor: (d) => pesos(d.total), clase: 'num' },
       { titulo: 'Estado', valor: (d) => h(`span.etiqueta${CLASE_ESTADO_SII[d.estado] ? '.' + CLASE_ESTADO_SII[d.estado] : ''}`, { title: d.glosa || '' }, d.estado_texto) },
-      { titulo: '', valor: (d) => h('button.btn.chico', { type: 'button', onclick: () => descargar(`/api/sii/documentos/${d.id}/xml`) }, 'XML') },
+      { titulo: 'Al cliente', valor: (d) => (d.correo_texto ? h('span', { class: d.correo_estado === 'sin_correo' || d.correo_glosa ? 'rojo' : 'suave', title: d.correo_glosa || d.correo_receptor || '' }, d.correo_texto) : '') },
+      { titulo: '', valor: (d) => h('div.fila.fin',
+        [33, 34, 61].includes(d.tipo) && d.rut_receptor !== '66666666-6'
+          ? h('button.btn.chico', { type: 'button', title: 'Mandar el XML al correo del cliente', onclick: () => mandarXml(d) }, 'Enviar XML') : null,
+        h('button.btn.chico', { type: 'button', onclick: () => descargar(`/api/sii/documentos/${d.id}/xml`) }, 'XML')) },
     ], docs, { vacio: 'No hay documentos en estas fechas.' }));
   }
 
@@ -1039,6 +1084,7 @@ async function vistaSii(zona) {
       panelEmisor(),
       h('div.columnas', panelFirma(), panelEnvios()),
       panelFolios(),
+      panelCorreo(),
       h('div.panel',
         h('h3', 'Documentos emitidos'),
         selectorFechas(filtroDocumentosSii, (f) => { filtroDocumentosSii = f; cargarDocumentos(); }),
@@ -1053,7 +1099,7 @@ export async function montar(contenedor, parametros = {}) {
   const admin = esAdmin();
   const opciones = admin
     ? [['negocio', 'Negocio'], ['ticket', 'Ticket'], ['opciones', 'Opciones'], ['usuarios', 'Usuarios'], ['cajas', 'Cajas'], ['terminal', 'Esta terminal'],
-      ['impresora', 'Impresora de tickets'], ['respaldos', 'Respaldos'], ['importar', 'Importar inventario (CSV)'], ['sii', 'Boleta electrónica']]
+      ['impresora', 'Impresora de tickets'], ['respaldos', 'Respaldos'], ['importar', 'Importar inventario'], ['sii', 'Boleta electrónica']]
     : [['terminal', 'Esta terminal'], ['impresora', 'Impresora de tickets']];
   let actual = opciones.some(([k]) => k === parametros.pestana) ? parametros.pestana : opciones[0][0];
   const barra = h('div');

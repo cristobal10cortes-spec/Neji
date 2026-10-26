@@ -27,8 +27,12 @@ def _sin_declaracion(xml):
     return re.sub(r"^\s*<\?xml[^>]*\?>\s*", "", texto).strip()
 
 
-def construir(dtes, tipos, emisor_rut, firma, fecha_resolucion, numero_resolucion, momento=None):
-    """`dtes`: XML firmados (bytes) de los documentos; `tipos`: el tipo de cada uno. Devuelve bytes ISO-8859-1."""
+def construir(dtes, tipos, emisor_rut, firma, fecha_resolucion, numero_resolucion, momento=None,
+              rut_receptor=RUT_SII):
+    """`dtes`: XML firmados (bytes) de los documentos; `tipos`: el tipo de cada uno. Devuelve bytes ISO-8859-1.
+
+    `rut_receptor`: el SII (el sobre que se sube) o el cliente (el que se le manda por correo con su factura).
+    """
     from lxml import etree
 
     if not dtes:
@@ -39,7 +43,8 @@ def construir(dtes, tipos, emisor_rut, firma, fecha_resolucion, numero_resolucio
     subtotales = "".join(f"<SubTotDTE><TpoDTE>{t}</TpoDTE><NroDTE>{n}</NroDTE></SubTotDTE>"
                          for t, n in sorted(Counter(tipos).items()))
     caratula = (f'<Caratula version="1.0"><RutEmisor>{limpiar_rut(emisor_rut)}</RutEmisor>'
-                f"<RutEnvia>{limpiar_rut(firma.rut)}</RutEnvia><RutReceptor>{RUT_SII}</RutReceptor>"
+                f"<RutEnvia>{limpiar_rut(firma.rut)}</RutEnvia>"
+                f"<RutReceptor>{limpiar_rut(rut_receptor)}</RutReceptor>"
                 f"<FchResol>{fecha_resolucion}</FchResol><NroResol>{int(numero_resolucion)}</NroResol>"
                 f"<TmstFirmaEnv>{marca_de_tiempo(momento)}</TmstFirmaEnv>{subtotales}</Caratula>")
     cuerpo = "\n".join(_sin_declaracion(d) for d in dtes)

@@ -139,6 +139,10 @@ def migrar(con):
     for columna in ("comuna", "ciudad"):     # para la factura electrónica
         if columna not in clientes:
             con.execute(f"ALTER TABLE clientes ADD COLUMN {columna} TEXT")
+    documentos = _columnas(con, "sii_documentos")
+    for columna in ("correo_receptor", "correo_estado", "correo_glosa", "correo_enviado"):   # versión 0.1.30
+        if columna not in documentos:
+            con.execute(f"ALTER TABLE sii_documentos ADD COLUMN {columna} TEXT")
     usuarios = _columnas(con, "usuarios")
     if "nombre_ticket" not in usuarios:
         con.execute("ALTER TABLE usuarios ADD COLUMN nombre_ticket TEXT")

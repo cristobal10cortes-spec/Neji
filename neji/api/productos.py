@@ -1,7 +1,8 @@
-"""Catálogo de productos, importación/exportación CSV y kardex por producto."""
+"""Catálogo de productos, importación (CSV o Excel) / exportación CSV y kardex por producto."""
 
 import csv
 import io
+import re
 
 from flask import Response, jsonify, request
 
@@ -10,6 +11,7 @@ from ..db import ahora, fila, filas, get_db, sin_acentos, transaccion
 from ..servicios.farmacia import (SQL_PRINCIPIOS_TEXTO, alternativas, guardar_principios_producto,
                                   principios_de_producto, principios_de_productos)
 from ..servicios.inventario import mover_existencia
+from ..xlsx import es_xls_antiguo, es_xlsx, leer_xlsx
 from ..validar import (ErrorNegocio, booleano, cantidad, celda_csv, entero, fecha_flexible,
                        leer_celda_csv, numero_texto, texto)
 from . import bp, datos_json, sin_costos
@@ -45,7 +47,18 @@ def _departamento_id(con, datos):
     row = con.execute("SELECT id FROM departamentos WHERE nombre = ?", (nombre,)).fetchone()
     if row:
         return row["id"]
+    # «INYECTABLES», «Inyectables» e «inyectable» son el mismo departamento: no se crea otro.
+    clave = _clave_departamento(nombre)
+    for d in con.execute("SELECT id, nombre FROM departamentos ORDER BY id"):
+        if _clave_departamento(d["nombre"]) == clave:
+            return d["id"]
     return con.execute("INSERT INTO departamentos (nombre) VALUES (?)", (nombre,)).lastrowid
+
+
+def _clave_departamento(nombre):
+    """Sin tildes, mayúsculas, espacios de más ni la s del plural."""
+    clave = " ".join(sin_acentos(nombre).split())
+    return clave[:-1] if len(clave) > 3 and clave.endswith("s") else clave
 
 
 def leer_producto(con, datos):
@@ -55,7 +68,7 @@ def leer_producto(con, datos):
     p = {
         "codigo": texto(datos, "codigo", requerido=True, nombre="el código", max_largo=40),
         "descripcion": texto(datos, "descripcion", requerido=True, nombre="la descripción",
-                             max_largo=120),
+                             max_largo=200),
         "departamento_id": _departamento_id(con, datos),
         "tipo_venta": tipo_venta,
         "precio_costo": entero(datos.get("precio_costo") or 0, "precio de costo", minimo=0),
@@ -284,7 +297,7 @@ ALIAS_COLUMNAS = {
     "descripción": "descripcion", "nombre": "descripcion", "producto": "descripcion",
     "costo": "precio_costo", "precio costo": "precio_costo", "p. costo": "precio_costo",
     "precio": "precio_venta", "precio venta": "precio_venta", "p. venta": "precio_venta",
-    "mayoreo": "precio_mayoreo", "precio mayoreo": "precio_mayoreo",
+    "mayoreo": "precio_mayoreo", "precio mayoreo": "precio_mayoreo", "p. mayoreo": "precio_mayoreo",
     "departamento": "departamento", "categoria": "departamento", "categoría": "departamento",
     "inventario": "existencia", "stock": "existencia", "existencias": "existencia",
     "inv. minimo": "minimo", "mínimo": "minimo", "inv. maximo": "maximo", "máximo": "maximo",
@@ -294,6 +307,13 @@ ALIAS_COLUMNAS = {
     "distribuidor": "proveedor", "laboratorio": "proveedor", "proveedor": "proveedor",
     "fecha vencimiento": "vencimiento", "vence": "vencimiento", "caducidad": "vencimiento",
 }
+# Los nombres se comparan sin tildes: «Inv. Mínimo» (eleventa) e «inv. minimo» son la misma columna.
+ALIAS_COLUMNAS = {sin_acentos(k): v for k, v in ALIAS_COLUMNAS.items()}
+
+
+def _columna_csv(nombre):
+    clave = sin_acentos((nombre or "").strip().lower())
+    return ALIAS_COLUMNAS.get(clave, clave)
 
 
 class _PuntoYComa(csv.excel):
@@ -315,19 +335,8 @@ def plantilla_csv():
                     headers={"Content-Disposition": "attachment; filename=plantilla_inventario.csv"})
 
 
-@bp.post("/productos/importar")
-@con_permiso("productos")
-def importar_productos():
-    """Crea o actualiza productos desde CSV (separado por ; o ,). Clave: el código.
-
-    Con existencias=sumar, la columna existencia de los productos que ya existen se suma al stock (entrada de
-    mercadería); si no, lo reemplaza (conteo de inventario).
-    """
-    archivo = request.files.get("archivo")
-    if archivo is None:
-        raise ErrorNegocio("Adjunta un archivo CSV.")
-    sumar = request.form.get("existencias") == "sumar"
-    contenido = archivo.read()
+def _filas_csv(contenido):
+    """CSV (separado por ; , o tabulador) -> filas de texto."""
     # Excel en Windows guarda en cp1252 (comillas “ ”, guiones –, €); latin-1 queda para lo que cp1252 no define.
     for codificacion in ("utf-8-sig", "cp1252", "latin-1"):
         try:
@@ -339,13 +348,46 @@ def importar_productos():
         dialecto = csv.Sniffer().sniff(texto_csv.splitlines()[0] if texto_csv else "", delimiters=";,\t")
     except csv.Error:
         dialecto = _PuntoYComa
-    lector = csv.DictReader(io.StringIO(texto_csv), dialect=dialecto)
-    if not lector.fieldnames:
+    return list(csv.reader(io.StringIO(texto_csv), dialect=dialecto))
+
+
+def _registros(contenido):
+    """Planilla (Excel .xlsx o CSV) -> (número de fila, {columna: texto}) desde la fila de los títulos."""
+    if es_xls_antiguo(contenido):
+        raise ErrorNegocio("Es una planilla de Excel antigua (.xls): ábrela en Excel y guárdala como «Libro de "
+                           "Excel (.xlsx)» o como CSV, y súbela de nuevo.")
+    filas_planilla = leer_xlsx(contenido) if es_xlsx(contenido) else _filas_csv(contenido)
+    # Los títulos: la primera fila con algo escrito (a veces hay filas en blanco o un título antes).
+    inicio = next((i for i, f in enumerate(filas_planilla) if any(c.strip() for c in f)), None)
+    if inicio is None:
         raise ErrorNegocio("El archivo está vacío.")
-    lector.fieldnames = [ALIAS_COLUMNAS.get(c.strip().lower(), c.strip().lower())
-                         for c in lector.fieldnames]
-    if "codigo" not in lector.fieldnames or "descripcion" not in lector.fieldnames:
-        raise ErrorNegocio("El archivo debe tener al menos las columnas codigo y descripcion.")
+    for i, f in enumerate(filas_planilla[:10]):
+        columnas = {_columna_csv(c) for c in f}
+        if {"codigo", "descripcion"} <= columnas:
+            inicio = i
+            break
+    else:
+        raise ErrorNegocio("No se encontraron las columnas del código y la descripción del producto. La primera "
+                           "fila debe tener los títulos, por ejemplo: Código, Producto, P. Costo, P. Venta, "
+                           "Existencia, Departamento.")
+    titulos = [_columna_csv(c) for c in filas_planilla[inicio]]
+    for n, f in enumerate(filas_planilla[inicio + 1:], start=inicio + 2):
+        yield n, {t: (f[i] if i < len(f) else "") for i, t in enumerate(titulos) if t}
+
+
+@bp.post("/productos/importar")
+@con_permiso("productos")
+def importar_productos():
+    """Crea o actualiza productos desde una planilla: Excel (.xlsx) o CSV (separado por ; o ,). Clave: el código.
+
+    Con existencias=sumar, la columna existencia de los productos que ya existen se suma al stock (entrada de
+    mercadería); si no, lo reemplaza (conteo de inventario).
+    """
+    archivo = request.files.get("archivo")
+    if archivo is None:
+        raise ErrorNegocio("Adjunta la planilla (Excel o CSV).")
+    sumar = request.form.get("existencias") == "sumar"
+    registros = list(_registros(archivo.read()))
 
     con = get_db()
     usuario_id = usuario_actual()["id"]
@@ -353,10 +395,16 @@ def importar_productos():
     puede_inventario = tiene_permiso(usuario_actual(), "inventario")
     creados = actualizados = 0
     errores, avisos = [], []
-    for n, registro in enumerate(lector, start=2):
+    for n, registro in registros:
         registro = {k: leer_celda_csv((v or "").strip()) for k, v in registro.items() if k}
         if not any(registro.values()):
             continue
+        # Otros sistemas (eleventa) aceptan códigos con espacios («COBAN 2»); en Neji van juntos.
+        if re.search(r"\s", registro.get("codigo") or ""):
+            junto = re.sub(r"\s+", "", registro["codigo"])
+            avisos.append({"fila": n, "error": f"El código «{registro['codigo']}» quedó como «{junto}» (los códigos "
+                                               "no llevan espacios)."})
+            registro["codigo"] = junto
         try:
             with transaccion(con):
                 existente = con.execute(

@@ -7,6 +7,8 @@
 - Al devolver se emite la nota de crédito que corrige el documento de la venta.
 - El envío al SII lo hace un hilo en segundo plano (Enviador): arma los sobres, los sube y consulta su
   estado. Nada de red ocurre dentro de una venta.
+- Intercambio: cuando el SII acepta una factura (o la nota de crédito de una factura), el mismo hilo le
+  manda el XML por correo al cliente, si se configuró la cuenta de correo.
 """
 
 import base64
@@ -24,7 +26,8 @@ registro = logging.getLogger("neji.sii")
 
 AMBIENTES = {"certificacion": "Certificación (pruebas del SII)", "produccion": "Producción"}
 CAMPOS_TEXTO = {"rut": 12, "razon_social": 100, "giro": 80, "direccion": 70, "comuna": 20, "ciudad": 20,
-                "telefono": 20, "email": 80, "oficina_sii": 40, "fecha_resolucion": 10}
+                "telefono": 20, "email": 80, "oficina_sii": 40, "fecha_resolucion": 10,
+                "correo_servidor": 120, "correo_usuario": 120, "correo_remitente": 120}
 BOLETAS_POR_SOBRE = 50
 ESPERA_CONSULTA = 30            # segundos entre subir un sobre y preguntar por él
 REINTENTOS = (60, 120, 300, 600, 1800, 3600)
@@ -53,14 +56,29 @@ def actecos(cfg):
     return [int(x) for x in str(cfg.get("actecos") or "").replace(";", ",").split(",") if x.strip().isdigit()]
 
 
-def guardar(con, datos):
-    """Guarda los datos del emisor, el ambiente y la resolución. Para activar tiene que estar todo listo."""
-    from .textos import texto_sii
+def guardar(con, datos, secreto=None):
+    """Guarda los datos del emisor, el ambiente, la resolución y el correo. Para activar tiene que estar todo listo.
+
+    La contraseña del correo (correo_clave) se guarda cifrada; vacía, queda la que estaba.
+    """
+    from .textos import correo_valido, texto_sii
 
     cambios = {}
     for clave, largo in CAMPOS_TEXTO.items():
         if clave in datos:
-            cambios[clave] = texto_sii(datos[clave], largo)
+            cambios[clave] = texto_sii(datos[clave], largo) if not clave.startswith("correo_") else \
+                str(datos[clave] or "").strip()[:largo]
+    if cambios.get("correo_remitente") and not correo_valido(cambios["correo_remitente"]):
+        raise ErrorSII("El correo del remitente no es válido.")
+    if "correo_puerto" in datos:
+        puerto = str(datos["correo_puerto"] or "").strip() or "587"
+        if not puerto.isdigit() or not 0 < int(puerto) < 65536:
+            raise ErrorSII("El puerto del correo es un número (587, o 465 con SSL).")
+        cambios["correo_puerto"] = puerto
+    if datos.get("correo_clave"):
+        if not secreto:
+            raise ErrorSII("No se puede guardar la contraseña del correo.")
+        cambios["correo_clave"] = _cifrador(secreto).encrypt(str(datos["correo_clave"]).encode()).decode()
     if "rut" in cambios and cambios["rut"]:
         rut = limpiar_rut(cambios["rut"])
         if not validar_rut(rut):
@@ -265,16 +283,35 @@ def _receptor_cliente(cliente):
             "email": cliente["email"]}
 
 
+def _intercambio(doc):
+    """(correo, estado, glosa) del envío del XML al cliente: solo facturas y notas de crédito de facturas."""
+    from .textos import correo_valido
+
+    de_factura = doc["tipo"] in FACTURAS or (
+        doc["tipo"] == 61 and any(r.get("tipo") in FACTURAS for r in doc.get("referencias") or []))
+    if not de_factura:
+        return None, None, None
+    correo = str((doc.get("receptor") or {}).get("email") or "").strip()
+    if not correo:
+        return None, "sin_correo", "El cliente no tiene correo: descarga el XML y envíaselo."
+    if not correo_valido(correo):
+        return correo, "sin_correo", f"El correo del cliente ({correo}) no es válido: corrígelo en Clientes."
+    return correo, "pendiente", None
+
+
 def _guardar_documento(con, cfg, doc, resultado, venta_id=None, devolucion_id=None):
     receptor = doc.get("receptor") or {}
     t = resultado["totales"]
+    correo, correo_estado, correo_glosa = _intercambio(doc)
     return con.execute(
         """INSERT INTO sii_documentos (ambiente, tipo, folio, fecha, emitido, venta_id, devolucion_id,
-               rut_receptor, razon_receptor, neto, iva, exento, total, xml, ted)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               rut_receptor, razon_receptor, neto, iva, exento, total, xml, ted, correo_receptor, correo_estado,
+               correo_glosa)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (cfg["ambiente"], doc["tipo"], doc["folio"], doc["fecha"], ahora(), venta_id, devolucion_id,
          limpiar_rut(receptor.get("rut")) or RUT_CONSUMIDOR_FINAL, receptor.get("razon_social") or "Consumidor Final",
-         t["neto"], t["iva"], t["exento"], t["total"], resultado["xml"], resultado["ted"].decode("iso-8859-1")),
+         t["neto"], t["iva"], t["exento"], t["total"], resultado["xml"], resultado["ted"].decode("iso-8859-1"),
+         correo, correo_estado, correo_glosa),
     ).lastrowid
 
 
@@ -358,6 +395,8 @@ def emitir_nota_credito(con, devolucion_id, secreto, tasa_iva=19):
     return _guardar_documento(con, cfg, doc, resultado, venta_id=devolucion["venta_id"], devolucion_id=devolucion_id)
 
 
+ESTADOS_CORREO = {"pendiente": "XML por enviar al cliente", "enviado": "XML enviado al cliente",
+                  "sin_correo": "Cliente sin correo"}
 ESTADOS = {"pendiente": "Por enviar al SII", "enviado": "Enviado, esperando respuesta", "aceptado": "Aceptado por el SII",
            "reparo": "Aceptado con reparos", "rechazado": "Rechazado por el SII"}
 
@@ -414,6 +453,8 @@ def para_ticket(con, fila, cfg=None):
             "neto": fila["neto"], "iva": fila["iva"], "exento": fila["exento"], "total": fila["total"],
             "rut_receptor": fila["rut_receptor"], "razon_receptor": fila["razon_receptor"],
             "devolucion_id": fila["devolucion_id"], "ted": fila["ted"],
+            "correo": {"estado": fila["correo_estado"], "texto": ESTADOS_CORREO.get(fila["correo_estado"]),
+                       "glosa": fila["correo_glosa"], "a": fila["correo_receptor"]} if fila["correo_estado"] else None,
             # El timbre para la pantalla y la impresión con el navegador: derecho en 80 mm; en 58 mm, girado y más
             # angosto (más columnas), para que sus módulos midan 0,25 mm (2 puntos de la impresora).
             "pdf417": matriz(fila["ted"].encode("iso-8859-1", "replace"), 12),
@@ -496,19 +537,19 @@ def _aplicar_estado(con, envio, r):
 _candado_ciclo = threading.Lock()
 
 
-def ciclo(ruta_db, secreto, conexion=None):
+def ciclo(ruta_db, secreto, conexion=None, correo=None):
     """Una vuelta del envío: arma sobres, sube los que faltan y consulta los ya subidos. Devuelve un resumen.
 
     Una vuelta a la vez (el hilo y el botón «Enviar ahora»): así un documento nunca queda en dos sobres.
     """
     with _candado_ciclo:
-        return _ciclo(ruta_db, secreto, conexion)
+        return _ciclo(ruta_db, secreto, conexion, correo)
 
 
-def _ciclo(ruta_db, secreto, conexion):
+def _ciclo(ruta_db, secreto, conexion, correo):
     from .conexion import ConexionSII
 
-    resumen = {"sobres": 0, "subidos": 0, "consultados": 0, "errores": []}
+    resumen = {"sobres": 0, "subidos": 0, "consultados": 0, "correos": 0, "errores": []}
     con = conectar(ruta_db)
     try:
         cfg = leer(con)
@@ -557,9 +598,133 @@ def _ciclo(ruta_db, secreto, conexion):
                 with transaccion(con):
                     con.execute("UPDATE sii_envios SET intentos = intentos + 1, proximo = ?, glosa = ? WHERE id = ?",
                                 (_mas(espera), f"En proceso en el SII ({r['estado']})", envio["id"]))
+        if correo_configurado(cfg):
+            try:
+                resumen["correos"] = enviar_correos(con, cfg, firma, secreto, correo)
+            except ErrorSII as e:
+                resumen["errores"].append(str(e))
     finally:
         con.close()
     return resumen
+
+
+# --- Intercambio: el XML de la factura al cliente, por correo -----------------------------------------------
+
+ESPERA_CORREO = 600          # tras un error del servidor de correo, se vuelve a intentar 10 minutos después
+_correo_espera_hasta = [0.0]
+
+
+def correo_configurado(cfg):
+    return bool(cfg.get("correo_servidor") and (cfg.get("correo_remitente") or cfg.get("correo_usuario")))
+
+
+def _clave_correo(cfg, secreto):
+    if not cfg.get("correo_clave"):
+        return ""
+    try:
+        return _cifrador(secreto).decrypt(cfg["correo_clave"].encode()).decode()
+    except Exception:  # noqa: BLE001 (otra clave de Neji, como con la firma)
+        raise ErrorSII("No se puede leer la contraseña guardada del correo: vuelve a escribirla en Configuración "
+                       "→ Boleta electrónica.") from None
+
+
+def transporte_correo(cfg, secreto):
+    """Función que manda un correo (EmailMessage) con la cuenta configurada (SMTP con STARTTLS, o SSL en 465)."""
+    import smtplib
+    import ssl
+
+    servidor, puerto = cfg["correo_servidor"], int(cfg.get("correo_puerto") or 587)
+    usuario, clave = cfg.get("correo_usuario") or "", _clave_correo(cfg, secreto)
+
+    def enviar(mensaje):
+        contexto = ssl.create_default_context()
+        try:
+            if puerto == 465:
+                cliente = smtplib.SMTP_SSL(servidor, puerto, timeout=30, context=contexto)
+            else:
+                cliente = smtplib.SMTP(servidor, puerto, timeout=30)
+            with cliente:
+                if puerto != 465:
+                    cliente.ehlo()
+                    if cliente.has_extn("starttls"):
+                        cliente.starttls(context=contexto)
+                        cliente.ehlo()
+                if usuario:
+                    cliente.login(usuario, clave)
+                cliente.send_message(mensaje)
+        except smtplib.SMTPAuthenticationError:
+            raise ErrorSII("El servidor de correo no aceptó el usuario o la contraseña (en Gmail se usa una "
+                           "«contraseña de aplicación»).") from None
+        except (smtplib.SMTPException, OSError) as e:
+            raise ErrorSII(f"No se pudo mandar el correo ({type(e).__name__}: {e}).") from None
+    return enviar
+
+
+def _mensaje(cfg, de, para, asunto, cuerpo, adjunto=None, nombre_adjunto=None):
+    from email.message import EmailMessage
+    from email.utils import formataddr, make_msgid
+
+    mensaje = EmailMessage()
+    mensaje["From"] = formataddr((cfg.get("razon_social") or "", de))
+    mensaje["To"] = para
+    mensaje["Subject"] = asunto
+    mensaje["Message-ID"] = make_msgid(domain=de.split("@")[-1])
+    mensaje.set_content(cuerpo)
+    if adjunto is not None:
+        mensaje.add_attachment(adjunto, maintype="application", subtype="xml", filename=nombre_adjunto)
+    return mensaje
+
+
+def enviar_correos(con, cfg, firma, secreto, transporte=None):
+    """Manda a cada cliente el XML de sus facturas (y notas de crédito) ya aceptadas por el SII. Devuelve cuántas."""
+    from . import envio
+
+    if time.time() < _correo_espera_hasta[0] and transporte is None:
+        return 0
+    pendientes = con.execute(
+        "SELECT * FROM sii_documentos WHERE ambiente = ? AND correo_estado = 'pendiente' "
+        "AND estado IN ('aceptado', 'reparo') ORDER BY id", (cfg["ambiente"],)).fetchall()
+    if not pendientes:
+        return 0
+    enviar = transporte or transporte_correo(cfg, secreto)
+    de = cfg.get("correo_remitente") or cfg.get("correo_usuario")
+    enviados = 0
+    for d in pendientes:
+        nombre = NOMBRES.get(d["tipo"], "Documento").capitalize()
+        sobre = envio.construir([d["xml"]], [d["tipo"]], cfg["rut"], firma, cfg["fecha_resolucion"],
+                                cfg.get("numero_resolucion") or 0, rut_receptor=d["rut_receptor"])
+        total = f"{d['total']:,}".replace(",", ".")
+        cuerpo = (f"Estimado cliente:\n\nAdjuntamos el documento tributario electrónico {nombre} N° {d['folio']}, "
+                  f"emitido por {cfg.get('razon_social')} (RUT {cfg['rut']}) el {d['fecha']}, por un total de "
+                  f"${total}.\n\nEste correo se envía automáticamente.\n")
+        mensaje = _mensaje(cfg, de, d["correo_receptor"], f"DTE {cfg['rut']} - {nombre} N° {d['folio']}", cuerpo,
+                           sobre, f"DTE_{cfg['rut']}_T{d['tipo']}_F{d['folio']}.xml")
+        try:
+            enviar(mensaje)
+        except ErrorSII as e:
+            _correo_espera_hasta[0] = time.time() + ESPERA_CORREO
+            with transaccion(con):
+                con.execute("UPDATE sii_documentos SET correo_glosa = ? WHERE id = ?", (str(e), d["id"]))
+            raise
+        with transaccion(con):
+            con.execute("UPDATE sii_documentos SET correo_estado = 'enviado', correo_glosa = NULL, "
+                        "correo_enviado = ? WHERE id = ?", (ahora(), d["id"]))
+        enviados += 1
+    return enviados
+
+
+def probar_correo(cfg, secreto, para=None, transporte=None):
+    """Manda un correo de prueba (a la misma cuenta, si no se dice otra) con la configuración guardada."""
+    if not correo_configurado(cfg):
+        raise ErrorSII("Falta el servidor y la cuenta de correo.")
+    de = cfg.get("correo_remitente") or cfg.get("correo_usuario")
+    para = para or de
+    (transporte or transporte_correo(cfg, secreto))(_mensaje(
+        cfg, de, para, "Prueba de correo de Neji POS",
+        "Este es un correo de prueba de Neji POS: la cuenta sirve para mandar las facturas electrónicas a tus "
+        "clientes.\n"))
+    _correo_espera_hasta[0] = 0.0
+    return para
 
 
 def resumen_envios(con, ambiente):
@@ -567,7 +732,26 @@ def resumen_envios(con, ambiente):
                               (ambiente,)).fetchall())
     ultimo_error = con.execute("SELECT glosa, revisado, creado FROM sii_envios WHERE ambiente = ? AND glosa IS NOT NULL "
                                "AND estado = 'por_enviar' ORDER BY id DESC LIMIT 1", (ambiente,)).fetchone()
-    return {"documentos": contar, "error": ultimo_error["glosa"] if ultimo_error else None}
+    correos = con.execute("SELECT COUNT(*), MAX(correo_glosa) FROM sii_documentos WHERE ambiente = ? "
+                          "AND correo_estado = 'pendiente'", (ambiente,)).fetchone()
+    return {"documentos": contar, "error": ultimo_error["glosa"] if ultimo_error else None,
+            "correos_pendientes": correos[0], "error_correo": correos[1]}
+
+
+def reenviar_correo(con, documento_id, correo=None):
+    """Vuelve a dejar por enviar el XML de una factura a su cliente (a otro correo, si se indica)."""
+    from .textos import correo_valido
+
+    d = con.execute("SELECT * FROM sii_documentos WHERE id = ?", (documento_id,)).fetchone()
+    if d is None:
+        raise ErrorSII("Documento no encontrado.")
+    if d["tipo"] in BOLETAS or d["rut_receptor"] == RUT_CONSUMIDOR_FINAL:
+        raise ErrorSII("Solo las facturas (y sus notas de crédito) se mandan al cliente por correo.")
+    correo = (correo or d["correo_receptor"] or "").strip()
+    if not correo_valido(correo):
+        raise ErrorSII("Escribe un correo válido.")
+    con.execute("UPDATE sii_documentos SET correo_receptor = ?, correo_estado = 'pendiente', correo_glosa = NULL "
+                "WHERE id = ?", (correo, documento_id))
 
 
 class Enviador:
