@@ -9,7 +9,7 @@ from ..sii import servicio as sii
 from ..validar import ErrorNegocio, entero
 from . import bp, datos_json, rango_fechas
 
-OCULTOS = {"firma_pfx", "firma_clave"}
+OCULTOS = {"firma_pfx", "firma_clave", "correo_clave"}
 
 
 def _error(e):
@@ -29,6 +29,7 @@ def estado_sii():
         "folios": sii.folios(con, cfg["ambiente"]),
         "pendientes": sii.pendientes_para_activar(con),
         "envios": sii.resumen_envios(con, cfg["ambiente"]),
+        "correo": {"configurado": sii.correo_configurado(cfg), "clave_guardada": bool(cfg.get("correo_clave"))},
         "tipos": NOMBRES,
     })
 
@@ -39,7 +40,7 @@ def guardar_sii():
     con = get_db()
     try:
         with transaccion(con):
-            sii.guardar(con, datos_json())
+            sii.guardar(con, datos_json(), current_app.secret_key)
     except ErrorSII as e:
         raise _error(e) from None
     return estado_sii()
@@ -144,6 +145,39 @@ def enviar_ahora():
     return jsonify(resumen=resumen, **estado_sii().get_json())
 
 
+@bp.post("/sii/correo/probar")
+@solo_admin
+def probar_correo():
+    """Manda un correo de prueba con la cuenta guardada (a ella misma o a la dirección indicada)."""
+    cfg = sii.leer(get_db())
+    try:
+        para = sii.probar_correo(cfg, current_app.secret_key, (request.get_json(silent=True) or {}).get("para"))
+    except ErrorSII as e:
+        raise _error(e) from None
+    _avisar_enviador()
+    return jsonify(ok=True, mensaje=f"Correo de prueba enviado a {para}.")
+
+
+@bp.post("/sii/documentos/<int:documento_id>/correo")
+@con_permiso("reportes")
+def reenviar_correo(documento_id):
+    """Deja por enviar (otra vez, o a otro correo) el XML de una factura a su cliente."""
+    con = get_db()
+    try:
+        with transaccion(con):
+            sii.reenviar_correo(con, documento_id, (request.get_json(silent=True) or {}).get("correo"))
+    except ErrorSII as e:
+        raise _error(e) from None
+    _avisar_enviador()
+    return jsonify(ok=True)
+
+
+def _avisar_enviador():
+    enviador = current_app.extensions.get("sii_enviador")
+    if enviador is not None:
+        enviador.avisar()
+
+
 @bp.get("/sii/documentos")
 @con_permiso("reportes")
 def listar_documentos():
@@ -156,12 +190,14 @@ def listar_documentos():
         parametros.append(request.args["estado"])
     filas = con.execute(
         f"""SELECT d.id, d.tipo, d.folio, d.fecha, d.emitido, d.total, d.estado, d.glosa, d.rut_receptor,
-                   d.razon_receptor, d.venta_id, d.devolucion_id, v.folio AS venta_folio, e.trackid
+                   d.razon_receptor, d.venta_id, d.devolucion_id, v.folio AS venta_folio, e.trackid,
+                   d.correo_receptor, d.correo_estado, d.correo_glosa, d.correo_enviado
             FROM sii_documentos d LEFT JOIN ventas v ON v.id = d.venta_id
             LEFT JOIN sii_envios e ON e.id = d.envio_id
             WHERE {' AND '.join(condiciones)} ORDER BY d.id DESC LIMIT 2000""", parametros).fetchall()
     return jsonify([dict(f) | {"nombre": NOMBRES.get(f["tipo"], ""),
-                               "estado_texto": sii.ESTADOS.get(f["estado"], f["estado"])} for f in filas])
+                               "estado_texto": sii.ESTADOS.get(f["estado"], f["estado"]),
+                               "correo_texto": sii.ESTADOS_CORREO.get(f["correo_estado"])} for f in filas])
 
 
 @bp.get("/sii/documentos/<int:documento_id>/xml")
@@ -198,7 +234,5 @@ def emitir_pendiente(venta_id):
                              current_app.secret_key, int(leer_config(con)["iva_porcentaje"]))
     except ErrorSII as e:
         raise _error(e) from None
-    enviador = current_app.extensions.get("sii_enviador")
-    if enviador is not None:
-        enviador.avisar()
+    _avisar_enviador()
     return jsonify(svc_ventas.obtener_venta(con, venta_id)), 201

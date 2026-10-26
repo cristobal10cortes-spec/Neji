@@ -137,6 +137,7 @@ export async function verVenta(id, alCambiar = () => {}) {
         v.documentos?.length ? h('div.panel', h('h3', 'Documentos SII'), v.documentos.map((d) => h('div',
           h('div.fila.entre', h('span', `${d.nombre} N° ${d.folio}`), etiquetaSii(d)),
           d.glosa ? h('div.ayuda', d.glosa) : null,
+          d.correo ? h('div.ayuda', { class: d.correo.estado === 'sin_correo' ? 'rojo' : null }, `${d.correo.texto}${d.correo.a ? ` (${d.correo.a})` : ''}`) : null,
           d.tipo === 61 ? h('button.btn.chico', { type: 'button', onclick: () => imprimir(ticketNotaCredito(v, d)) }, 'Imprimir nota de crédito') : null))) : null,
         v.devoluciones.length ? h('div.panel', h('h3', 'Devoluciones'), v.devoluciones.map((d) => h('div',
           h('div.fila.entre', h('span', `${fecha(d.fecha)} · ${d.usuario}`), h('b.num', pesos(d.monto))),

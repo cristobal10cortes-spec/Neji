@@ -407,8 +407,11 @@ producción.
 - La firma queda guardada en la base de Neji (va en los respaldos). Su contraseña queda cifrada con
   la clave de ese computador: si se restaura el respaldo en otro equipo, hay que volver a subir la firma.
 - El SII ya no pide el reporte de consumo de folios (RCOF) de las boletas, así que Neji no lo envía.
-- A quien recibe una factura hay que hacerle llegar el XML (intercambio de DTE). Neji no lo manda
-  por correo: el XML se descarga en Configuración → Boleta electrónica → Documentos emitidos.
+- **Las facturas le llegan al cliente por correo** (intercambio de DTE, lo pide el SII): cuando el SII
+  acepta una factura o la nota de crédito de una factura, Neji le manda el XML al correo que tiene el
+  cliente en **Clientes**. Se configura la cuenta en **Configuración → Boleta electrónica → Correo para
+  mandar las facturas** (con Gmail: `smtp.gmail.com`, puerto 587 y una «contraseña de aplicación»).
+  Si el cliente no tiene correo, la factura queda marcada y se manda después con **Enviar XML**.
 - Neji no emite todavía guías de despacho (52) ni notas de débito (56).
 - Los documentos se validaron con los esquemas oficiales del SII y las firmas con xmlsec y con DTE
   reales aceptados por el SII. Pero desde el desarrollo no se pudo conectar con los servidores del
@@ -557,7 +560,7 @@ Para agregar una función nueva:
 
 - [x] **Boleta y factura electrónica SII** con la firma del dueño (certificación propia; ver
   [Boleta y factura electrónica](#boleta-y-factura-electrónica-sii-opcional)).
-- [ ] Guía de despacho, nota de débito y envío del XML de la factura al cliente por correo.
+- [ ] Guía de despacho y nota de débito electrónicas.
 - [ ] Integración con máquinas de tarjeta (Transbank, Getnet, Mercado Pago, SumUp).
 - [ ] Lotes con fecha de vencimiento propia (hoy hay una fecha por producto).
 - [ ] Kits, paquetes y promociones (2x1, 3x2).

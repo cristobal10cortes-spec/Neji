@@ -1162,7 +1162,7 @@ export async function montar(contenedor, parametros = {}) {
           type: 'button', class: clave === documento ? 'activo' : null, title: 'Boleta o factura (F7)', onclick: () => elegirDocumento(clave),
         }, nombre))),
         documento === 'factura'
-          ? (c ? h('p.ayuda', `Factura a ${c.nombre}. Debe tener RUT, giro, dirección y comuna (se editan en Clientes).`)
+          ? (c ? h('p.ayuda', `Factura a ${c.nombre}. Debe tener RUT, giro, dirección y comuna, y su correo para mandarle la factura (se editan en Clientes).`)
             : h('div.fila', h('span.rojo', 'Para la factura elige el cliente.'),
               h('button.btn.chico', { type: 'button', onclick: () => asignarClienteEnCobro() }, 'Elegir cliente')))
           : null);

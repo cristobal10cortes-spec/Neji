@@ -13,7 +13,7 @@ export function formCliente(cliente = null) {
     { nombre: 'nombre', etiqueta: 'Nombre o razón social', valor: cliente?.nombre, requerido: true, autofocus: true },
     { nombre: 'rut', etiqueta: 'RUT', valor: cliente?.rut, placeholder: '12.345.678-5' },
     { nombre: 'telefono', etiqueta: 'Teléfono', valor: cliente?.telefono },
-    { nombre: 'email', etiqueta: 'Correo', tipo: 'email', valor: cliente?.email },
+    { nombre: 'email', etiqueta: 'Correo', tipo: 'email', valor: cliente?.email, ayuda: estado.config.sii_activo === '1' ? 'Adonde le llega la factura electrónica (su correo de intercambio en el SII).' : null },
     { nombre: 'direccion', etiqueta: 'Dirección', valor: cliente?.direccion },
     { nombre: 'comuna', etiqueta: 'Comuna', valor: cliente?.comuna },
     { nombre: 'ciudad', etiqueta: 'Ciudad', valor: cliente?.ciudad },

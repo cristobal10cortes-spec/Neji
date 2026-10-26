@@ -366,6 +366,11 @@ CREATE TABLE IF NOT EXISTS sii_documentos (
                    CHECK (estado IN ('pendiente', 'enviado', 'aceptado', 'reparo', 'rechazado')),
     envio_id       INTEGER REFERENCES sii_envios(id),
     glosa          TEXT,
+    -- Intercambio: la factura (y su nota de crédito) se manda por correo al cliente cuando el SII la acepta.
+    correo_receptor TEXT,
+    correo_estado  TEXT,              -- NULL (no corresponde), pendiente, enviado, sin_correo
+    correo_glosa   TEXT,
+    correo_enviado TEXT,
     UNIQUE (ambiente, tipo, folio)
 );
 CREATE INDEX IF NOT EXISTS idx_sii_documentos_venta ON sii_documentos(venta_id);

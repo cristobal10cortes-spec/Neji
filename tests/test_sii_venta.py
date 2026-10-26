@@ -272,3 +272,142 @@ def test_autoprueba_del_programa():
 
     r = probar()
     assert r["firmas_verificadas"] == 1 and r["timbre_80mm"] > 0 and r["timbre_58mm"] > 0
+
+
+class CorreoFalso:
+    def __init__(self):
+        self.enviados = []
+
+    def __call__(self, mensaje):
+        self.enviados.append(mensaje)
+
+
+def _consultar_ya(app):
+    from neji.db import conectar
+
+    con = conectar(app.config["DATABASE"])
+    con.execute("UPDATE sii_envios SET proximo = NULL")
+    con.commit()
+    con.close()
+
+
+def test_factura_aceptada_va_al_cliente_por_correo(app, api, productos, turno, sii):
+    estado = api.put("/api/sii", {"correo_servidor": "smtp.ejemplo.cl", "correo_puerto": "587",
+                                  "correo_usuario": "farmacia@ejemplo.cl", "correo_clave": "secreta",
+                                  "correo_remitente": "farmacia@ejemplo.cl"})
+    assert estado["correo"] == {"configurado": True, "clave_guardada": True}
+    assert "correo_clave" not in estado["config"]
+    con_correo = api.post("/api/clientes", {"nombre": "Clínica Peña Ltda.", "rut": "96.790.240-3", "giro": "Salud",
+                                            "direccion": "Av. del Mar 500", "comuna": "La Serena",
+                                            "email": "dte@clinica.cl"}, esperado=201)
+    sin_correo = api.post("/api/clientes", {"nombre": "Otra", "rut": "76.086.428-5", "giro": "Comercio",
+                                            "direccion": "Calle 1", "comuna": "Coquimbo"}, esperado=201)
+    factura = vender(api, productos, turno, documento="factura", cliente_id=con_correo["id"])
+    assert factura["documentos"][0]["correo"]["estado"] == "pendiente"
+    otra = vender(api, productos, turno, documento="factura", cliente_id=sin_correo["id"])
+    assert otra["documentos"][0]["correo"]["estado"] == "sin_correo"
+    assert vender(api, productos, turno)["documentos"][0]["correo"] is None      # la boleta no va por correo
+
+    correo = CorreoFalso()
+    servicio.ciclo(app.config["DATABASE"], app.secret_key, conexion=SIIFalso(), correo=correo)
+    assert correo.enviados == []           # todavía no la acepta el SII
+    _consultar_ya(app)
+    r = servicio.ciclo(app.config["DATABASE"], app.secret_key, conexion=SIIFalso(), correo=correo)
+    assert r["correos"] == 1 and len(correo.enviados) == 1
+    mensaje = correo.enviados[0]
+    assert mensaje["To"] == "dte@clinica.cl" and "farmacia@ejemplo.cl" in mensaje["From"]
+    assert mensaje["Subject"] == f"DTE {EMISOR['rut']} - Factura electrónica N° 1"
+    adjunto = next(mensaje.iter_attachments())
+    assert adjunto.get_filename() == f"DTE_{EMISOR['rut']}_T33_F1.xml"
+    sobre = validar_esquema(adjunto.get_content(), "EnvioDTE")
+    assert sobre.findtext(f".//{SII}Caratula/{SII}RutReceptor") == "96790240-3"      # dirigido al cliente
+    assert verificar_xml(sobre) == 2
+    assert api.get(f"/api/ventas/{factura['id']}")["documentos"][0]["correo"]["estado"] == "enviado"
+    assert servicio.ciclo(app.config["DATABASE"], app.secret_key, conexion=SIIFalso(), correo=correo)["correos"] == 0
+
+    # La factura del cliente sin correo se manda cuando se indica uno.
+    doc = next(d for d in api.get("/api/sii/documentos") if d["venta_id"] == otra["id"])
+    assert doc["correo_estado"] == "sin_correo" and doc["correo_texto"] == "Cliente sin correo"
+    api.post(f"/api/sii/documentos/{doc['id']}/correo", {"correo": "no es un correo"}, esperado=400)
+    api.post(f"/api/sii/documentos/{doc['id']}/correo", {"correo": "compras@otra.cl"})
+    servicio.ciclo(app.config["DATABASE"], app.secret_key, conexion=SIIFalso(), correo=correo)
+    assert correo.enviados[-1]["To"] == "compras@otra.cl"
+
+    # La nota de crédito de una factura también va al cliente.
+    api.post(f"/api/ventas/{factura['id']}/devolucion", {"caja_id": 1, "todo": True}, esperado=201)
+    servicio.ciclo(app.config["DATABASE"], app.secret_key, conexion=SIIFalso(), correo=correo)
+    _consultar_ya(app)
+    servicio.ciclo(app.config["DATABASE"], app.secret_key, conexion=SIIFalso(), correo=correo)
+    assert correo.enviados[-1]["Subject"].endswith("Nota de crédito electrónica N° 1")
+    assert correo.enviados[-1]["To"] == "dte@clinica.cl"
+
+
+def test_sin_cuenta_de_correo_las_facturas_esperan(app, api, productos, turno, sii):
+    cliente = api.post("/api/clientes", {"nombre": "Clínica", "rut": "96.790.240-3", "giro": "Salud",
+                                         "direccion": "Av. del Mar 500", "comuna": "La Serena",
+                                         "email": "dte@clinica.cl"}, esperado=201)
+    vender(api, productos, turno, documento="factura", cliente_id=cliente["id"])
+    correo = CorreoFalso()
+    servicio.ciclo(app.config["DATABASE"], app.secret_key, conexion=SIIFalso(), correo=correo)
+    _consultar_ya(app)
+    servicio.ciclo(app.config["DATABASE"], app.secret_key, conexion=SIIFalso(), correo=correo)
+    assert correo.enviados == []
+    assert api.get("/api/sii")["envios"]["correos_pendientes"] == 1
+    r = api.post("/api/sii/correo/probar", {}, esperado=400)
+    assert "servidor" in r["error"]
+
+
+def test_conversacion_con_el_servidor_de_correo(app, api, sii, monkeypatch):
+    """STARTTLS en el 587, SSL en el 465, la contraseña guardada cifrada y los errores en palabras simples."""
+    import smtplib
+
+    llamadas = []
+
+    class SMTPFalso:
+        def __init__(self, servidor, puerto, timeout=None, context=None):
+            llamadas.append(("conectar", type(self).__name__, servidor, puerto))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def ehlo(self):
+            pass
+
+        def has_extn(self, nombre):
+            return nombre == "starttls"
+
+        def starttls(self, context=None):
+            llamadas.append(("starttls",))
+
+        def login(self, usuario, clave):
+            llamadas.append(("login", usuario, clave))
+            if clave != "secreta":
+                raise smtplib.SMTPAuthenticationError(535, b"no")
+
+        def send_message(self, mensaje):
+            llamadas.append(("enviar", mensaje["To"], mensaje["Subject"]))
+
+    class SSLFalso(SMTPFalso):
+        pass
+
+    monkeypatch.setattr(smtplib, "SMTP", SMTPFalso)
+    monkeypatch.setattr(smtplib, "SMTP_SSL", SSLFalso)
+    api.put("/api/sii", {"correo_servidor": "smtp.gmail.com", "correo_puerto": "587",
+                         "correo_usuario": "farmacia@gmail.com", "correo_clave": "secreta"})
+    r = api.post("/api/sii/correo/probar", {})
+    assert r["mensaje"] == "Correo de prueba enviado a farmacia@gmail.com."
+    assert llamadas == [("conectar", "SMTPFalso", "smtp.gmail.com", 587), ("starttls",),
+                        ("login", "farmacia@gmail.com", "secreta"),
+                        ("enviar", "farmacia@gmail.com", "Prueba de correo de Neji POS")]
+    llamadas.clear()
+    api.put("/api/sii", {"correo_puerto": "465", "correo_clave": ""})     # la contraseña vacía no se borra
+    api.post("/api/sii/correo/probar", {"para": "otro@ejemplo.cl"})
+    assert llamadas[0] == ("conectar", "SSLFalso", "smtp.gmail.com", 465) and ("starttls",) not in llamadas
+    api.put("/api/sii", {"correo_clave": "mala"})
+    r = api.post("/api/sii/correo/probar", {}, esperado=400)
+    assert "contraseña de aplicación" in r["error"]
+    r = api.put("/api/sii", {"correo_puerto": "abc"}, esperado=400)
+    assert "puerto" in r["error"]
