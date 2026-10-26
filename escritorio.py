@@ -683,9 +683,11 @@ def prueba_de_humo(salida=None):
 VERIFICAR_VENTANA = """
 (() => {
   const listo = Boolean(document.querySelector('#app form, #app nav'));
+  // El puente con las impresoras y lectores (pywebview lo arma con new Function: la CSP debe permitirlo).
+  const puente = Boolean(window.pywebview && window.pywebview.api && typeof window.pywebview.api.impresoras === 'function');
   const anterior = localStorage.getItem('neji.prueba');
   localStorage.setItem('neji.prueba', 'guardado');
-  return JSON.stringify({ listo, anterior, titulo: document.title, modulos: Boolean(window.fetch) });
+  return JSON.stringify({ listo, puente, anterior, titulo: document.title, modulos: Boolean(window.fetch) });
 })()
 """
 
@@ -718,11 +720,11 @@ def prueba_ventana(carpeta, salida=None):
                 limite = time.monotonic() + 30
                 while True:
                     datos_js = json.loads(ventana.evaluate_js(VERIFICAR_VENTANA))
-                    if datos_js["listo"] or time.monotonic() > limite:
+                    if (datos_js["listo"] and datos_js["puente"]) or time.monotonic() > limite:
                         break
                     time.sleep(0.5)
                 resultado.update(datos_js)
-                resultado["ok"] = datos_js["listo"]
+                resultado["ok"] = datos_js["listo"] and datos_js["puente"]
             except Exception as e:  # noqa: BLE001
                 resultado["error"] = f"{type(e).__name__}: {e}"
             finally:
