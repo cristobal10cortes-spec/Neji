@@ -470,3 +470,9 @@ p.version, span.version { color: var(--suave, #64748b); font-size: .82rem; margi
   .atajos .btn kbd, .teclas .btn kbd { display: none; }
   .ocultar-movil { display: none; }
 }
+
+/* Certificación SII */
+ol.pasos { margin: .4rem 0 0 1.3rem; padding: 0; }
+ol.pasos li { margin: .35rem 0; }
+.panel h4 { margin: 1rem 0 .35rem; font-size: .95rem; }
+.panel > textarea { width: 100%; font-family: ui-monospace, Consolas, monospace; font-size: .85rem; }

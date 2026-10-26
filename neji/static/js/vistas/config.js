@@ -1003,7 +1003,7 @@ async function vistaSii(zona) {
     };
     return h('div.panel',
       h('h3', `Folios (CAF) · ${datos.ambientes[datos.config.ambiente]}`),
-      h('p.ayuda', 'Los folios se piden en sii.cl (Servicios online → Factura electrónica → Timbraje electrónico): descarga el archivo XML y cárgalo aquí. Uno por tipo de documento: boleta (39), boleta exenta (41), factura (33), factura exenta (34) y nota de crédito (61). Los de certificación no sirven en producción.'),
+      h('p.ayuda', 'Los folios se piden en sii.cl (Servicios online → Factura electrónica → Timbraje electrónico): descarga el archivo XML y cárgalo aquí. Uno por tipo de documento: boleta (39), boleta exenta (41), factura (33), factura exenta (34), nota de débito (56) y nota de crédito (61). Los de certificación no sirven en producción.'),
       tabla([
         { titulo: 'Documento', valor: (f) => `${f.nombre} (${f.tipo})` },
         { titulo: 'Folios', valor: (f) => `${f.desde} al ${f.hasta}`, clase: 'num' },
@@ -1095,11 +1095,209 @@ async function vistaSii(zona) {
   pintar();
 }
 
+// --- Certificación ante el SII --------------------------------------------------------------------------------
+
+const ESTADO_ENVIO = { por_enviar: ['Por enviar', ''], enviado: ['Enviado, esperando respuesta', ''], procesado: ['Procesado por el SII', 'ok'], rechazado: ['Rechazado', 'mal'] };
+
+function estadoEnvio(etapa) {
+  const e = etapa?.envio;
+  if (!e) return h('span.suave', 'Todavía no se ha hecho.');
+  const [texto, clase] = ESTADO_ENVIO[e.estado] || [e.estado, ''];
+  return h('div',
+    h('div.fila', { style: { gap: '.6rem', flexWrap: 'wrap' } },
+      h(`span.etiqueta${clase ? '.' + clase : ''}`, texto),
+      e.trackid ? h('b', `N° de envío (TrackID): ${e.trackid}`) : null,
+      h('span.suave', fecha(e.creado)),
+      h('button.btn.chico', { type: 'button', onclick: () => descargar(`/api/sii/envios/${e.id}/xml`) }, 'XML enviado')),
+    e.glosa ? h('div', { class: e.estado === 'rechazado' ? 'rojo' : 'suave', style: { marginTop: '.3rem' } }, e.glosa) : null);
+}
+
+async function vistaCertificacion(zona) {
+  let datos = await api.get('/api/sii/certificacion');
+  const etapa = (k) => datos.etapas.find((e) => e.etapa === k);
+
+  const ejecutar = async (boton, accion, ok) => {
+    boton.disabled = true;
+    try {
+      const r = await accion();
+      if (r?.etapas) datos = r;
+      if (ok) aviso(typeof ok === 'function' ? ok(r) : ok, 'ok', 7000);
+      pintar();
+    } catch (e) {
+      avisoError(e);
+      boton.disabled = false;
+    }
+  };
+
+  function documentosDe(...claves) {
+    const docs = claves.flatMap((k) => etapa(k)?.documentos || []);
+    if (!docs.length) return null;
+    return tabla([
+      { titulo: 'Caso', valor: (d) => d.caso || '' },
+      { titulo: 'Documento', valor: (d) => `${d.nombre} N° ${d.folio}` },
+      { titulo: 'Total', valor: (d) => pesos(d.total), clase: 'num' },
+      { titulo: 'Estado', valor: (d) => h(`span.etiqueta${CLASE_ESTADO_SII[d.estado] ? '.' + CLASE_ESTADO_SII[d.estado] : ''}`, { title: d.glosa || '' }, d.estado_texto) },
+      { titulo: '', valor: (d) => h('button.btn.chico', { type: 'button', onclick: () => descargar(`/api/sii/documentos/${d.id}/xml`) }, 'XML') },
+    ], docs);
+  }
+
+  function panelGuia() {
+    const produccion = datos.ambiente !== 'certificacion';
+    return h('div.panel',
+      h('h3', 'Certificación ante el SII'),
+      h('p', 'Para que el SII autorice a tu empresa a emitir con Neji, hay que pasar su proceso de certificación. Neji hace cada paso: emite y envía los documentos de prueba, arma los libros, las respuestas de intercambio y las muestras impresas. Tú solo copias lo que te da el SII y, al final, declaras cada paso en sii.cl.'),
+      produccion ? h('div.error-modal', 'La certificación se hace en el ambiente de certificación: cámbialo en la pestaña «Boleta electrónica» (Ambiente y resolución).') : null,
+      h('ol.pasos',
+        h('li', 'En sii.cl → Factura electrónica → Sistema de certificación: postula con «software de mercado o desarrollo propio».'),
+        h('li', 'En la pestaña «Boleta electrónica», con el ambiente en Certificación: los datos de la empresa (tal como salen en sii.cl → «Datos para la construcción de DTE»), la fecha de resolución que te dio el SII al postular (número 0), tu firma electrónica y los folios de certificación de factura (33), nota de crédito (61), nota de débito (56) y, si postulas a ellas, factura exenta (34) y boleta (39).'),
+        h('li', 'Sigue aquí los pasos de abajo. Después de cada envío aceptado, ve a sii.cl → «Revisar avance» y declara el número de envío (TrackID) que aparece aquí.'),
+        h('li', 'Al final, en sii.cl, firma la declaración de cumplimiento. Con la resolución que te da el SII, pasa la pestaña «Boleta electrónica» a Producción, con tus folios de producción.')));
+  }
+
+  function panelReceptor() {
+    const r = datos.receptor;
+    const c = Object.fromEntries(['rut', 'razon_social', 'giro', 'direccion', 'comuna', 'ciudad'].map((k) => [k, h('input', { value: r[k] || '' })]));
+    const guardar = (e) => {
+      e.preventDefault();
+      ejecutar(e.submitter || e.target.querySelector('button'), () => api.put('/api/sii/certificacion/receptor', Object.fromEntries(Object.entries(c).map(([k, el]) => [k, el.value]))), 'Receptor guardado.');
+    };
+    return h('form.panel', { onsubmit: guardar },
+      h('h3', 'A nombre de quién van los documentos de prueba'),
+      h('p.ayuda', 'Por omisión, el propio SII (60.803.000-K), como se usa en la certificación. Puedes poner otra empresa con sus datos reales.'),
+      h('div.rejilla', campo('RUT', c.rut), campo('Razón social', c.razon_social), campo('Giro', c.giro),
+        campo('Dirección', c.direccion), campo('Comuna', c.comuna), campo('Ciudad', c.ciudad)),
+      h('div.fila.fin', { style: { marginTop: '.6rem' } }, h('button.btn', { type: 'submit' }, 'Guardar receptor')));
+  }
+
+  function panelSet() {
+    const texto = h('textarea', { rows: 8, placeholder: 'SET BASICO - NUMERO DE ATENCION: ...\n\nCASO ...-1\n==========\nDOCUMENTO\tFACTURA ELECTRONICA\n...' });
+    const boton = h('button.btn.primario', { type: 'button', onclick: () => {
+      if (!texto.value.trim()) return aviso('Pega el texto del set de pruebas.', 'error');
+      return ejecutar(boton, () => api.post('/api/sii/certificacion/set', { texto: texto.value }),
+        (r) => `Listo: ${r.resultado.map((x) => `${x.nombre} (${x.documentos} documentos)`).join(' y ')}. Se están enviando al SII.`);
+    } }, 'Emitir y enviar al SII');
+    return h('div.panel',
+      h('h3', '1. Set de pruebas'),
+      h('p.ayuda', 'En sii.cl, en el avance de tu postulación, descarga el set de pruebas (un texto con los casos: SET BASICO, y si corresponde SET FACTURA EXENTA, SET LIBRO DE VENTAS y SET LIBRO DE COMPRAS). Cópialo entero y pégalo aquí: Neji emite cada caso con los folios de certificación y los envía al SII (un envío por set).'),
+      texto,
+      h('div.fila.fin', { style: { marginTop: '.6rem' } }, boton),
+      h('h4', 'Set básico'), estadoEnvio(etapa('basico')),
+      etapa('exenta')?.envio ? h('div', h('h4', 'Set factura exenta'), estadoEnvio(etapa('exenta'))) : null,
+      documentosDe('basico', 'exenta'));
+  }
+
+  function panelLibros() {
+    const periodo = h('input', { type: 'month', value: datos.periodo });
+    const tipoEnvio = h('select', ['TOTAL', 'AJUSTE'].map((t) => h('option', { value: t }, t === 'TOTAL' ? 'Total' : 'Ajuste (si ya mandaste uno de ese período)')));
+    const boton = h('button.btn.primario', { type: 'button', disabled: !etapa('basico')?.envio, onclick: () => ejecutar(boton,
+      () => api.post('/api/sii/certificacion/libros', { periodo: periodo.value, tipo_envio: tipoEnvio.value }),
+      (r) => `Libros listos (${r.resultado.map((x) => `${x.documentos} documentos`).join(' y ')}). Se están enviando al SII.`) }, 'Enviar libros');
+    return h('div.panel',
+      h('h3', '2. Libros de ventas y de compras'),
+      h('p.ayuda', 'El libro de ventas lleva los documentos del set básico; el de compras, las facturas recibidas que trae el texto del set. Se envían con el período de los documentos del set. Si el SII responde que el período ya tiene un libro, vuelve a enviarlos como «Ajuste» (o con otro período).'),
+      h('div.rejilla', campo('Período', periodo), campo('Tipo de envío', tipoEnvio)),
+      h('div.fila.fin', { style: { marginTop: '.6rem' } }, boton),
+      h('h4', 'Libro de ventas'), estadoEnvio(etapa('libro_ventas')),
+      h('h4', 'Libro de compras'), estadoEnvio(etapa('libro_compras')),
+      etapa('libro_compras_exentos')?.envio ? h('div', h('h4', 'Libro de compras (exentos)'), estadoEnvio(etapa('libro_compras_exentos'))) : null);
+  }
+
+  function panelSimulacion() {
+    const boton = h('button.btn.primario', { type: 'button', onclick: () => ejecutar(boton, () => api.post('/api/sii/certificacion/simulacion'),
+      (r) => `Simulación emitida (${r.resultado.documentos} documentos). Se está enviando al SII.`) }, 'Emitir y enviar simulación');
+    return h('div.panel',
+      h('h3', '3. Simulación'),
+      h('p.ayuda', 'Documentos como los de tu operación diaria: Neji emite seis facturas con productos de tu inventario (precios con IVA, como al vender), tres notas de crédito (devolución, anulación y corrección de texto) y una nota de débito, y si tienes folios de factura exenta, una de ellas. Todo en un solo envío.'),
+      h('div.fila.fin', boton),
+      estadoEnvio(etapa('simulacion')),
+      documentosDe('simulacion'));
+  }
+
+  function panelIntercambio() {
+    const archivo = h('input', { type: 'file', accept: '.xml' });
+    const resultado = h('div');
+    const boton = h('button.btn.primario', { type: 'button', onclick: async () => {
+      if (!archivo.files?.[0]) return aviso('Elige el XML que te mandó el SII.', 'error');
+      const d = new FormData();
+      d.append('archivo', archivo.files[0]);
+      boton.disabled = true;
+      try {
+        const r = await api.subir('/api/sii/certificacion/intercambio', d);
+        vaciar(resultado, h('p', `Respuestas listas para ${r.documentos.length} documentos de ${r.emisor}.`,
+          r.firma_valida ? '' : ' (Ojo: la firma del archivo recibido no se pudo verificar.)'));
+        aviso('Respuestas de intercambio listas: descárgalas.', 'ok');
+        descargar('/api/sii/certificacion/intercambio');
+      } catch (e) {
+        avisoError(e);
+      }
+      boton.disabled = false;
+    } }, 'Generar respuestas');
+    return h('div.panel',
+      h('h3', '4. Intercambio de información'),
+      h('p.ayuda', 'El SII te manda un correo (al correo de intercambio que registraste) con un archivo XML de facturas a nombre de tu empresa. Súbelo aquí: Neji arma y firma las tres respuestas (acuse de recibo del envío, recibo de mercaderías y aceptación comercial) en un ZIP. Después, en sii.cl → avance de la certificación → Intercambio, sube los tres archivos.'),
+      h('div.fila', archivo, boton),
+      resultado);
+  }
+
+  function panelMuestras() {
+    return h('div.panel',
+      h('h3', '5. Muestras impresas'),
+      h('p.ayuda', 'Un PDF por documento del set de pruebas, uno de cada tipo de la simulación y las boletas, con su timbre; las facturas van además con su copia cedible. Envíalos a SII_dte_impresos@sii.cl (un documento por archivo, correos de no más de 3 MB), indicando en el asunto el RUT y la razón social de la empresa.'),
+      h('div.fila.fin', h('button.btn.primario', { type: 'button', disabled: !etapa('basico')?.envio && !etapa('boletas')?.envio, onclick: () => descargar('/api/sii/certificacion/muestras') }, 'Descargar muestras (ZIP)')));
+  }
+
+  function panelBoletas() {
+    const texto = h('textarea', { rows: 6, placeholder: 'CASO-1\nItem\tCantidad\tPrecio Unitario\n...' });
+    const boton = h('button.btn.primario', { type: 'button', onclick: () => {
+      if (!texto.value.trim()) return aviso('Pega el texto del set de pruebas de boletas.', 'error');
+      return ejecutar(boton, () => api.post('/api/sii/certificacion/boletas', { texto: texto.value }),
+        (r) => `Listo: ${r.resultado.documentos} boletas y su consumo de folios. Se están enviando al SII.`);
+    } }, 'Emitir y enviar boletas');
+    return h('div.panel',
+      h('h3', 'Boleta electrónica'),
+      h('p.ayuda', 'La boleta tiene su propia certificación. Descarga en sii.cl su set de pruebas (casos CASO-1, CASO-2…) y pégalo aquí: Neji emite las boletas con los folios de certificación (39, y 41 si hay casos exentos), las envía y manda también el reporte de consumo de folios (RCOF) que pide esta etapa.'),
+      texto,
+      h('div.fila.fin', { style: { marginTop: '.6rem' } }, boton),
+      h('h4', 'Boletas'), estadoEnvio(etapa('boletas')),
+      h('h4', 'Consumo de folios'), estadoEnvio(etapa('rcof')),
+      documentosDe('boletas'));
+  }
+
+  function pintar() {
+    const actualizar = h('button.btn', { type: 'button', onclick: async () => {
+      actualizar.disabled = true;
+      try {
+        await api.post('/api/sii/enviar');
+      } catch (e) {
+        avisoError(e);
+      }
+      try {
+        datos = await api.get('/api/sii/certificacion');
+      } catch (e) {
+        avisoError(e);
+      }
+      pintar();
+    } }, 'Enviar y revisar ahora');
+    vaciar(zona,
+      panelGuia(),
+      h('div.fila.fin', { style: { margin: '-.4rem 0 .8rem' } }, h('span.suave', 'Neji envía y consulta solo, cada minuto.'), actualizar),
+      panelReceptor(),
+      panelSet(),
+      panelLibros(),
+      panelSimulacion(),
+      panelIntercambio(),
+      panelMuestras(),
+      panelBoletas());
+  }
+  pintar();
+}
+
 export async function montar(contenedor, parametros = {}) {
   const admin = esAdmin();
   const opciones = admin
     ? [['negocio', 'Negocio'], ['ticket', 'Ticket'], ['opciones', 'Opciones'], ['usuarios', 'Usuarios'], ['cajas', 'Cajas'], ['terminal', 'Esta terminal'],
-      ['impresora', 'Impresora de tickets'], ['respaldos', 'Respaldos'], ['importar', 'Importar inventario'], ['sii', 'Boleta electrónica']]
+      ['impresora', 'Impresora de tickets'], ['respaldos', 'Respaldos'], ['importar', 'Importar inventario'], ['sii', 'Boleta electrónica'],
+      ['certificacion', 'Certificación SII']]
     : [['terminal', 'Esta terminal'], ['impresora', 'Impresora de tickets']];
   let actual = opciones.some(([k]) => k === parametros.pestana) ? parametros.pestana : opciones[0][0];
   const barra = h('div');
@@ -1121,6 +1319,7 @@ export async function montar(contenedor, parametros = {}) {
       else if (p === 'importar') vaciar(zona, vistaImportar());
       else if (p === 'impresora') await vistaImpresora(zona);
       else if (p === 'sii') await vistaSii(zona);
+      else if (p === 'certificacion') await vistaCertificacion(zona);
       else vaciar(zona, vistaTerminal());
     } catch (e) {
       avisoError(e);

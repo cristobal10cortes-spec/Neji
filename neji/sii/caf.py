@@ -14,6 +14,8 @@ def leer_xml(datos):
 
     if isinstance(datos, str):
         datos = datos.encode("utf-8")
+    if b"<!DOCTYPE" in bytes(datos).upper() or b"<!ENTITY" in bytes(datos).upper():
+        raise ErrorSII("El archivo no es un CAF del SII (trae declaraciones DOCTYPE o ENTITY).")
     parser = etree.XMLParser(remove_blank_text=True, resolve_entities=False, no_network=True)
     try:
         return etree.fromstring(datos, parser)

@@ -1,7 +1,6 @@
 """Neji POS: punto de venta para negocios en Chile."""
 
 import os
-import secrets
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -9,18 +8,11 @@ from pathlib import Path
 from flask import Flask, jsonify, send_from_directory
 from werkzeug.exceptions import HTTPException
 
-from . import db, respaldos
+from . import db, proteccion, respaldos, seguridad
 from .validar import ErrorNegocio
 
 RAIZ = Path(__file__).resolve().parent.parent
 REVISAR_RESPALDO_CADA = 3600  # segundos
-
-
-def _clave_secreta(carpeta):
-    ruta = Path(carpeta) / ".clave_secreta"
-    if not ruta.exists():
-        ruta.write_text(secrets.token_hex(32), encoding="utf-8")
-    return ruta.read_text(encoding="utf-8").strip()
 
 
 def _activado(variable):
@@ -54,11 +46,12 @@ def create_app(config=None):
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
         app.config["SESSION_COOKIE_SECURE"] = True
     os.makedirs(app.config["DATOS"], exist_ok=True)
-    app.secret_key = app.config.get("SECRET_KEY") or _clave_secreta(app.config["DATOS"])
+    app.secret_key = app.config.get("SECRET_KEY") or proteccion.clave_secreta(app.config["DATOS"], app.logger)
     app.json.ensure_ascii = False
     app.json.sort_keys = False
 
     db.init_app(app)
+    seguridad.init_app(app)
 
     from .api import bp as api_bp
     app.register_blueprint(api_bp)

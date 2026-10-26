@@ -159,7 +159,8 @@ def test_boleta_afecta_con_exento_y_descuento(firma):
                          linea("Huevos", 3, 250, exento=True)],
                  descuento_afecto=182)
     r = dte.construir(doc, caf, firma)
-    assert r["totales"] == {"neto": 2521, "iva": 479, "exento": 750, "total": 3750, "afecto": 3000}
+    assert r["totales"] == {"neto": 2521, "iva": 479, "exento": 750, "total": 3750, "afecto": 3000,
+                           "descuento_afecto": 182}
     raiz = etree.fromstring(r["xml"])
     assert raiz.nsmap == {None: "http://www.sii.cl/SiiDte", "xsi": "http://www.w3.org/2001/XMLSchema-instance"}
     assert verificar_xml(raiz) == 1

@@ -3,6 +3,7 @@
 El administrador puede todo. Cada cajero tiene sus propios permisos (Configuración → Usuarios).
 """
 
+import hashlib
 import json
 from functools import wraps
 
@@ -55,14 +56,21 @@ def permisos_de(usuario):
     return {clave: bool(guardados.get(clave, defecto)) for clave, defecto in PERMISOS_POR_DEFECTO.items()}
 
 
+def sello(password_hash):
+    """Marca de la contraseña con la que se inició la sesión: si después se cambia, la sesión deja de valer."""
+    return hashlib.sha256(f"neji-sesion:{password_hash}".encode()).hexdigest()[:24]
+
+
 def usuario_actual():
     if "usuario" not in g:
         g.usuario = None
         usuario_id = session.get("usuario_id")
         if usuario_id:
             usuario = fila(get_db().execute(
-                "SELECT id, usuario, nombre, nombre_ticket, rol, permisos FROM usuarios "
+                "SELECT id, usuario, nombre, nombre_ticket, rol, permisos, password_hash FROM usuarios "
                 "WHERE id = ? AND activo = 1", (usuario_id,)).fetchone())
+            if usuario is not None and session.get("sello") != sello(usuario.pop("password_hash")):
+                usuario = None          # cambió la contraseña (o es una sesión de antes): hay que volver a entrar
             if usuario is not None:
                 usuario["permisos"] = permisos_de(usuario)
             g.usuario = usuario

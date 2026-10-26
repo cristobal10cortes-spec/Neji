@@ -37,11 +37,21 @@ ESTADOS_SUBIDA = {
     "7": "El sobre no cumple el esquema del SII.", "8": "La firma del sobre no es válida.",
     "9": "El sistema del SII está bloqueado. Se reintentará.",
 }
-# Estados del envío (QueryEstUp / API de boletas)
-EN_PROCESO = {"REC", "SOK", "FOK", "PRD", "CRT", "PDR", "-11", ""}
+# Estados del envío (QueryEstUp / API de boletas). Solo estos son definitivos: cualquier otro (REC, SOK, FOK, PRD,
+# CRT, PDR, LSO, los negativos de error de la consulta...) se vuelve a consultar más tarde.
+ACEPTADO = {"EPR": "envío procesado", "RPR": "aceptado con reparos", "RLV": "aceptado con reparos leves",
+            "LOK": "libro aceptado (cuadrado)"}
 RECHAZADO = {"RSC": "rechazado por error de esquema", "RFR": "rechazado por error en la firma",
-             "RCT": "rechazado por error en la carátula", "RCH": "rechazado", "RPT": "rechazado por esquema",
-             "VOF": "rechazado: el archivo no es válido"}
+             "RCT": "rechazado por error en la carátula", "RCH": "rechazado", "RPT": "rechazado: el envío está repetido",
+             "VOF": "rechazado: el archivo no es válido",
+             "LNC": "rechazado: el período ya tiene un libro (envíalo como AJUSTE o con otro período)",
+             "LRH": "rechazado: el libro tiene errores", "LRF": "rechazado por error en la firma del libro",
+             "LRS": "rechazado por error de esquema del libro", "LRC": "rechazado por error en la carátula del libro"}
+ARCHIVOS = {"documentos": "EnvioDTE.xml", "libro": "LibroCV.xml", "rcof": "ConsumoFolios.xml"}
+
+
+def es_final(estado):
+    return estado in ACEPTADO or estado in RECHAZADO
 
 
 def transporte_http(metodo, url, cabeceras, cuerpo=None, espera=40):
@@ -143,14 +153,15 @@ class ConexionSII:
 
     # --- Envío ------------------------------------------------------------------------------------------
 
-    def enviar(self, sobre, boleta):
-        """Sube el sobre firmado. Devuelve el número de atención (trackid)."""
-        rest = self._usa_rest(boleta)
+    def enviar(self, sobre, boleta, clase="documentos"):
+        """Sube el sobre firmado (o el libro, o el consumo de folios). Devuelve el número de atención (trackid)."""
+        rest = self._usa_rest(boleta) and clase == "documentos"
         token = self.token(rest)
         envia = limpiar_rut(self.firma.rut)
         campos = {"rutSender": envia[:-2], "dvSender": envia[-1], "rutCompany": self.rut_emisor[:-2],
                   "dvCompany": self.rut_emisor[-1]}
-        cuerpo, tipo = _multipart(campos, "EnvioBOLETA.xml" if boleta else "EnvioDTE.xml", sobre)
+        archivo = "EnvioBOLETA.xml" if boleta and clase == "documentos" else ARCHIVOS.get(clase, "EnvioDTE.xml")
+        cuerpo, tipo = _multipart(campos, archivo, sobre)
         cab = {"Content-Type": tipo, "Cookie": f"TOKEN={token}", "User-Agent": AGENTE,
                "Accept": "application/json" if rest else "*/*"}
         if rest:
@@ -180,9 +191,9 @@ class ConexionSII:
 
     # --- Estado -----------------------------------------------------------------------------------------
 
-    def estado(self, trackid, boleta):
+    def estado(self, trackid, boleta, clase="documentos"):
         """{estado, glosa, final, aceptados, rechazados, reparos, detalle: [{tipo, folio, estado, glosa}]}"""
-        if self._usa_rest(boleta):
+        if self._usa_rest(boleta) and clase == "documentos":
             return self._estado_rest(trackid)
         token = self.token(False)
         rut = self.rut_emisor
@@ -200,7 +211,7 @@ class ConexionSII:
         numeros = {k: sum(int(n) for n in re.findall(rf"<{k.upper()}>(\d+)</{k.upper()}>", texto))
                    for k in ("informados", "aceptados", "rechazados", "reparos")}
         return {"estado": estado, "glosa": _etiqueta(texto, "GLOSA") or "",
-                "final": estado not in EN_PROCESO, "detalle": [], **numeros}
+                "final": es_final(estado), "detalle": [], **numeros}
 
     def _estado_rest(self, trackid):
         token = self.token(True)
@@ -225,5 +236,5 @@ class ConexionSII:
             glosa = "; ".join(str(e.get("descripcion") or e.get("detalle") or "") for e in errores if e)
             detalle.append({"tipo": int(d.get("tipo") or 0), "folio": int(d.get("folio") or 0),
                             "estado": str(d.get("estado") or ""), "glosa": glosa})
-        return {"estado": estado, "glosa": RECHAZADO.get(estado, ""), "final": estado not in EN_PROCESO,
+        return {"estado": estado, "glosa": RECHAZADO.get(estado, ""), "final": es_final(estado),
                 "detalle": detalle, **numeros}

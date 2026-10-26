@@ -340,7 +340,12 @@ CREATE TABLE IF NOT EXISTS sii_envios (
     glosa     TEXT,
     intentos  INTEGER NOT NULL DEFAULT 0,
     proximo   TEXT,                   -- cuándo reintentar o volver a consultar
-    revisado  TEXT
+    revisado  TEXT,
+    -- Certificación: qué es (documentos, libro, rcof) y de qué etapa (basico, exenta, simulacion, boletas,
+    -- libro_ventas, libro_compras, rcof); NULL en la operación normal.
+    clase     TEXT NOT NULL DEFAULT 'documentos',
+    etapa     TEXT,
+    detalle   TEXT                    -- JSON con lo que se envió (período del libro, casos del set...)
 );
 CREATE INDEX IF NOT EXISTS idx_sii_envios_estado ON sii_envios(estado);
 
@@ -371,6 +376,7 @@ CREATE TABLE IF NOT EXISTS sii_documentos (
     correo_estado  TEXT,              -- NULL (no corresponde), pendiente, enviado, sin_correo
     correo_glosa   TEXT,
     correo_enviado TEXT,
+    caso           TEXT,              -- certificación: el caso del set de pruebas («4670590-1», «CASO-1»)
     UNIQUE (ambiente, tipo, folio)
 );
 CREATE INDEX IF NOT EXISTS idx_sii_documentos_venta ON sii_documentos(venta_id);

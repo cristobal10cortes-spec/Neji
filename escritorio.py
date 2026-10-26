@@ -366,12 +366,41 @@ def preparar_motor():
     return "ok", "", datos
 
 
-def instalar_webview2():
-    """Descarga y ejecuta el instalador oficial de Microsoft. True si terminó bien."""
+def firmado_por_microsoft(ruta):
+    """¿El archivo trae una firma Authenticode válida de Microsoft? (antes de ejecutar algo descargado)."""
     import subprocess
-    destino = Path(tempfile.gettempdir()) / "MicrosoftEdgeWebview2Setup.exe"
+    # Con la ruta completa (no el que aparezca primero en el PATH) y sin el PSModulePath de PowerShell 7, que
+    # no le sirve a Windows PowerShell (no podría cargar su módulo de firmas).
+    powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / \
+        "powershell.exe"
+    entorno = {k: v for k, v in os.environ.items() if k.upper() != "PSMODULEPATH"}
+    entorno["NEJI_ARCHIVO"] = str(ruta)
+    comando = [str(powershell), "-NoProfile", "-NonInteractive", "-Command",
+               "$f = Get-AuthenticodeSignature -LiteralPath $env:NEJI_ARCHIVO; "
+               "Write-Output $f.Status; Write-Output $f.SignerCertificate.Subject"]
+    try:
+        r = subprocess.run(comando, capture_output=True, timeout=60, check=False, text=True, env=entorno,
+                           creationflags=SIN_VENTANA_CONSOLA)
+    except (OSError, subprocess.SubprocessError):
+        registro.exception("No se pudo revisar la firma del instalador")
+        return False
+    lineas = [x.strip() for x in r.stdout.splitlines() if x.strip()]
+    ok = len(lineas) >= 2 and lineas[0] == "Valid" and "O=Microsoft Corporation" in lineas[1]
+    if not ok:
+        registro.warning("El instalador descargado no tiene una firma válida de Microsoft: %s %s", lineas,
+                         (r.stderr or "").strip()[:500])
+    return ok
+
+
+def instalar_webview2():
+    """Descarga y ejecuta el instalador oficial de Microsoft (si su firma es de Microsoft). True si terminó bien."""
+    import subprocess
+    carpeta = Path(tempfile.mkdtemp(prefix="neji-webview2-"))    # carpeta propia: nadie la cambia entremedio
+    destino = carpeta / "MicrosoftEdgeWebview2Setup.exe"
     try:
         urllib.request.urlretrieve(WEBVIEW2_URL, destino)
+        if not firmado_por_microsoft(destino):
+            return False
         resultado = subprocess.run([str(destino), "/install"], timeout=1200, check=False)
     except (OSError, subprocess.SubprocessError):
         registro.exception("No se pudo instalar WebView2")
@@ -654,9 +683,11 @@ def prueba_de_humo(salida=None):
 VERIFICAR_VENTANA = """
 (() => {
   const listo = Boolean(document.querySelector('#app form, #app nav'));
+  // El puente con las impresoras y lectores (pywebview lo arma con new Function: la CSP debe permitirlo).
+  const puente = Boolean(window.pywebview && window.pywebview.api && typeof window.pywebview.api.impresoras === 'function');
   const anterior = localStorage.getItem('neji.prueba');
   localStorage.setItem('neji.prueba', 'guardado');
-  return JSON.stringify({ listo, anterior, titulo: document.title, modulos: Boolean(window.fetch) });
+  return JSON.stringify({ listo, puente, anterior, titulo: document.title, modulos: Boolean(window.fetch) });
 })()
 """
 
@@ -689,11 +720,11 @@ def prueba_ventana(carpeta, salida=None):
                 limite = time.monotonic() + 30
                 while True:
                     datos_js = json.loads(ventana.evaluate_js(VERIFICAR_VENTANA))
-                    if datos_js["listo"] or time.monotonic() > limite:
+                    if (datos_js["listo"] and datos_js["puente"]) or time.monotonic() > limite:
                         break
                     time.sleep(0.5)
                 resultado.update(datos_js)
-                resultado["ok"] = datos_js["listo"]
+                resultado["ok"] = datos_js["listo"] and datos_js["puente"]
             except Exception as e:  # noqa: BLE001
                 resultado["error"] = f"{type(e).__name__}: {e}"
             finally:

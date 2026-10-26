@@ -328,3 +328,23 @@ def test_la_ventana_pide_los_codigos_de_los_lectores_com(monkeypatch, tmp_path):
     assert api.lectores()["puertos"] == [{"puerto": "COM5", "usar": True}]
     assert api.lector_usar("com5", False)["puertos"] == [{"puerto": "COM5", "usar": False}]
     assert (tmp_path / "lectores.json").read_text(encoding="utf-8") == '{"COM5": false}'
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="firmas Authenticode: solo Windows")
+def test_firma_de_microsoft_antes_de_ejecutar(tmp_path):
+    import os
+
+    assert escritorio.firmado_por_microsoft(os.path.join(os.environ["SystemRoot"], "explorer.exe"))
+    falso = tmp_path / "MicrosoftEdgeWebview2Setup.exe"
+    falso.write_bytes(b"MZ no es un instalador de verdad")
+    assert not escritorio.firmado_por_microsoft(falso)
+
+
+def test_instalador_sin_firma_no_se_ejecuta(monkeypatch, tmp_path):
+    import subprocess
+
+    ejecutados = []
+    monkeypatch.setattr(escritorio.urllib.request, "urlretrieve", lambda url, destino: open(destino, "wb").close())
+    monkeypatch.setattr(escritorio, "firmado_por_microsoft", lambda ruta: False)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: ejecutados.append(a))
+    assert escritorio.instalar_webview2() is False and ejecutados == []

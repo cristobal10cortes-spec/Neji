@@ -108,9 +108,25 @@ def leer_diseno_ticket(valor):
 
 
 def _iniciar_sesion(usuario_id):
+    from ..auth import sello
+
+    fila_usuario = get_db().execute("SELECT password_hash FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()
     session.clear()
     session.permanent = True
     session["usuario_id"] = usuario_id
+    session["sello"] = sello(fila_usuario["password_hash"])
+
+
+_hash_de_relleno = []
+
+
+def _comparar_sin_usuario(password):
+    """Si el usuario no existe se compara igual contra un hash cualquiera: la respuesta tarda lo mismo y no
+    delata qué usuarios existen."""
+    if not _hash_de_relleno:
+        _hash_de_relleno.append(generate_password_hash("neji-relleno"))
+    check_password_hash(_hash_de_relleno[0], password)
+    return False
 
 
 @bp.get("/estado")
@@ -178,7 +194,10 @@ def login():
     row = get_db().execute(
         "SELECT id, password_hash FROM usuarios WHERE usuario = ? AND activo = 1", (nombre,),
     ).fetchone()
-    if row is None or not check_password_hash(row["password_hash"], str(datos.get("password") or "")):
+    password = str(datos.get("password") or "")
+    if row is None:
+        _comparar_sin_usuario(password)
+    if row is None or not check_password_hash(row["password_hash"], password):
         _anotar_fallo(nombre)
         raise ErrorNegocio("Usuario o contraseña incorrectos.", status=401)
     _olvidar_fallos(nombre)
@@ -333,6 +352,8 @@ def editar_usuario(usuario_id):
                 raise ErrorNegocio("La contraseña debe tener al menos 4 caracteres.")
             con.execute("UPDATE usuarios SET password_hash = ? WHERE id = ?",
                         (generate_password_hash(password), usuario_id))
+    if password and usuario_id == session.get("usuario_id"):
+        _iniciar_sesion(usuario_id)          # su propia contraseña: sigue dentro; las otras sesiones se cierran
     return jsonify(_usuario_publico(con.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()))
 
 

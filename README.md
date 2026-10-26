@@ -363,8 +363,8 @@ Si el dueño lo activa, Neji emite los documentos tributarios electrónicos **co
 electrónica** y los manda solo al SII. Si no se activa, todo sigue igual que antes, con el
 comprobante interno.
 
-- **Boleta electrónica** (39), boleta exenta (41), **factura electrónica** (33), factura exenta (34)
-  y **nota de crédito** (61). Una venta solo con productos exentos sale como documento exento.
+- **Boleta electrónica** (39), boleta exenta (41), **factura electrónica** (33), factura exenta (34),
+  **nota de crédito** (61) y nota de débito (56, en la certificación). Una venta solo con productos exentos sale como documento exento.
 - **Al cobrar** se elige *Boleta* (lo normal) o *Factura* (tecla **F7**). La factura pide un cliente
   con RUT, giro, dirección y comuna (se completan en **Clientes**).
 - **El ticket** es la representación impresa del documento. Lleva el recuadro con el RUT, el tipo
@@ -386,10 +386,8 @@ comprobante interno.
 1. **La firma electrónica** (certificado digital `.pfx` o `.p12`) del dueño o de una persona
    autorizada ante el SII: E-Cert, Acepta, E-Sign u otra empresa certificadora.
 2. **La certificación del SII.** Para emitir con un sistema propio (como Neji), el SII pide
-   certificarlo una vez. Se postula en sii.cl (*Factura electrónica → Sistema de facturación
-   propio o de mercado*) y se emite el **set de pruebas** que entrega el SII en el *ambiente de
-   certificación*. También se envían las muestras impresas. Al aprobar, el SII autoriza a emitir
-   en *producción* (con una resolución).
+   certificarlo una vez. Neji hace todos los pasos desde **Configuración → Certificación SII**
+   (ver más abajo). Al aprobar, el SII autoriza a emitir en *producción* (con una resolución).
 3. En **Configuración → Boleta electrónica**:
    - Completa los datos de la empresa tal como están en el SII: RUT, razón social, giro, código
      de actividad (Acteco), dirección, comuna y oficina del SII.
@@ -406,16 +404,48 @@ producción.
 
 - La firma queda guardada en la base de Neji (va en los respaldos). Su contraseña queda cifrada con
   la clave de ese computador: si se restaura el respaldo en otro equipo, hay que volver a subir la firma.
-- El SII ya no pide el reporte de consumo de folios (RCOF) de las boletas, así que Neji no lo envía.
+- El SII ya no pide el reporte de consumo de folios (RCOF) de las boletas en la operación normal, así
+  que Neji solo lo envía en la certificación de la boleta, donde todavía se exige.
 - **Las facturas le llegan al cliente por correo** (intercambio de DTE, lo pide el SII): cuando el SII
   acepta una factura o la nota de crédito de una factura, Neji le manda el XML al correo que tiene el
   cliente en **Clientes**. Se configura la cuenta en **Configuración → Boleta electrónica → Correo para
   mandar las facturas** (con Gmail: `smtp.gmail.com`, puerto 587 y una «contraseña de aplicación»).
   Si el cliente no tiene correo, la factura queda marcada y se manda después con **Enviar XML**.
-- Neji no emite todavía guías de despacho (52) ni notas de débito (56).
+- Neji no emite guías de despacho (52), facturas de compra (46) ni documentos de exportación: al
+  postular, elige solo factura, factura exenta, nota de crédito, nota de débito y boleta.
 - Los documentos se validaron con los esquemas oficiales del SII y las firmas con xmlsec y con DTE
   reales aceptados por el SII. Pero desde el desarrollo no se pudo conectar con los servidores del
   SII: el set de pruebas de la certificación es la primera prueba real.
+
+**Certificación ante el SII, paso a paso** (Configuración → Certificación SII)
+
+Antes: en sii.cl → *Factura electrónica → Sistema de certificación* se postula con «software de
+mercado o desarrollo propio». En la pestaña **Boleta electrónica**, con el ambiente en
+*Certificación*, se cargan los datos de la empresa (tal como salen en sii.cl → *Datos para la
+construcción de DTE*), la fecha de resolución de la postulación (número 0), la firma y los folios de
+certificación de factura (33), nota de crédito (61), nota de débito (56) y, si se postula a ellas,
+factura exenta (34) y boleta (39 y 41). No hace falta activar la boleta electrónica para certificar.
+
+1. **Set de pruebas.** Se descarga de sii.cl el texto del set y se pega en Neji, que emite cada caso
+   (precios netos, descuentos por línea y globales, notas de crédito que anulan, corrigen el giro con
+   «donde dice… debe decir…» o devuelven, y la nota de débito) y los envía al SII, un envío por set.
+2. **Libros.** Con un botón se envían el libro de ventas (los documentos del set básico) y el de
+   compras (las facturas recibidas que trae el set: IVA de uso común con su factor de
+   proporcionalidad, IVA no recuperable, retención total del IVA y notas de crédito). Si el SII
+   responde que el período ya tiene un libro, se reenvían como *Ajuste*.
+3. **Simulación.** Neji emite diez documentos como los de la operación diaria (con productos del
+   inventario y precios con IVA, igual que al vender) y una factura exenta si hay folios de ella.
+4. **Intercambio.** El XML que el SII manda al correo de intercambio se sube a Neji, que arma y firma
+   las tres respuestas (recepción del envío, recibo de mercaderías y aceptación comercial) en un ZIP
+   para subirlas en sii.cl.
+5. **Muestras impresas.** Un ZIP con un PDF por documento (con el timbre legible, a 2 cm del borde, y
+   la copia cedible de las facturas con el acuse de recibo), para mandar a SII_dte_impresos@sii.cl.
+6. **Boleta electrónica.** Su set de pruebas (CASO-1, CASO-2…) se pega aparte: Neji emite las
+   boletas con la referencia que pide el SII y envía también el consumo de folios (RCOF).
+
+Neji sube cada envío y consulta su estado solo; en la pantalla se ve el **número de envío
+(TrackID)** de cada paso, que es el que se declara en sii.cl → *Revisar avance*. Al final se firma la
+declaración de cumplimiento en sii.cl y, con la resolución, se pasa a producción.
 
 ### Reportes (administrador)
 
@@ -438,6 +468,17 @@ producción.
   «Cajero 1 · Cristóbal Araya Cortés»), con una vista previa del ticket al lado.
 - **Respaldo automático diario**, que guarda los últimos 10 (configurable),
   más respaldo y descarga manual.
+- **Protecciones**: contraseñas con hash (scrypt) y freno a quien prueba contraseñas; al cambiar la
+  contraseña de alguien se cierran sus otras sesiones; la página no carga nada de otros sitios (CSP),
+  no se puede meter dentro de otra (clickjacking) ni recibe pedidos de otras páginas (CSRF) o de
+  dominios ajenos (DNS rebinding); en Windows, la clave con la que se cifran la contraseña de la firma
+  electrónica y la del correo queda protegida por Windows para ese computador (una copia de la carpeta
+  de datos no sirve en otro); el correo solo se manda por conexión cifrada; los XML y planillas subidos
+  no pueden traer entidades externas; y antes de instalar WebView2 se revisa que el instalador esté
+  firmado por Microsoft.
+- Si se abre Neji desde otro equipo con un nombre de dominio propio (por ejemplo
+  `caja.mifarmacia.cl`), hay que agregarlo en la variable de entorno `NEJI_DOMINIOS`. Con la IP o el
+  nombre del computador (`http://CAJA1:5000`) funciona sin hacer nada.
 
 ---
 
@@ -549,6 +590,39 @@ dist\NejiPOS\NejiPOS.exe --prueba          # prueba sin ventana: sale con 0 si t
 iscc empaquetado\NejiPOS.iss                # instalador (Inno Setup 6) -> dist\NejiPOS-Instalador-<versión>.exe
                                             # (antes, deja build\MicrosoftEdgeWebview2Setup.exe)
 ```
+
+### Código cifrado con PyArmor (opcional)
+
+Dentro de `NejiPOS.exe` el código va compilado, pero un entendido puede sacarlo y leerlo. Con
+[PyArmor](https://pyarmor.readthedocs.io) el código de Neji (`escritorio.py` y todo `neji/`) va
+**cifrado**: quien abra el programa ve un bloque ilegible en vez del código, y el programa funciona
+igual. El workflow de Windows ya lo hace solo si encuentra la licencia; si no, compila como siempre (y
+lo dice en el resumen de la compilación).
+
+Qué se necesita:
+
+1. **La licencia de PyArmor.** Para un programa que se usa en un negocio hace falta una licencia
+   pagada (Pyarmor Basic alcanza; se compra en el sitio de PyArmor o con `pyarmor reg --buy`). La
+   versión de prueba gratis no sirve: es solo para uso no comercial y no cifra archivos del tamaño de
+   los de Neji (responde «out of license»).
+2. **Registrarla una vez en tu computador** con el código que llega por correo:
+   `pip install pyarmor` y `pyarmor reg -p "Neji POS" pyarmor-regcode-XXXX.txt`. Queda un archivo
+   `pyarmor-regfile-XXXX.zip`: guárdalo bien (es la licencia).
+3. **Pedir el archivo para GitHub** (la compilación corre en un equipo que cambia cada vez):
+   `pyarmor reg -C pyarmor-regfile-XXXX.zip`, que deja un `pyarmor-ci-XXXX.zip`.
+4. **Guardarlo como secreto del repositorio**: en GitHub → *Settings → Secrets and variables →
+   Actions → New repository secret*, con el nombre `PYARMOR_LICENCIA` y como valor el archivo en
+   base64. En PowerShell:
+   `[Convert]::ToBase64String([IO.File]::ReadAllBytes("pyarmor-ci-XXXX.zip")) | Set-Clipboard`
+   (y pegar). Desde la siguiente compilación el código sale cifrado.
+5. Opcional: la variable de repositorio `PYARMOR_OPCIONES` agrega opciones de `pyarmor gen`, por
+   ejemplo `--mix-str` para cifrar también los textos (según lo que permita tu licencia).
+
+Bueno saber: el cifrado hace mucho más difícil leer o copiar el código, pero ningún cifrado de un
+programa que corre en el computador del usuario es imposible de romper. Lo realmente delicado (la
+firma electrónica, las contraseñas) no depende de esto: está protegido aparte (ver *Usuarios y
+seguridad*). Algunos antivirus desconfían de los programas cifrados con PyArmor: si pasa, se puede
+reportar el falso positivo al antivirus. Y el repositorio debe seguir siendo privado.
 
 Para agregar una función nueva:
 

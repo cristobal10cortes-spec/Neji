@@ -1,19 +1,21 @@
 """Arma, timbra y firma un documento tributario electrónico (DTE).
 
 Los montos de Neji incluyen IVA (precios de góndola). La boleta (39/41) se expresa así tal cual; la factura
-(33) y la nota de crédito (61) también, con el indicador MntBruto=1: el SII deriva el neto y el IVA del total
-bruto, y así el documento suma exactamente lo que se cobró (sin perder pesos al pasar cada línea a neto).
+(33) y las notas de crédito (61) y débito (56) también, con el indicador MntBruto=1: el SII deriva el neto y el
+IVA del total bruto, y así el documento suma exactamente lo que se cobró (sin perder pesos al pasar cada línea
+a neto). Con `netos` (el set de pruebas del SII, que da precios netos) las líneas van sin IVA y el IVA se
+calcula sobre el neto.
 """
 
 from datetime import datetime
 from decimal import Decimal
 
-from ..chile import desglosar_iva, limpiar_rut, validar_rut
-from . import BOLETAS, NOMBRES, NS_SII, NS_XSI, RUT_CONSUMIDOR_FINAL, ErrorSII
+from ..chile import desglosar_iva, limpiar_rut, redondear, validar_rut
+from . import BOLETAS, NOMBRES, NOTAS, NS_SII, NS_XSI, RUT_CONSUMIDOR_FINAL, ErrorSII
 from .textos import correo_valido, texto_sii, texto_timbre
 
 EXENTOS = (34, 41)       # documentos sin IVA: todas sus líneas son exentas
-MAX_LINEAS = {39: 1000, 41: 1000, 33: 60, 34: 60, 61: 60}
+MAX_LINEAS = {39: 1000, 41: 1000, 33: 60, 34: 60, 56: 60, 61: 60}
 MOTIVOS_REFERENCIA = {1: "Anula documento", 2: "Corrige texto", 3: "Corrige montos"}
 
 
@@ -35,14 +37,28 @@ def _rut(valor, que):
     return rut
 
 
-def calcular_totales(tipo, lineas, descuento_afecto=0, descuento_exento=0, tasa=19):
-    """Totales del documento a partir de las líneas (montos con IVA) y los descuentos globales."""
-    exento = sum(int(l["monto"]) for l in lineas if l.get("exento") or tipo in EXENTOS) - int(descuento_exento)
-    afecto = sum(int(l["monto"]) for l in lineas if not (l.get("exento") or tipo in EXENTOS)) - int(descuento_afecto)
+def calcular_totales(tipo, lineas, descuento_afecto=0, descuento_exento=0, tasa=19, netos=False, descuento_pct=0):
+    """Totales del documento a partir de las líneas y los descuentos globales.
+
+    Las líneas van con IVA (lo normal en Neji) o netas (`netos`). `descuento_pct`: descuento global en % sobre
+    lo afecto (el «DESCUENTO GLOBAL ITEMES AFECTOS» del set de pruebas), redondeado al peso como el SII.
+    """
+    exento_lineas = sum(int(l["monto"]) for l in lineas if l.get("exento") or tipo in EXENTOS)
+    afecto_lineas = sum(int(l["monto"]) for l in lineas if not (l.get("exento") or tipo in EXENTOS))
+    if descuento_pct:
+        descuento_afecto = redondear(Decimal(afecto_lineas) * Decimal(str(descuento_pct)) / 100)
+    exento = exento_lineas - int(descuento_exento)
+    afecto = afecto_lineas - int(descuento_afecto)
     if afecto < 0 or exento < 0:
         raise ErrorSII("El descuento no puede ser mayor que lo que se vende.")
-    neto, iva = desglosar_iva(afecto, tasa) if afecto else (0, 0)
-    return {"neto": neto, "iva": iva, "exento": exento, "total": afecto + exento, "afecto": afecto}
+    if netos:
+        neto, iva = afecto, redondear(Decimal(afecto) * Decimal(str(tasa)) / 100)
+        total = neto + iva + exento
+    else:
+        neto, iva = desglosar_iva(afecto, tasa) if afecto else (0, 0)
+        total = afecto + exento
+    return {"neto": neto, "iva": iva, "exento": exento, "total": total, "afecto": afecto,
+            "descuento_afecto": int(descuento_afecto)}
 
 
 def _validar(doc, caf):
@@ -70,19 +86,22 @@ def _validar(doc, caf):
     if tipo in (33, 39) and all(l.get("exento") for l in lineas):
         raise ErrorSII("Todos los productos son exentos: corresponde una boleta o factura exenta.")
     receptor = doc.get("receptor") or {}
-    if tipo == 61 and not receptor.get("rut"):
+    if tipo in NOTAS and not receptor.get("rut"):
         pass                     # nota de crédito de una boleta a consumidor final
     elif tipo not in BOLETAS:
         rut = _rut(receptor.get("rut"), "del cliente")
-        if tipo != 61 and rut == RUT_CONSUMIDOR_FINAL:
+        if tipo not in NOTAS and rut == RUT_CONSUMIDOR_FINAL:
             raise ErrorSII("La factura necesita el RUT del cliente (no el de consumidor final).")
-        if tipo != 61:
+        if tipo not in NOTAS:
             for campo, nombre in (("razon_social", "la razón social"), ("giro", "el giro"),
                                   ("direccion", "la dirección"), ("comuna", "la comuna")):
                 if not texto_sii(receptor.get(campo)):
                     raise ErrorSII(f"Para la factura falta {nombre} del cliente.")
-    if tipo == 61 and not doc.get("referencias"):
-        raise ErrorSII("La nota de crédito tiene que decir qué documento corrige.")
+    if tipo in NOTAS and not doc.get("referencias"):
+        raise ErrorSII(f"La {NOMBRES[tipo].lower()} tiene que decir qué documento corrige.")
+    for ref in doc.get("referencias") or []:
+        if tipo not in BOLETAS and not (ref.get("tipo") and ref.get("folio") not in (None, "") and ref.get("fecha")):
+            raise ErrorSII("Cada referencia necesita el tipo, el folio y la fecha del documento.")
 
 
 def _sub(padre, etiqueta, texto=None, **atributos):
@@ -105,7 +124,7 @@ def _encabezado(documento, doc, totales):
     if boleta:
         _sub(iddoc, "IndServicio", 3)          # boleta de ventas y servicios
     else:
-        if totales["afecto"]:
+        if totales["afecto"] and not doc.get("netos"):
             _sub(iddoc, "MntBruto", 1)         # las líneas van con IVA incluido
         if tipo in (33, 34):
             _sub(iddoc, "FmaPago", 2 if doc.get("credito") else 1)
@@ -162,6 +181,8 @@ def _encabezado(documento, doc, totales):
 
 
 def _detalle(documento, doc):
+    """Líneas en el orden del esquema: código, exento, nombre, descripción, cantidad, unidad, precio, descuento
+    y monto. Una línea `solo_texto` (la nota que corrige el giro o un texto) lleva solo el nombre y monto 0."""
     tipo = doc["tipo"]
     for n, linea in enumerate(doc["lineas"], start=1):
         det = _sub(documento, "Detalle")
@@ -174,38 +195,60 @@ def _detalle(documento, doc):
         if linea.get("exento") or tipo in EXENTOS:
             _sub(det, "IndExe", 1)
         _sub(det, "NmbItem", texto_sii(linea["nombre"], 80) or "Producto")
-        cantidad = Decimal(str(linea["cantidad"]))
-        if cantidad > 0:
-            _sub(det, "QtyItem", numero_xml(cantidad))
-        if linea.get("unidad"):
-            _sub(det, "UnmdItem", texto_sii(linea["unidad"], 4))
-        if cantidad > 0 and Decimal(str(linea["precio"])) > 0:
-            _sub(det, "PrcItem", numero_xml(linea["precio"]))
+        if texto_sii(linea.get("descripcion")):
+            _sub(det, "DscItem", texto_sii(linea["descripcion"], 1000))
+        if not linea.get("solo_texto"):
+            cantidad = Decimal(str(linea["cantidad"]))
+            if cantidad > 0:
+                _sub(det, "QtyItem", numero_xml(cantidad))
+            if linea.get("unidad"):
+                _sub(det, "UnmdItem", texto_sii(linea["unidad"], 4))
+            if cantidad > 0 and Decimal(str(linea["precio"])) > 0:
+                _sub(det, "PrcItem", numero_xml(linea["precio"]))
+                if linea.get("descuento_pct"):
+                    _sub(det, "DescuentoPct", numero_xml(linea["descuento_pct"]))
+                if int(linea.get("descuento") or 0) > 0:
+                    _sub(det, "DescuentoMonto", int(linea["descuento"]))
         _sub(det, "MontoItem", int(linea["monto"]))
         det.tail = "\n"
 
 
 def _descuentos(documento, doc):
+    """Descuentos globales: en pesos (los de una venta) o en % sobre lo afecto (los del set de pruebas)."""
     n = 0
-    for monto, exento in ((doc.get("descuento_afecto", 0), False), (doc.get("descuento_exento", 0), True)):
-        if int(monto or 0) <= 0:
+    globales = ([(doc["descuento_pct"], False, "%")] if doc.get("descuento_pct") else
+                [(doc.get("descuento_afecto", 0), False, "$")])
+    globales.append((doc.get("descuento_exento", 0), True, "$"))
+    for valor, exento, tipo_valor in globales:
+        if Decimal(str(valor or 0)) <= 0:
             continue
         n += 1
         dr = _sub(documento, "DscRcgGlobal")
         _sub(dr, "NroLinDR", n)
         _sub(dr, "TpoMov", "D")
-        _sub(dr, "GlosaDR", "Descuento")
-        _sub(dr, "TpoValor", "$")
-        _sub(dr, "ValorDR", int(monto))
+        _sub(dr, "GlosaDR", texto_sii(doc.get("glosa_descuento"), 45) or "Descuento")
+        _sub(dr, "TpoValor", tipo_valor)
+        _sub(dr, "ValorDR", numero_xml(valor) if tipo_valor == "%" else int(valor))
         if exento and doc["tipo"] not in EXENTOS:
             _sub(dr, "IndExeDR", 1)
         dr.tail = "\n"
 
 
 def _referencias(documento, doc):
+    """Documentos que se referencian: el corregido por una nota, o el caso del set de pruebas («SET»).
+
+    En la boleta la referencia es más simple: código (p. ej. «SET») y razón («CASO-1»)."""
+    boleta = doc["tipo"] in BOLETAS
     for n, ref in enumerate(doc.get("referencias") or [], start=1):
         el = _sub(documento, "Referencia")
         _sub(el, "NroLinRef", n)
+        if boleta:
+            if ref.get("codigo"):
+                _sub(el, "CodRef", texto_sii(str(ref["codigo"]), 18))
+            if texto_sii(ref.get("razon")):
+                _sub(el, "RazonRef", texto_sii(ref["razon"], 90))
+            el.tail = "\n"
+            continue
         _sub(el, "TpoDocRef", ref["tipo"])
         _sub(el, "FolioRef", ref["folio"])
         _sub(el, "FchRef", ref["fecha"])
@@ -245,8 +288,9 @@ def construir(doc, caf, firma, momento=None):
 
     `doc`: {tipo, folio, fecha (AAAA-MM-DD), emisor {rut, razon_social, giro, actecos, direccion, comuna,
     ciudad, sucursal_sii, telefono, email}, receptor {rut, razon_social, giro, direccion, comuna, ciudad,
-    email} o None (consumidor final), lineas [{nombre, codigo, cantidad, precio, monto, exento, unidad}],
-    descuento_afecto, descuento_exento, referencias [{tipo, folio, fecha, codigo, razon}], tasa_iva, credito}.
+    email} o None (consumidor final), lineas [{nombre, codigo, cantidad, precio, monto, exento, unidad,
+    descripcion, descuento_pct, descuento, solo_texto}], descuento_afecto, descuento_exento, descuento_pct,
+    glosa_descuento, referencias [{tipo, folio, fecha, codigo, razon}], tasa_iva, credito, netos}.
 
     Devuelve {xml (bytes ISO-8859-1), ted (bytes), id, totales}.
     """
@@ -254,7 +298,8 @@ def construir(doc, caf, firma, momento=None):
 
     _validar(doc, caf)
     totales = calcular_totales(doc["tipo"], doc["lineas"], doc.get("descuento_afecto", 0),
-                               doc.get("descuento_exento", 0), doc.get("tasa_iva", 19))
+                               doc.get("descuento_exento", 0), doc.get("tasa_iva", 19), bool(doc.get("netos")),
+                               doc.get("descuento_pct") or 0)
     marca = marca_de_tiempo(momento)
     ident = f"F{doc['folio']}T{doc['tipo']}"
     documento = etree.Element("Documento", ID=ident)
