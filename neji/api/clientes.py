@@ -34,6 +34,8 @@ def _leer_cliente(con, datos, cliente_id=None):
         "email": email,
         "direccion": texto(datos, "direccion", max_largo=200),
         "giro": texto(datos, "giro", max_largo=120),
+        "comuna": texto(datos, "comuna", max_largo=40),
+        "ciudad": texto(datos, "ciudad", max_largo=40),
         "notas": texto(datos, "notas"),
     }
 

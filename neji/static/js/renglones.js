@@ -70,7 +70,8 @@ function centrar(valor, ancho) {
 
 /**
  * Bloques del ticket (bloquesTicket) -> renglones [texto, negrita, grande] con el ancho del papel, como
- * neji/impresoras.componer. Un renglón grande usa letra de doble ancho: le caben la mitad de columnas.
+ * neji/impresoras.componer. Un renglón grande usa letra de doble ancho: le caben la mitad de columnas. El
+ * timbre del SII (una imagen en el papel) queda como un renglón que lo nombra.
  */
 export function componerRenglones(bloques, columnas, codigo = 'cp850') {
   const renglones = [];
@@ -78,7 +79,10 @@ export function componerRenglones(bloques, columnas, codigo = 'cp850') {
     const negrita = Boolean(b.negrita);
     const grande = Boolean(b.grande);
     const ancho = Math.max(grande ? Math.floor(columnas / 2) : columnas, 8);
-    if (b.tipo === 'linea') {
+    if (b.tipo === 'timbre') {
+      // En el papel es una imagen (el código PDF417): aquí, un renglón que la representa.
+      if (b.ted) renglones.push([centrar('[código PDF417 del timbre]', columnas).trimEnd(), false, false]);
+    } else if (b.tipo === 'linea') {
       renglones.push(['-'.repeat(columnas), false, false]);
     } else if (b.tipo === 'espacio') {
       const n = Math.max(1, Math.min(Number.parseInt(b.lineas, 10) || 1, 10));

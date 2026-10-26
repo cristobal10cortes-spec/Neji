@@ -2,7 +2,7 @@
 
 import { api, qs } from '../api.js';
 import { esFarmacia, estado, guardarTickets, leerTickets, nuevoTicket, opcion, puede } from '../estado.js';
-import { abrirCajon, imprimir, ticketCotizacion, ticketVenta } from '../impresion.js';
+import { abrirCajon, documentoDeVenta, imprimir, ticketCotizacion, ticketVenta } from '../impresion.js';
 import {
   aviso, avisoError, confirmar, formulario, h, importe, leerCantidad, leerMonto, modal, modalAbierto, numero, pesos, pitido,
   redondeoEfectivo, vaciar,
@@ -1083,7 +1083,10 @@ export async function montar(contenedor, parametros = {}) {
     if (!turnoAbierto && !(await pedirAbrirTurno())) return;
     const { total } = totalesTicket(t);
     const redondear = opcion('redondeo_efectivo');
+    // Con la boleta electrónica activada se elige el documento: boleta (lo normal) o factura (con cliente).
+    const conSii = estado.config.sii_activo === '1';
     let metodo = 'efectivo';
+    let documento = 'boleta';
     let enviando = false;
 
     const pagaCon = h('input', { inputmode: 'numeric', placeholder: 'Exacto', autocomplete: 'off', 'aria-label': 'Paga con' });
@@ -1092,6 +1095,7 @@ export async function montar(contenedor, parametros = {}) {
     const botonesMetodo = h('div.metodos');
     const zona = h('div');
     const resumen = h('div');
+    const zonaDocumento = h('div.documento-sii');
 
     function efectivoACobrar() {
       let noEfectivo = 0;
@@ -1149,12 +1153,28 @@ export async function montar(contenedor, parametros = {}) {
     }
     const texto = (m) => METODOS.find(([k]) => k === m)[1].toLowerCase();
 
+    function elegirDocumento(d) {
+      documento = d;
+      if (!conSii) return;
+      const c = t.cliente;
+      vaciar(zonaDocumento,
+        h('div.metodos.documentos', [['boleta', 'Boleta'], ['factura', 'Factura']].map(([clave, nombre]) => h('button', {
+          type: 'button', class: clave === documento ? 'activo' : null, title: 'Boleta o factura (F7)', onclick: () => elegirDocumento(clave),
+        }, nombre))),
+        documento === 'factura'
+          ? (c ? h('p.ayuda', `Factura a ${c.nombre}. Debe tener RUT, giro, dirección y comuna (se editan en Clientes).`)
+            : h('div.fila', h('span.rojo', 'Para la factura elige el cliente.'),
+              h('button.btn.chico', { type: 'button', onclick: () => asignarClienteEnCobro() }, 'Elegir cliente')))
+          : null);
+    }
+
     async function asignarClienteEnCobro() {
       const c = await elegirCliente();
       if (c) {
         t.cliente = { id: c.id, nombre: c.nombre, saldo: c.saldo, limite_credito: c.limite_credito, credito_disponible: c.credito_disponible };
         dibujar();
       }
+      elegirDocumento(documento);
       elegirMetodo(metodo);
     }
 
@@ -1167,7 +1187,7 @@ export async function montar(contenedor, parametros = {}) {
       cuerpo: [
         h('div.cobro-total', h('div.suave', 'Total a pagar'), h('div.monto', pesos(total)),
           t.cliente ? h('div', `Cliente: ${t.cliente.nombre}`) : null),
-        botonesMetodo, zona, resumen,
+        zonaDocumento, botonesMetodo, zona, resumen,
         h('label.check', imprimirTicket, 'Imprimir ticket'),
       ],
       botones: [
@@ -1177,10 +1197,12 @@ export async function montar(contenedor, parametros = {}) {
       alTeclear: (e) => {
         const i = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6'].indexOf(e.key);
         if (i >= 0) { e.preventDefault(); elegirMetodo(METODOS[i][0]); }
+        else if (e.key === 'F7' && conSii) { e.preventDefault(); elegirDocumento(documento === 'boleta' ? 'factura' : 'boleta'); }
         else if (e.key === 'Enter' && !e.target.matches('button')) { e.preventDefault(); confirmarCobro(); }
       },
       alCerrar: () => enfocar(),
     });
+    elegirDocumento('boleta');
     elegirMetodo('efectivo');
 
     async function confirmarCobro() {
@@ -1194,6 +1216,7 @@ export async function montar(contenedor, parametros = {}) {
       }
       if (noEfectivo > total) return m.error('Los pagos superan el total.');
       if (pagos.fiado && !t.cliente) return m.error('Para vender fiado elige un cliente.');
+      if (conSii && documento === 'factura' && !t.cliente) return m.error('Para la factura elige el cliente (con RUT, giro, dirección y comuna).');
       const recibido = pagaCon.value.trim() ? leerMonto(pagaCon.value) : aCobrar;
       if (total - noEfectivo > 0 && recibido < aCobrar) return m.error(`Faltan ${pesos(aCobrar - recibido)}.`);
 
@@ -1208,6 +1231,7 @@ export async function montar(contenedor, parametros = {}) {
           cotizacion_id: t.cotizacionId,
           pagos,
           efectivo_recibido: total - noEfectivo > 0 ? recibido : null,
+          documento: conSii ? documento : undefined,
         });
         const imprimirlo = imprimirTicket.checked;
         cerrarTicketActual();
@@ -1230,12 +1254,16 @@ export async function montar(contenedor, parametros = {}) {
 
   function mostrarResultado(venta, imprimirlo) {
     const efectivo = venta.pagos.some((p) => p.metodo === 'efectivo');
+    const doc = documentoDeVenta(venta);
     // Con efectivo se abre el cajón de dinero (si está conectado a la impresora de tickets).
     if (imprimirlo) imprimir(ticketVenta(venta), { abrirCajon: efectivo });
     else if (efectivo) abrirCajon();
+    // Lo que la caja tiene que saber: p. ej. que la boleta electrónica no se pudo emitir o que quedan pocos folios.
+    for (const a of venta.avisos || []) aviso(a, 'error', 9000);
     const m = modal({
       titulo: `Venta registrada · Folio ${venta.folio}`,
       cuerpo: h('div.resultado-venta',
+        doc ? h('div', h('b', `${doc.nombre} N° ${doc.folio}`)) : null,
         h('div.suave', `Total ${pesos(venta.total)}`),
         efectivo ? [h('div.suave', 'Cambio'), h('div.cambio', pesos(venta.cambio))] : h('div.cambio', '¡Listo!')),
       botones: [

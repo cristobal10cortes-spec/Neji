@@ -1,13 +1,13 @@
-// Configuración: negocio, ticket, opciones, usuarios, cajas, esta terminal y respaldos.
+// Configuración: negocio, ticket, opciones, usuarios, cajas, esta terminal, respaldos y boleta electrónica (SII).
 
-import { api, descargar } from '../api.js';
+import { api, descargar, qs } from '../api.js';
 import { recargarConfiguracion } from '../app.js';
 import { esAdmin, esFarmacia, estado, fijarCaja, nombreCaja } from '../estado.js';
 import {
   DATOS_NEGOCIO, PARTES_TICKET, bloquesTicket, columnasDe, configAutomatica, disenoPredeterminado, disenoTicket, esDe58, escritorio, guardarImpresora,
   impresoraSugerida, imprimir, imprimirConDialogo, leerImpresora, listarImpresoras, papelDe, ticketVenta, trabajoImpresion,
 } from '../impresion.js';
-import { aviso, avisoError, confirmar, fecha, formulario, h, numero, pestanas, tabla, vaciar } from '../ui.js';
+import { aviso, avisoError, confirmar, fecha, formulario, h, hoy, numero, pesos, pestanas, selectorFechas, tabla, vaciar } from '../ui.js';
 import { guardarLector, leerLector, probarLector } from '../lector.js';
 import { componerRenglones } from '../renglones.js';
 import { importadorCsv } from './productos.js';
@@ -836,11 +836,224 @@ async function vistaRespaldos(zona) {
   await cargar();
 }
 
+// --- Boleta electrónica (SII) -----------------------------------------------------------------------------
+// Opcional: con la firma electrónica del dueño y los folios (CAF) del SII, cada venta lleva su boleta (o
+// factura) electrónica y Neji la envía sola al SII. Sin activarla, todo sigue con el comprobante interno.
+
+const CAMPOS_EMISOR = [
+  ['rut', 'RUT de la empresa', '76.123.456-7'], ['razon_social', 'Razón social', 'Como está inscrita en el SII'],
+  ['giro', 'Giro', 'Ej: Farmacia'], ['actecos', 'Actividad económica (Acteco)', 'Ej: 477310'],
+  ['direccion', 'Dirección (casa matriz o sucursal)', ''], ['comuna', 'Comuna', ''], ['ciudad', 'Ciudad', ''],
+  ['oficina_sii', 'Oficina del SII', 'Ej: La Serena'], ['sucursal_sii', 'Código de sucursal SII (opcional)', ''],
+  ['telefono', 'Teléfono (opcional)', ''], ['email', 'Correo (opcional)', ''],
+];
+const CLASE_ESTADO_SII = { aceptado: 'ok', reparo: 'aviso', rechazado: 'mal' };
+
+let filtroDocumentosSii = null;
+
+async function vistaSii(zona) {
+  let datos = await api.get('/api/sii');
+  filtroDocumentosSii ||= { desde: hoy(-6), hasta: hoy() };
+
+  // Tras activar o desactivar, la caja (cobro y ticket) tiene que enterarse.
+  const alCambiarActivo = async (antes) => {
+    if (antes !== datos.config.activo) await recargarConfiguracion({ pestana: 'sii' });
+  };
+  const ejecutar = async (accion, ok) => {
+    const antes = datos.config.activo;
+    try {
+      const r = await accion();
+      if (r) datos = r.config ? r : datos;
+      if (ok) aviso(typeof ok === 'function' ? ok(r) : ok, 'ok', 6000);
+      if (antes !== datos.config.activo) return alCambiarActivo(antes);
+      pintar();
+    } catch (e) {
+      avisoError(e);
+    }
+    return null;
+  };
+
+  function panelEstado() {
+    const c = datos.config;
+    const activa = c.activo === '1';
+    const produccion = c.ambiente === 'produccion';
+    return h('div.panel',
+      h('div.fila.entre',
+        h('h3', 'Boleta y factura electrónica (SII)'),
+        h(`span.etiqueta.${activa ? 'ok' : 'mal'}`, activa ? `Activada · ${datos.ambientes[c.ambiente]}` : 'No activada')),
+      h('p', 'Opcional. Con tu firma electrónica y los folios que autoriza el SII, cada venta lleva su boleta electrónica (o factura, si la pides al cobrar), las devoluciones su nota de crédito, y Neji las envía solas al SII. Si no la activas, Neji sigue con el comprobante interno de siempre.'),
+      datos.falta_modulo ? h('div.error-modal', datos.falta_modulo) : null,
+      !produccion ? h('p.ayuda', 'Ambiente de certificación: los documentos van al SII de pruebas (maullin.sii.cl) y no valen como venta real. Úsalo para el set de pruebas del SII; cuando el SII te autorice, cambia a producción con tu resolución y folios de producción.') : null,
+      !activa && datos.pendientes.length ? h('div', h('b', 'Falta para activar:'), h('ul', datos.pendientes.map((x) => h('li', x)))) : null,
+      h('div.fila.fin', { style: { marginTop: '.6rem' } },
+        activa
+          ? h('button.btn.peligro', { type: 'button', onclick: async () => {
+            if (!(await confirmar('Desactivar boleta electrónica', 'Las ventas siguientes saldrán con el comprobante interno. Lo ya emitido se sigue enviando al SII al volver a activarla.', { aceptar: 'Desactivar', peligro: true }))) return;
+            ejecutar(() => api.put('/api/sii', { activo: false }), 'Boleta electrónica desactivada.');
+          } }, 'Desactivar')
+          : h('button.btn.primario', { type: 'button', disabled: datos.pendientes.length > 0, onclick: () => ejecutar(() => api.put('/api/sii', { activo: true }), 'Boleta electrónica activada: las ventas salen con boleta electrónica.') }, 'Activar boleta electrónica')));
+  }
+
+  function panelEmisor() {
+    const c = datos.config;
+    const controles = Object.fromEntries(CAMPOS_EMISOR.map(([k, , ph]) => [k, h('input', { value: c[k] || '', placeholder: ph })]));
+    const ambiente = h('select', Object.entries(datos.ambientes).map(([k, t]) => h('option', { value: k, selected: c.ambiente === k }, t)));
+    const fechaRes = h('input', { type: 'date', value: c.fecha_resolucion || '' });
+    const numeroRes = h('input', { inputmode: 'numeric', value: c.numero_resolucion ?? '0' });
+    const guardar = async (e) => {
+      e.preventDefault();
+      const cambio = ambiente.value !== c.ambiente;
+      if (cambio && !(await confirmar('Cambiar de ambiente', `Pasar a «${datos.ambientes[ambiente.value]}». Los folios (CAF) son de cada ambiente: carga los de ${ambiente.value === 'produccion' ? 'producción' : 'certificación'}. La boleta electrónica se desactiva hasta que esté todo listo.`, { aceptar: 'Cambiar' }))) return;
+      const valores = Object.fromEntries(Object.entries(controles).map(([k, el]) => [k, el.value]));
+      ejecutar(() => api.put('/api/sii', {
+        ...valores, ambiente: ambiente.value, fecha_resolucion: fechaRes.value, numero_resolucion: numeroRes.value,
+        ...(cambio ? { activo: false } : {}),
+      }), 'Datos guardados.');
+    };
+    const campoSii = (k) => {
+      const [, etiqueta] = CAMPOS_EMISOR.find(([x]) => x === k);
+      const ayudas = {
+        actecos: 'El código de 6 dígitos de tu actividad en el SII (farmacia: 477310). Si son varios, sepáralos con coma.',
+        oficina_sii: 'Sale en el ticket bajo el recuadro: «S.I.I. - LA SERENA».',
+        direccion: 'La del local donde se emite.',
+      };
+      return campo(etiqueta, controles[k], ayudas[k]);
+    };
+    return h('form.panel', { onsubmit: guardar },
+      h('h3', 'Datos de la empresa'),
+      h('p.ayuda', 'Tal como están en el SII: salen en cada boleta y factura. Pueden ser distintos del nombre de fantasía del encabezado del ticket.'),
+      h('div.rejilla', CAMPOS_EMISOR.map(([k]) => campoSii(k))),
+      h('h3', { style: { marginTop: '1rem' } }, 'Ambiente y resolución'),
+      h('div.rejilla',
+        campo('Ambiente', ambiente),
+        campo('Fecha de resolución', fechaRes, 'En certificación, la fecha que te da el SII al postular; en producción, la de tu resolución.'),
+        campo('Número de resolución', numeroRes, 'En certificación es 0; en producción, el de tu resolución.')),
+      h('div.fila.fin', { style: { marginTop: '1rem' } }, h('button.btn.primario', { type: 'submit' }, 'Guardar datos')));
+  }
+
+  function panelFirma() {
+    const f = datos.firma;
+    const archivo = h('input', { type: 'file', accept: '.pfx,.p12' });
+    const clave = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'Contraseña de la firma' });
+    const subir = () => {
+      if (!archivo.files?.[0]) return aviso('Elige el archivo de la firma (.pfx o .p12).', 'error');
+      const d = new FormData();
+      d.append('archivo', archivo.files[0]);
+      d.append('clave', clave.value);
+      return ejecutar(() => api.subir('/api/sii/firma', d), (r) => `Firma de ${r.firma?.nombre || 'la empresa'} guardada.`);
+    };
+    return h('div.panel',
+      h('h3', 'Firma electrónica'),
+      h('p.ayuda', 'El certificado digital (.pfx o .p12) del dueño o de una persona autorizada ante el SII para emitir documentos. Queda guardado en Neji y su contraseña, cifrada.'),
+      f?.error ? h('div.error-modal', f.error) : null,
+      f && !f.error ? h('div.fila.entre',
+        h('div', h('b', f.nombre), h('div.suave', `RUT ${f.rut} · emitida por ${f.emisor || '—'}`),
+          h('div', { class: f.vigente ? 'suave' : 'rojo' }, `${f.vigente ? 'Vigente hasta' : 'Venció el'} ${fecha(f.vence, false)}`)),
+        h('button.btn.chico.peligro', { type: 'button', onclick: async () => {
+          if (!(await confirmar('Quitar firma', 'Sin la firma no se pueden emitir ni enviar documentos: la boleta electrónica se desactiva.', { aceptar: 'Quitar', peligro: true }))) return;
+          ejecutar(() => api.del('/api/sii/firma'), 'Firma quitada.');
+        } }, 'Quitar')) : null,
+      h('div.fila', { style: { marginTop: '.6rem' } }, archivo, clave,
+        h('button.btn', { type: 'button', onclick: subir }, f ? 'Cambiar firma' : 'Subir firma')));
+  }
+
+  function panelFolios() {
+    const archivo = h('input', { type: 'file', accept: '.xml', multiple: true });
+    const cargar = () => {
+      if (!archivo.files?.length) return aviso('Elige el archivo de folios (CAF, .xml) que descargaste del SII.', 'error');
+      const d = new FormData();
+      for (const x of archivo.files) d.append('archivo', x);
+      return ejecutar(() => api.subir('/api/sii/caf', d), 'Folios cargados.');
+    };
+    const cambiarInicio = async (f) => {
+      const r = await formulario({
+        titulo: `Primer folio a usar · ${f.nombre}`,
+        intro: h('p', `Si ya usaste algunos folios de este archivo en otro sistema, indica desde cuál sigue Neji (entre ${f.desde} y ${f.hasta}).`),
+        campos: [{ nombre: 'usar_desde', etiqueta: 'Folio', tipo: 'monto', valor: f.usar_desde, requerido: true, autofocus: true }],
+        alEnviar: (v) => api.put(`/api/sii/caf/${f.id}`, v),
+      });
+      if (r) { datos = r; pintar(); }
+    };
+    return h('div.panel',
+      h('h3', `Folios (CAF) · ${datos.ambientes[datos.config.ambiente]}`),
+      h('p.ayuda', 'Los folios se piden en sii.cl (Servicios online → Factura electrónica → Timbraje electrónico): descarga el archivo XML y cárgalo aquí. Uno por tipo de documento: boleta (39), boleta exenta (41), factura (33), factura exenta (34) y nota de crédito (61). Los de certificación no sirven en producción.'),
+      tabla([
+        { titulo: 'Documento', valor: (f) => `${f.nombre} (${f.tipo})` },
+        { titulo: 'Folios', valor: (f) => `${f.desde} al ${f.hasta}`, clase: 'num' },
+        { titulo: 'Desde', valor: (f) => f.usar_desde, clase: 'num' },
+        { titulo: 'Usados', valor: (f) => f.usados, clase: 'num' },
+        { titulo: 'Quedan', valor: (f) => h('span', { class: f.disponibles <= 20 ? 'rojo negrita' : '' }, numero(f.disponibles)), clase: 'num' },
+        { titulo: 'Autorizados', valor: (f) => fecha(f.fecha, false) },
+        { titulo: '', valor: (f) => h('div.fila.fin',
+          h('button.btn.chico', { type: 'button', onclick: () => cambiarInicio(f) }, 'Primer folio'),
+          f.usados ? null : h('button.btn.chico.peligro', { type: 'button', onclick: async () => {
+            if (!(await confirmar('Quitar folios', `¿Quitar los folios ${f.desde} al ${f.hasta}?`, { aceptar: 'Quitar', peligro: true }))) return;
+            ejecutar(() => api.del(`/api/sii/caf/${f.id}`), 'Folios quitados.');
+          } }, 'Quitar')) },
+      ], datos.folios, { vacio: 'Aún no hay folios cargados.' }),
+      h('div.fila', { style: { marginTop: '.6rem' } }, archivo, h('button.btn', { type: 'button', onclick: cargar }, 'Cargar folios')));
+  }
+
+  function panelEnvios() {
+    const e = datos.envios;
+    const n = (k) => e.documentos[k] || 0;
+    return h('div.panel',
+      h('h3', 'Envío al SII'),
+      h('p.ayuda', 'Neji envía solo, cada minuto, lo que se emite (aunque se corte internet: lo manda cuando vuelve). Las boletas van en grupos de hasta 50.'),
+      h('div.kpis',
+        h('div.kpi', h('div.titulo', 'Por enviar'), h('div.valor', numero(n('pendiente')))),
+        h('div.kpi', h('div.titulo', 'Esperando respuesta'), h('div.valor', numero(n('enviado')))),
+        h('div.kpi', h('div.titulo', 'Aceptados'), h('div.valor', numero(n('aceptado') + n('reparo')))),
+        h('div.kpi', { class: n('rechazado') ? 'destacado' : null }, h('div.titulo', 'Rechazados'), h('div.valor', numero(n('rechazado'))))),
+      e.error ? h('div.error-modal', `Último problema al enviar: ${e.error}`) : null,
+      h('div.fila.fin', { style: { marginTop: '.6rem' } },
+        h('button.btn', { type: 'button', disabled: !datos.firma || Boolean(datos.firma?.error), onclick: () => ejecutar(() => api.post('/api/sii/probar'), (r) => r.mensaje) }, 'Probar conexión'),
+        h('button.btn.primario', { type: 'button', disabled: datos.config.activo !== '1', onclick: () => ejecutar(() => api.post('/api/sii/enviar'), (r) => {
+          const x = r.resumen || {};
+          return x.errores?.length ? `Envío con problemas: ${x.errores[0]}` : `Listo: ${x.subidos || 0} sobres subidos, ${x.consultados || 0} consultados.`;
+        }) }, 'Enviar ahora')));
+  }
+
+  const listaDocumentos = h('div');
+  async function cargarDocumentos() {
+    let docs = [];
+    try {
+      docs = await api.get(`/api/sii/documentos${qs(filtroDocumentosSii)}`);
+    } catch (e) {
+      avisoError(e);
+    }
+    vaciar(listaDocumentos, tabla([
+      { titulo: 'Emitido', valor: (d) => fecha(d.emitido) },
+      { titulo: 'Documento', valor: (d) => `${d.nombre} N° ${d.folio}` },
+      { titulo: 'Venta', valor: (d) => (d.venta_folio ? `Folio ${d.venta_folio}` : ''), clase: 'num' },
+      { titulo: 'Receptor', valor: (d) => (d.rut_receptor === '66666666-6' ? '' : `${d.razon_receptor} · ${d.rut_receptor}`) },
+      { titulo: 'Total', valor: (d) => pesos(d.total), clase: 'num' },
+      { titulo: 'Estado', valor: (d) => h(`span.etiqueta${CLASE_ESTADO_SII[d.estado] ? '.' + CLASE_ESTADO_SII[d.estado] : ''}`, { title: d.glosa || '' }, d.estado_texto) },
+      { titulo: '', valor: (d) => h('button.btn.chico', { type: 'button', onclick: () => descargar(`/api/sii/documentos/${d.id}/xml`) }, 'XML') },
+    ], docs, { vacio: 'No hay documentos en estas fechas.' }));
+  }
+
+  function pintar() {
+    vaciar(zona,
+      panelEstado(),
+      panelEmisor(),
+      h('div.columnas', panelFirma(), panelEnvios()),
+      panelFolios(),
+      h('div.panel',
+        h('h3', 'Documentos emitidos'),
+        selectorFechas(filtroDocumentosSii, (f) => { filtroDocumentosSii = f; cargarDocumentos(); }),
+        h('div', { style: { height: '.6rem' } }),
+        listaDocumentos));
+    cargarDocumentos();
+  }
+  pintar();
+}
+
 export async function montar(contenedor, parametros = {}) {
   const admin = esAdmin();
   const opciones = admin
     ? [['negocio', 'Negocio'], ['ticket', 'Ticket'], ['opciones', 'Opciones'], ['usuarios', 'Usuarios'], ['cajas', 'Cajas'], ['terminal', 'Esta terminal'],
-      ['impresora', 'Impresora de tickets'], ['respaldos', 'Respaldos'], ['importar', 'Importar inventario (CSV)']]
+      ['impresora', 'Impresora de tickets'], ['respaldos', 'Respaldos'], ['importar', 'Importar inventario (CSV)'], ['sii', 'Boleta electrónica']]
     : [['terminal', 'Esta terminal'], ['impresora', 'Impresora de tickets']];
   let actual = opciones.some(([k]) => k === parametros.pestana) ? parametros.pestana : opciones[0][0];
   const barra = h('div');
@@ -861,6 +1074,7 @@ export async function montar(contenedor, parametros = {}) {
       else if (p === 'respaldos') await vistaRespaldos(zona);
       else if (p === 'importar') vaciar(zona, vistaImportar());
       else if (p === 'impresora') await vistaImpresora(zona);
+      else if (p === 'sii') await vistaSii(zona);
       else vaciar(zona, vistaTerminal());
     } catch (e) {
       avisoError(e);

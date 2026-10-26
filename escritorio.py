@@ -605,6 +605,15 @@ def prueba_de_humo(salida=None):
         pedir("/api/productos", 200, "application/json")      # con la sesión recién creada
         pedir("/api/recetario/formas", 200, "application/json", b"psula")
         pedir("/api/equipo", 200, "application/json", b"carpeta_datos")
+        pedir("/api/sii", 200, "application/json", b'"falta_modulo":""')
+
+        # Boleta electrónica: firma (cryptography), XML firmado y verificado (lxml) y timbre PDF417 empaquetados.
+        try:
+            from neji.sii.autoprueba import probar
+            resultados.append({"sii": probar(), "ok": True})
+        except Exception as e:  # noqa: BLE001
+            ok = False
+            resultados.append({"sii": f"{type(e).__name__}: {e}", "ok": False})
 
         if sys.platform == "win32":
             # Impresoras USB directas (SetupAPI) y lectores COM (pyserial) empaquetados y funcionando.

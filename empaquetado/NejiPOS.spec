@@ -9,6 +9,17 @@ import sys
 
 RAIZ = os.path.abspath(os.path.join(SPECPATH, ".."))
 
+
+def modulos_de(paquete):
+    """Todos los módulos de un paquete de Neji (leídos de las carpetas, sin importarlo)."""
+    nombres = []
+    for carpeta, subcarpetas, archivos in os.walk(os.path.join(RAIZ, *paquete.split("."))):
+        subcarpetas[:] = [x for x in subcarpetas if x != "__pycache__"]
+        base = os.path.relpath(carpeta, RAIZ).replace(os.sep, ".")
+        nombres += [base] + [f"{base}.{a[:-3]}" for a in archivos if a.endswith(".py") and a != "__init__.py"]
+    return nombres
+
+
 # Versión: NEJI_VERSION=1.2.0 (la compilación en GitHub la toma del tag vX.Y.Z)
 version = os.environ.get("NEJI_VERSION", "0.0.0")
 numeros = ([int(n) for n in re.findall(r"\d+", version)] + [0, 0, 0, 0])[:4]
@@ -50,10 +61,12 @@ a = Analysis(
         (os.path.join(RAIZ, "neji", "static"), os.path.join("neji", "static")),
         (os.path.join(RAIZ, "neji", "schema.sql"), "neji"),
         (archivo_version, "neji"),
+        (os.path.join(RAIZ, "neji", "sii", "pdf417", "LICENSE-pdf417gen.txt"), os.path.join("neji", "sii", "pdf417")),
     ],
     # pywebview trae su propio hook (DLL de WebView2 y su JS) y pyinstaller-hooks-contrib los de
-    # pythonnet (clr, clr_loader). pyserial elige su módulo según el sistema: se nombra el de Windows.
-    hiddenimports=["serial.tools.list_ports", "serial.tools.list_ports_windows"],
+    # pythonnet (clr, clr_loader), lxml y cryptography. pyserial elige su módulo según el sistema: se nombra
+    # el de Windows. La boleta electrónica (neji.sii) se importa al usarla: se nombran todos sus módulos.
+    hiddenimports=["serial.tools.list_ports", "serial.tools.list_ports_windows"] + modulos_de("neji.sii"),
     # CORAND.ERP (en el mismo repositorio) usa PyQt6 y pandas: no son parte de Neji POS.
     excludes=["tkinter", "pytest", "PyQt6", "PyQt5", "PySide6", "PySide2", "qtpy", "pyqtgraph",
               "pandas", "numpy", "openpyxl"],

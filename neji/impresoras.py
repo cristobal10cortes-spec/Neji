@@ -83,17 +83,33 @@ def _partir(texto, ancho):
     return [l.rstrip() for l in textwrap.wrap(texto, ancho, break_long_words=True, break_on_hyphens=False)] or [""]
 
 
+class Timbre:
+    """Renglón con el timbre electrónico del SII (el texto del TED, que se imprime como código PDF417)."""
+
+    def __init__(self, ted):
+        self.ted = str(ted or "")
+
+    def pixeles(self, ancho_puntos):
+        from .sii.pdf417 import pixeles
+
+        return pixeles(self.ted.encode("iso-8859-1", "replace"), ancho_puntos)
+
+
 def componer(bloques, columnas):
     """Bloques del ticket -> renglones (texto, negrita, grande) ya ajustados al ancho del papel.
 
-    Un renglón grande usa letra de doble ancho: le caben la mitad de columnas.
+    Un renglón grande usa letra de doble ancho: le caben la mitad de columnas. El timbre del SII queda como
+    un renglón Timbre (una imagen).
     """
     renglones = []
     for b in bloques or []:
         tipo = b.get("tipo")
         negrita, grande = bool(b.get("negrita")), bool(b.get("grande"))
         ancho = max(columnas // 2 if grande else columnas, 8)
-        if tipo == "linea":
+        if tipo == "timbre":
+            if b.get("ted"):
+                renglones.append(Timbre(b["ted"]))
+        elif tipo == "linea":
             renglones.append(("-" * columnas, False, False))
         elif tipo == "espacio":
             renglones += [("", False, False)] * max(1, min(int(b.get("lineas") or 1), 10))
@@ -140,13 +156,35 @@ def _codificar(texto, codec):
     return bytes(salida)
 
 
-def escpos(renglones, cortar=True, cajon=False, codigo="cp850", sin_chino=False):
-    """Renglones -> comandos ESC/POS listos para mandar a la impresora."""
+def imagen_escpos(filas, ancho_puntos):
+    """Imagen de 1 bit (filas de '0'/'1') -> GS v 0, centrada, en bandas (algunas impresoras no aguantan una
+    imagen alta de una sola vez)."""
+    if not filas:
+        return b""
+    izquierda = max(0, (ancho_puntos - len(filas[0])) // 2)
+    bytes_fila = (izquierda + len(filas[0]) + 7) // 8
+    datos = bytearray()
+    for inicio in range(0, len(filas), 128):
+        banda = filas[inicio:inicio + 128]
+        datos += GS + b"v0\x00" + bytes([bytes_fila % 256, bytes_fila // 256, len(banda) % 256, len(banda) // 256])
+        for fila in banda:
+            bits = ("0" * izquierda + fila).ljust(bytes_fila * 8, "0")
+            datos += int(bits, 2).to_bytes(bytes_fila, "big")
+    return bytes(datos)
+
+
+def escpos(renglones, cortar=True, cajon=False, codigo="cp850", sin_chino=False, ancho_puntos=576):
+    """Renglones -> comandos ESC/POS listos para mandar a la impresora (`ancho_puntos`: 576 en 80 mm, 384 en
+    58 mm; solo importa para centrar el timbre)."""
     codec, numero = CODIGOS.get(codigo, CODIGOS["cp850"])
     datos = bytearray(INICIAR + (SIN_CHINO if sin_chino else b"") + ESC + b"t" + bytes([numero]))
     if cajon:
         datos += ABRIR_CAJON
-    for texto, negrita, grande in renglones:
+    for renglon in renglones:
+        if isinstance(renglon, Timbre):
+            datos += b"\n" + imagen_escpos(renglon.pixeles(ancho_puntos), ancho_puntos) + b"\n"
+            continue
+        texto, negrita, grande = renglon
         if negrita or grande:
             datos += NEGRITA[0]
         if grande:
@@ -208,7 +246,8 @@ def imprimir_trabajo(trabajo):
     for copia in range(t["copias"] if renglones else 1):
         cajon = t["cajon"] and copia == 0
         if modo == "escpos" or not renglones:
-            mandar_escpos(t["impresora"], escpos(renglones, t["cortar"], cajon, t["codigo"], t["sin_chino"]),
+            mandar_escpos(t["impresora"], escpos(renglones, t["cortar"], cajon, t["codigo"], t["sin_chino"],
+                                                 t["papel_mm"] * 8),
                           usb_directo=t["usb_directo"])
         else:
             imprimir_windows(t["impresora"], renglones, t["columnas"], t["papel_mm"])
@@ -462,6 +501,7 @@ def imprimir_windows(nombre, renglones, columnas, papel_mm=72):
     gdi.TextOutW.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int, wintypes.LPCWSTR, ctypes.c_int]
     gdi.StartPage.argtypes = gdi.EndPage.argtypes = gdi.EndDoc.argtypes = gdi.DeleteDC.argtypes = [wintypes.HDC]
     gdi.SetBkMode.argtypes = [wintypes.HDC, ctypes.c_int]
+    gdi.PatBlt.argtypes = [wintypes.HDC] + [ctypes.c_int] * 4 + [wintypes.DWORD]
 
     class DOCINFOW(ctypes.Structure):
         _fields_ = [("cbSize", ctypes.c_int), ("lpszDocName", wintypes.LPCWSTR), ("lpszOutput", wintypes.LPCWSTR),
@@ -495,7 +535,25 @@ def imprimir_windows(nombre, renglones, columnas, papel_mm=72):
             gdi.StartPage(hdc)
             gdi.SetBkMode(hdc, 1)   # TRANSPARENT
             y = 0
-            for texto, negrita, grande in renglones:
+            for renglon in renglones:
+                if isinstance(renglon, Timbre):
+                    # Cada punto de la imagen (8 por mm) se dibuja con el tamaño que tiene en esta impresora.
+                    filas = renglon.pixeles(int(papel_mm * 8))
+                    escala = (px_por_mm or 8) / 8
+                    alto_img = int(len(filas) * escala) + interlinea
+                    if y + alto_img > alto_px:
+                        gdi.EndPage(hdc)
+                        gdi.StartPage(hdc)
+                        y = 0
+                    x0 = max(0, int((util - len(filas[0]) * escala) / 2))
+                    for i, fila in enumerate(filas):
+                        y_fila, alto_fila = y + int(i * escala), max(1, int((i + 1) * escala) - int(i * escala))
+                        for m in re.finditer("1+", fila):
+                            x1, x2 = x0 + int(m.start() * escala), x0 + int(m.end() * escala)
+                            gdi.PatBlt(hdc, x1, y_fila, max(1, x2 - x1), alto_fila, 0x00000042)   # BLACKNESS
+                    y += alto_img
+                    continue
+                texto, negrita, grande = renglon
                 paso = interlinea * (2 if grande else 1)
                 if y + paso > alto_px:
                     gdi.EndPage(hdc)
