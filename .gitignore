@@ -25,3 +25,7 @@ dist/
 pyarmor-reg*
 pyarmor-ci*
 pyarmor.bug.log
+
+# Licencias: la llave privada del vendedor nunca va al repositorio
+llave_privada*.pem
+NejiLicencias/

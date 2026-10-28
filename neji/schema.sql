@@ -8,6 +8,12 @@ CREATE TABLE IF NOT EXISTS config (
     valor TEXT
 );
 
+-- Licencia de Neji POS (ver neji/licencia.py): la activada, el comienzo de la prueba y la última fecha vista.
+CREATE TABLE IF NOT EXISTS licencia (
+    clave TEXT PRIMARY KEY,
+    valor TEXT
+);
+
 CREATE TABLE IF NOT EXISTS usuarios (
     id            INTEGER PRIMARY KEY,
     usuario       TEXT NOT NULL UNIQUE COLLATE NOCASE,

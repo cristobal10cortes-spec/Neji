@@ -77,6 +77,8 @@ h3 { font-size: 1.05rem; }
 .barra .btn { background: transparent; color: #fff; border-color: rgba(255,255,255,.35); }
 .barra .btn:hover { background: rgba(255,255,255,.1); }
 .sesion .caja { background: var(--acento); color: #1d1300; padding: .1rem .5rem; border-radius: 99px; font-weight: 700; }
+.franja-licencia { display: flex; align-items: center; justify-content: center; gap: .8rem; flex-wrap: wrap; padding: .3rem 1rem; font-size: .9rem; background: #fff3d6; color: #6b4600; border-bottom: 1px solid #f3d27a; }
+.franja-licencia.vencida { background: #fde2e1; color: #8f1d14; border-bottom-color: #f5b5b0; font-weight: 600; }
 main { flex: 1; padding: 1rem; width: 100%; max-width: 1500px; margin: 0 auto; }
 
 kbd {

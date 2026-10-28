@@ -560,6 +560,43 @@ sube el archivo (antes se guarda un respaldo de lo que había). O, a mano:
 
 ---
 
+## Licencias (para vender Neji POS)
+
+Neji POS se vende con **licencias de pago único** que crea quien lo vende, sin depender de ningún servicio:
+
+- **Caja**: sirve para una caja (la principal).
+- **Local (multicaja)**: sirve para varias cajas del mismo local, o para todas («sin límite»).
+- **Prueba**: sin licencia, Neji funciona completo **15 días** desde que se instala. Después se puede ver,
+  respaldar y configurar todo, pero no se registran ventas hasta activar la licencia. Una franja bajo la barra
+  avisa los días que quedan.
+
+**Cómo funciona.** Cada licencia es un texto (`NEJI-…`) firmado con tu **llave privada**, que solo está en tu
+computador. Neji trae tu **llave pública** y con ella comprueba que la licencia sea tuya, así que nadie puede
+inventar una. La licencia dice el cliente, el tipo, las cajas y el **código de equipo** del computador donde
+vale (el que tiene los datos; las otras cajas se conectan a él). Si se copia la base a otro computador, ahí no
+vale: hay que pedir otra.
+
+**Lo que haces tú (una vez):**
+
+1. En tu computador, con Python y `cryptography` instalados (`pip install cryptography`), abre
+   `herramientas/Generar licencias.bat` (o `python herramientas/licencias.py`).
+2. La primera vez crea tu llave: elige una contraseña y **respalda la carpeta `NejiLicencias`** de tu usuario
+   (por ejemplo, en un pendrive). Sin ella no puedes hacer licencias.
+3. El programa muestra tu **llave pública**: va en `neji/licencia.py` (`LLAVES_PUBLICAS`). Desde la versión
+   que la incluya, Neji empieza a pedir licencia. Mientras esa lista esté vacía no hay prueba ni licencias.
+
+**Por cada venta:**
+
+1. El cliente abre **Configuración → Licencia** y te manda el **código de equipo** (`XXXX-XXXX-XXXX-XXXX`).
+2. Abres el generador → «Crear una licencia»: cliente, RUT, tipo, cajas y ese código. Si lo dejas vacío, la
+   licencia sirve en cualquier computador; úsalo solo con clientes de confianza.
+3. Le mandas el texto `NEJI-…` (o el archivo de `NejiLicencias/licencias`). Él lo pega en
+   **Configuración → Licencia → Activar licencia**.
+
+Cada licencia queda anotada en `NejiLicencias/registro.csv`, con una nota para el precio o la forma de pago. La
+llave privada nunca va al repositorio (está en `.gitignore`). Para que sea difícil saltarse la revisión de
+licencia, conviene además compilar el código (ver «Código cifrado»).
+
 ## Para desarrolladores
 
 Tecnologías:

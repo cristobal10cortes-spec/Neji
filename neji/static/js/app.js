@@ -1,7 +1,7 @@
 // Arranque, navegación entre pantallas y atajos de teclado globales.
 
 import { api, cuandoSeCierreSesion } from './api.js';
-import { cargarSesion, esFarmacia, estado, nombreCaja, puede } from './estado.js';
+import { cargarSesion, esAdmin, esFarmacia, estado, nombreCaja, puede } from './estado.js';
 import { iniciarLector } from './lector.js';
 import { aviso, avisoError, cerrarModales, h, modalAbierto, teclaEnModal, vaciar } from './ui.js';
 import * as caja from './vistas/caja.js';
@@ -130,6 +130,20 @@ function marca() {
   return h('div.marca', primera, resto.length ? h('span', ` ${resto.join(' ')}`) : null);
 }
 
+/** Franja bajo la barra durante la prueba: cuántos días quedan, o que terminó (y no se puede vender). */
+function avisoLicencia() {
+  const l = estado.config?.licencia;
+  if (!l || !['prueba', 'vencida'].includes(l.estado)) return null;
+  const vencida = l.estado === 'vencida';
+  return h(`div.franja-licencia${vencida ? '.vencida' : ''}`, { role: vencida ? 'alert' : 'status' },
+    h('span', vencida
+      ? 'Terminaron los 15 días de prueba de Neji POS: puedes ver y respaldar todo, pero las ventas no se registran hasta activar la licencia.'
+      : `Prueba gratis de Neji POS: ${l.dias === 1 ? 'queda 1 día' : `quedan ${l.dias} días`}.`),
+    esAdmin()
+      ? h('button.btn.chico', { type: 'button', onclick: () => ir('config', { pestana: 'licencia' }) }, 'Activar licencia')
+      : h('span', 'La activa el administrador.'));
+}
+
 function dibujarAplicacion() {
   // En pantallas angostas (Windows al 125 %) los nombres largos se abrevian para que el menú quepa entero.
   nav = h('nav.nav', vistasPermitidas().map((v) => h('button', { type: 'button', title: v.titulo, dataset: { vista: v.clave }, onclick: () => ir(v.clave) },
@@ -143,6 +157,7 @@ function dibujarAplicacion() {
         h('span.caja', { title: `${nombreCaja()}: caja de esta terminal (se cambia en Configuración)` }, nombreCaja()),
         h('span.ocultar-movil.nombre-usuario', { title: `${estado.usuario.nombre} (${estado.usuario.rol})` }, `${estado.usuario.nombre} (${estado.usuario.rol})`),
         h('button.btn.chico', { type: 'button', onclick: salir, title: `Cerrar la sesión de ${estado.usuario.nombre}` }, 'Salir'))),
+    avisoLicencia(),
     principal);
   mostrarVista();
 }
