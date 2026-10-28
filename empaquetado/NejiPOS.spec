@@ -3,6 +3,11 @@
 #     python -m PyInstaller --noconfirm --clean empaquetado/NejiPOS.spec
 # Resultado: dist/NejiPOS/NejiPOS.exe + dist/NejiPOS/_internal/ (modo carpeta: arranca rápido,
 # menos alertas de antivirus y se actualiza reemplazando la carpeta; los datos van aparte).
+#
+# Código compilado: con NEJI_COMPILADO=<carpeta> (donde Nuitka dejó neji.*.pyd y escritorio.*.pyd, ver la
+# compilación en GitHub) el programa lleva esos módulos nativos en vez del código Python de Neji. Las
+# dependencias se siguen buscando en el código fuente; después se sacan los módulos de Neji del paquete.
+import glob
 import os
 import re
 import sys
@@ -54,9 +59,18 @@ archivo_version = os.path.join(carpeta_version, "version.txt")
 with open(archivo_version, "w", encoding="utf-8") as f:
     f.write(version)
 
+COMPILADO = os.environ.get("NEJI_COMPILADO")
+compilados = []
+if COMPILADO:
+    compilados = sorted(glob.glob(os.path.join(COMPILADO, "*.pyd")) + glob.glob(os.path.join(COMPILADO, "*.so")))
+    nombres = {os.path.basename(x).split(".")[0] for x in compilados}
+    if nombres != {"neji", "escritorio"}:
+        raise SystemExit(f"NEJI_COMPILADO debe tener neji y escritorio compilados; hay: {sorted(nombres)}")
+
 a = Analysis(
-    [os.path.join(RAIZ, "escritorio.py")],
+    [os.path.join(RAIZ, "empaquetado", "arranque.py") if COMPILADO else os.path.join(RAIZ, "escritorio.py")],
     pathex=[RAIZ],
+    binaries=[(x, ".") for x in compilados],
     datas=[
         (os.path.join(RAIZ, "neji", "static"), os.path.join("neji", "static")),
         (os.path.join(RAIZ, "neji", "schema.sql"), "neji"),
@@ -72,6 +86,12 @@ a = Analysis(
               "pandas", "numpy", "openpyxl"],
     noarchive=False,
 )
+if COMPILADO:
+    def es_de_neji(nombre):
+        return nombre in ("neji", "escritorio") or nombre.startswith("neji.")
+
+    a.pure = [m for m in a.pure if not es_de_neji(m[0])]
+    print("Código de Neji compilado:", ", ".join(os.path.basename(x) for x in compilados))
 pyz = PYZ(a.pure)
 
 exe = EXE(

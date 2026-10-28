@@ -51,39 +51,24 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "NEJI_VERSION=$v"
           Write-Host "Versión: $v"
 
-      # Con licencia de PyArmor (secreto PYARMOR_LICENCIA: el archivo pyarmor-ci-XXXX.zip en base64, ver README,
-      # «Código cifrado con PyArmor»), el código de Neji va cifrado dentro del programa. Sin ella, se compila igual
-      # que siempre (la versión de prueba de PyArmor no sirve para un programa del tamaño de Neji).
-      - name: Compilar NejiPOS.exe
-        env:
-          PYARMOR_LICENCIA: ${{ secrets.PYARMOR_LICENCIA }}
-          PYARMOR_OPCIONES: ${{ vars.PYARMOR_OPCIONES }}
+      # El código de Neji (el paquete neji y escritorio.py) se compila con Nuitka (gratis, licencia Apache) a módulos
+      # nativos .pyd: el programa no lleva el código Python de Neji, solo esos módulos (ver NejiPOS.spec).
+      - name: Compilar el código de Neji con Nuitka
         run: |
-          if (-not $env:PYARMOR_LICENCIA) {
-            Write-Host "::notice::Sin licencia de PyArmor (secreto PYARMOR_LICENCIA): el código no va cifrado."
-            python -m PyInstaller --noconfirm --clean empaquetado/NejiPOS.spec
-            if ($LASTEXITCODE -ne 0) { throw 'PyInstaller falló' }
-            Add-Content $env:GITHUB_STEP_SUMMARY 'Código **sin cifrar** (falta la licencia de PyArmor).'
-            exit 0
-          }
-          python -m pip install "pyarmor==9.2.8"
-          $licencia = Join-Path $env:RUNNER_TEMP 'pyarmor-ci.zip'
-          [IO.File]::WriteAllBytes($licencia, [Convert]::FromBase64String($env:PYARMOR_LICENCIA))
-          try {
-            pyarmor reg $licencia
-            if ($LASTEXITCODE -ne 0) { throw 'La licencia de PyArmor no se pudo registrar' }
-          } finally { Remove-Item $licencia -ErrorAction SilentlyContinue }
-          pyarmor --version
-          # Cifra escritorio.py y todo el paquete neji y arma el programa con la receta de siempre (PyArmor le agrega
-          # al .spec el cambio de los módulos por sus versiones cifradas y su runtime).
-          $opciones = @()
-          if ($env:PYARMOR_OPCIONES) { $opciones = $env:PYARMOR_OPCIONES -split '\s+' | Where-Object { $_ } }
-          pyarmor gen @opciones --pack empaquetado/NejiPOS.spec -r escritorio.py neji
-          if ($LASTEXITCODE -ne 0) { throw 'PyArmor no pudo cifrar y compilar el programa' }
-          if (-not (Get-ChildItem 'dist\NejiPOS\_internal' -Recurse -Filter 'pyarmor_runtime*' | Select-Object -First 1)) {
-            throw 'El programa compilado no trae el runtime de PyArmor'
-          }
-          Add-Content $env:GITHUB_STEP_SUMMARY 'Código **cifrado con PyArmor**.'
+          python -m pip install "nuitka==4.2.2"
+          $salida = Join-Path (Get-Location) 'build\nuitka'
+          python -m nuitka --module neji --include-package=neji --output-dir="$salida" --remove-output --no-pyi-file --msvc=latest --assume-yes-for-downloads
+          if ($LASTEXITCODE -ne 0) { throw 'Nuitka no pudo compilar el paquete neji' }
+          python -m nuitka --module escritorio.py --output-dir="$salida" --remove-output --no-pyi-file --msvc=latest --assume-yes-for-downloads
+          if ($LASTEXITCODE -ne 0) { throw 'Nuitka no pudo compilar escritorio.py' }
+          Get-ChildItem $salida -Filter *.pyd | Format-Table Name, Length
+          Add-Content -Path $env:GITHUB_ENV -Value "NEJI_COMPILADO=$salida"
+
+      - name: Compilar NejiPOS.exe
+        run: |
+          python -m PyInstaller --noconfirm --clean empaquetado/NejiPOS.spec
+          if ($LASTEXITCODE -ne 0) { throw 'PyInstaller falló' }
+          Add-Content $env:GITHUB_STEP_SUMMARY 'Código de Neji **compilado con Nuitka** (módulos nativos, sin el código Python).'
 
       - name: Prueba sin ventana (servidor, archivos y motor WebView2 empaquetado)
         timeout-minutes: 5
@@ -95,6 +80,8 @@ jobs:
           # La versión que muestra el programa (ventana, entrada y Configuración) es la de esta compilación.
           $v = (Get-Content $informe -Raw | ConvertFrom-Json).version
           if ($v -ne $env:NEJI_VERSION) { throw "El programa dice la versión '$v' y debía decir '$env:NEJI_VERSION'" }
+          # Y corre con el código compilado (Nuitka), no con el código Python.
+          if (-not (Get-Content $informe -Raw | ConvertFrom-Json).codigo_compilado) { throw 'El programa no usa el código compilado con Nuitka' }
 
       - name: Prueba de impresoras (una impresora de tickets de prueba que escribe en un archivo)
         timeout-minutes: 6
@@ -220,6 +207,10 @@ jobs:
         run: |
           if (Test-Path 'dist\NejiPOS\datos') { throw 'El paquete no debe llevar datos' }
           if (-not (Test-Path 'dist\NejiPOS\NejiPOS.exe.config')) { throw 'Falta NejiPOS.exe.config junto al .exe' }
+          foreach ($modulo in 'neji', 'escritorio') {
+            if (-not (Get-ChildItem 'dist\NejiPOS\_internal' -Filter "$modulo.*.pyd")) { throw "Falta el módulo compilado $modulo" }
+          }
+          if (Get-ChildItem 'dist\NejiPOS\_internal\neji' -Recurse -Include *.py, *.pyc) { throw 'El paquete lleva código Python de Neji' }
           "{0:N1} MB" -f ((Get-ChildItem dist\NejiPOS -Recurse | Measure-Object Length -Sum).Sum / 1MB)
 
       - name: Instalador (Inno Setup)

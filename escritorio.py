@@ -676,8 +676,16 @@ def prueba_de_humo(salida=None):
         shutil.rmtree(datos, ignore_errors=True)
 
     return informar(salida, {"ok": ok, "version": VERSION, "congelado": congelado(),
+                             "codigo_compilado": codigo_compilado(),
                              "static_folder": app.static_folder if app else None,
                              "resultados": resultados})
+
+
+def codigo_compilado():
+    """True si escritorio y el paquete neji van compilados con Nuitka (módulos nativos, sin el código Python)."""
+    import neji
+
+    return "__compiled__" in globals() and "__compiled__" in vars(neji)
 
 
 VERIFICAR_VENTANA = """
