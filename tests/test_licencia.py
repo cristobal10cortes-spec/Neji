@@ -199,3 +199,43 @@ def test_generador_crea_licencias_que_neji_acepta(generador, tmp_path, monkeypat
     assert licencia.leer(nueva)["cliente"] == "Minimarket Don Pepe"
     assert generador.main(["ver", nueva]) == 0
     assert "Minimarket Don Pepe" in capsys.readouterr().out
+
+
+def test_el_generador_solo_necesita_cryptography(tmp_path):
+    """En el computador del vendedor basta con `pip install cryptography`: el generador no carga Flask."""
+    import os
+    import subprocess
+    import sys
+
+    ruta = Path(__file__).resolve().parent.parent / "herramientas" / "licencias.py"
+    codigo = ("import runpy, sys; sys.modules['flask'] = None; sys.argv = ['licencias.py', 'llave']; "
+              f"runpy.run_path({str(ruta)!r}, run_name='__main__')")
+    entorno = {**os.environ, "NEJI_LICENCIAS_CARPETA": str(tmp_path), "NEJI_LICENCIAS_CLAVE": "secreta1"}
+    r = subprocess.run([sys.executable, "-I", "-c", codigo], capture_output=True, text=True, env=entorno,
+                       cwd=tmp_path, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Tu llave PÚBLICA" in r.stdout and (tmp_path / "llave_privada.pem").exists()
+
+
+def test_la_contrasena_se_ve_con_asteriscos_en_windows(generador, monkeypatch, capsys):
+    import sys
+    import types
+
+    teclas = iter("ab\bc\xe0Kd\r")                # a, b, borrar, c, una flecha, d, Enter
+    monkeypatch.setitem(sys.modules, "msvcrt", types.SimpleNamespace(getwch=lambda: next(teclas)))
+    monkeypatch.setattr(generador.sys, "platform", "win32")
+    monkeypatch.setattr(generador.sys, "stdin", types.SimpleNamespace(isatty=lambda: True))
+    assert generador._leer_clave("Contraseña de tu llave: ") == "acd"
+    assert capsys.readouterr().out == "Contraseña de tu llave: **\b \b**\n"
+
+
+def test_las_llaves_del_vendedor_son_validas():
+    """Las llaves públicas que lleva Neji son llaves Ed25519 de 32 bytes (si una se copió mal, ninguna licencia
+    firmada con ella serviría)."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    assert licencia.LLAVES_PUBLICAS
+    for llave in licencia.LLAVES_PUBLICAS:
+        crudo = base64.b64decode(llave, validate=True)
+        assert len(crudo) == 32
+        Ed25519PublicKey.from_public_bytes(crudo)

@@ -25,10 +25,18 @@ import getpass
 import os
 import re
 import sys
+import types
 from datetime import date
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+RAIZ = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(RAIZ))
+# De Neji solo se usan licencia.py, chile.py y validar.py, que no necesitan nada más: se cargan sin pasar por
+# neji/__init__.py (el servidor, con Flask), así basta con instalar cryptography.
+if "neji" not in sys.modules:
+    paquete = types.ModuleType("neji")
+    paquete.__path__ = [str(RAIZ / "neji")]
+    sys.modules["neji"] = paquete
 
 try:
     from cryptography.hazmat.primitives import serialization
@@ -161,19 +169,46 @@ def _preguntar(texto, defecto=""):
     return respuesta or defecto
 
 
+def _leer_clave(texto):
+    """Pide la contraseña sin mostrarla. En la ventana de Windows cada letra se ve como un asterisco (sin nada en
+    pantalla parece que el teclado no funcionara)."""
+    if sys.platform != "win32" or not sys.stdin or not sys.stdin.isatty():
+        return getpass.getpass(texto)
+    import msvcrt
+
+    print(texto, end="", flush=True)
+    letras = []
+    while True:
+        letra = msvcrt.getwch()
+        if letra in ("\r", "\n"):
+            print()
+            return "".join(letras)
+        if letra == "\x03":                       # Ctrl+C
+            raise KeyboardInterrupt
+        if letra in ("\x00", "\xe0"):             # flechas y teclas de función: se ignoran
+            msvcrt.getwch()
+        elif letra == "\b":
+            if letras:
+                letras.pop()
+                print("\b \b", end="", flush=True)
+        else:
+            letras.append(letra)
+            print("*", end="", flush=True)
+
+
 def _clave(confirmar=False):
     clave = os.environ.get("NEJI_LICENCIAS_CLAVE")
     if clave:
         return clave
-    clave = getpass.getpass("Contraseña de tu llave: ")
-    if confirmar and getpass.getpass("Repite la contraseña: ") != clave:
+    clave = _leer_clave("Contraseña de tu llave: ")
+    if confirmar and _leer_clave("Repite la contraseña: ") != clave:
         raise Error("Las contraseñas no coinciden.")
     return clave
 
 
 def accion_llave():
     print("Se va a crear tu llave para firmar licencias. Elige una contraseña (mínimo 6 letras) y no la olvides:")
-    print("sin ella no se pueden hacer licencias.\n")
+    print("sin ella no se pueden hacer licencias. Escríbela y presiona Enter.\n")
     publica = crear_llave(_clave(confirmar=True))
     print(f"\nLlave creada en {carpeta() / ARCHIVO_LLAVE}")
     print("Respalda esa carpeta (por ejemplo, en un pendrive) y no la compartas con nadie.\n")

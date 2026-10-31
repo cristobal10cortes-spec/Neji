@@ -22,7 +22,9 @@ from .validar import ErrorNegocio
 
 # Llaves públicas del vendedor (la que imprime `python herramientas/licencias.py llave`), en base64. Van en el
 # código y no en un archivo aparte, para que no se puedan cambiar por otras junto al programa.
-LLAVES_PUBLICAS = []
+LLAVES_PUBLICAS = [
+    "00QZU6AS9Jl2rVW5OqkS+05S1s5ridkzoVDZfFg6V6w=",     # Cristóbal (NejiLicencias, creada el 31-10-2026)
+]
 
 DIAS_PRUEBA = 15
 PREFIJO = "NEJI-"
