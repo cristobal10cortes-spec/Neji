@@ -25,10 +25,18 @@ import getpass
 import os
 import re
 import sys
+import types
 from datetime import date
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+RAIZ = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(RAIZ))
+# De Neji solo se usan licencia.py, chile.py y validar.py, que no necesitan nada más: se cargan sin pasar por
+# neji/__init__.py (el servidor, con Flask), así basta con instalar cryptography.
+if "neji" not in sys.modules:
+    paquete = types.ModuleType("neji")
+    paquete.__path__ = [str(RAIZ / "neji")]
+    sys.modules["neji"] = paquete
 
 try:
     from cryptography.hazmat.primitives import serialization

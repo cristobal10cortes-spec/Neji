@@ -199,3 +199,19 @@ def test_generador_crea_licencias_que_neji_acepta(generador, tmp_path, monkeypat
     assert licencia.leer(nueva)["cliente"] == "Minimarket Don Pepe"
     assert generador.main(["ver", nueva]) == 0
     assert "Minimarket Don Pepe" in capsys.readouterr().out
+
+
+def test_el_generador_solo_necesita_cryptography(tmp_path):
+    """En el computador del vendedor basta con `pip install cryptography`: el generador no carga Flask."""
+    import os
+    import subprocess
+    import sys
+
+    ruta = Path(__file__).resolve().parent.parent / "herramientas" / "licencias.py"
+    codigo = ("import runpy, sys; sys.modules['flask'] = None; sys.argv = ['licencias.py', 'llave']; "
+              f"runpy.run_path({str(ruta)!r}, run_name='__main__')")
+    entorno = {**os.environ, "NEJI_LICENCIAS_CARPETA": str(tmp_path), "NEJI_LICENCIAS_CLAVE": "secreta1"}
+    r = subprocess.run([sys.executable, "-I", "-c", codigo], capture_output=True, text=True, env=entorno,
+                       cwd=tmp_path, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Tu llave PÚBLICA" in r.stdout and (tmp_path / "llave_privada.pem").exists()
