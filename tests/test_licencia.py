@@ -227,3 +227,15 @@ def test_la_contrasena_se_ve_con_asteriscos_en_windows(generador, monkeypatch, c
     monkeypatch.setattr(generador.sys, "stdin", types.SimpleNamespace(isatty=lambda: True))
     assert generador._leer_clave("Contraseña de tu llave: ") == "acd"
     assert capsys.readouterr().out == "Contraseña de tu llave: **\b \b**\n"
+
+
+def test_las_llaves_del_vendedor_son_validas():
+    """Las llaves públicas que lleva Neji son llaves Ed25519 de 32 bytes (si una se copió mal, ninguna licencia
+    firmada con ella serviría)."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    assert licencia.LLAVES_PUBLICAS
+    for llave in licencia.LLAVES_PUBLICAS:
+        crudo = base64.b64decode(llave, validate=True)
+        assert len(crudo) == 32
+        Ed25519PublicKey.from_public_bytes(crudo)
