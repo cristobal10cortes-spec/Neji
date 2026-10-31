@@ -215,3 +215,15 @@ def test_el_generador_solo_necesita_cryptography(tmp_path):
                        cwd=tmp_path, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "Tu llave PÚBLICA" in r.stdout and (tmp_path / "llave_privada.pem").exists()
+
+
+def test_la_contrasena_se_ve_con_asteriscos_en_windows(generador, monkeypatch, capsys):
+    import sys
+    import types
+
+    teclas = iter("ab\bc\xe0Kd\r")                # a, b, borrar, c, una flecha, d, Enter
+    monkeypatch.setitem(sys.modules, "msvcrt", types.SimpleNamespace(getwch=lambda: next(teclas)))
+    monkeypatch.setattr(generador.sys, "platform", "win32")
+    monkeypatch.setattr(generador.sys, "stdin", types.SimpleNamespace(isatty=lambda: True))
+    assert generador._leer_clave("Contraseña de tu llave: ") == "acd"
+    assert capsys.readouterr().out == "Contraseña de tu llave: **\b \b**\n"
