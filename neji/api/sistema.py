@@ -9,7 +9,7 @@ import time
 from flask import current_app, jsonify, request, send_from_directory, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from .. import equipo, respaldos
+from .. import equipo, licencia, respaldos
 from ..auth import PERMISOS, con_permiso, leer_permisos, permisos_de, solo_admin, usuario_actual
 from ..chile import formatear_rut, validar_rut
 from ..db import CONFIG_POR_DEFECTO, ahora, cerrar_db, filas, get_db, leer_config, transaccion
@@ -222,7 +222,31 @@ def ver_config():
     # Lo que la caja necesita saber de la boleta electrónica (lo demás está en /api/sii, solo administrador).
     config["sii_activo"] = "1" if sii.activo(con) else "0"
     config["sii_ambiente"] = sii.ambiente_emision(sii.leer(con))
+    config["licencia"] = licencia.resumen(con)
     return jsonify(config)
+
+
+# --- Licencia ------------------------------------------------------------------
+
+@bp.get("/licencia")
+@solo_admin
+def ver_licencia():
+    con = get_db()
+    return jsonify(licencia.estado(con) | {"codigo_equipo": licencia.codigo_equipo(),
+                                           "control": licencia.control_activo(),
+                                           "dias_prueba": licencia.DIAS_PRUEBA, "tipos": licencia.TIPOS})
+
+
+@bp.put("/licencia")
+@solo_admin
+def activar_licencia():
+    texto_licencia = str(datos_json().get("texto") or "")
+    if len(texto_licencia) > 5000:
+        raise ErrorNegocio("Eso no es una licencia de Neji POS.")
+    con = get_db()
+    with transaccion(con):
+        licencia.activar(con, texto_licencia)
+    return ver_licencia()
 
 
 @bp.put("/config")
@@ -372,6 +396,7 @@ def crear_caja():
     with transaccion(con):
         if con.execute("SELECT 1 FROM cajas WHERE nombre = ?", (nombre,)).fetchone():
             raise ErrorNegocio("Ya existe una caja con ese nombre.")
+        licencia.exigir_cupo_caja(con)
         nuevo = con.execute("INSERT INTO cajas (nombre) VALUES (?)", (nombre,)).lastrowid
     return jsonify(id=nuevo), 201
 
@@ -397,6 +422,8 @@ def editar_caja(caja_id):
             raise ErrorNegocio("Para cambiar la caja principal, marca como principal la otra caja.")
         if principal and not activa:
             raise ErrorNegocio("La caja principal no se puede desactivar.")
+        if activa and not caja["activa"]:
+            licencia.exigir_cupo_caja(con)
         if principal and not caja["principal"]:
             con.execute("UPDATE cajas SET principal = 0")   # solo una caja es la principal
         con.execute("UPDATE cajas SET nombre = ?, activa = ?, principal = ? WHERE id = ?",

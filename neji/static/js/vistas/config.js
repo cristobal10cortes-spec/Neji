@@ -1325,12 +1325,65 @@ async function vistaCertificacion(zona) {
   pintar();
 }
 
+// --- Licencia --------------------------------------------------------------------------------------------------
+
+const ESTADO_LICENCIA = { activa: ['Activada', 'ok'], vencida: ['La prueba terminó', 'mal'], libre: ['Sin control de licencias', ''] };
+
+async function vistaLicencia(zona) {
+  const d = await api.get('/api/licencia');
+  const [titulo, clase] = d.estado === 'prueba' ? [`Prueba: quedan ${d.dias} ${d.dias === 1 ? 'día' : 'días'}`, 'aviso'] : ESTADO_LICENCIA[d.estado];
+  const codigo = h('input.mono', { value: d.codigo_equipo, readonly: true, size: 22, 'aria-label': 'Código de este equipo', onfocus: (e) => e.target.select() });
+  const copiar = async () => {
+    codigo.select();
+    try {
+      await navigator.clipboard.writeText(d.codigo_equipo);
+    } catch {
+      if (!document.execCommand('copy')) return aviso('No se pudo copiar: selecciona el código y cópialo con Ctrl+C.', 'error');
+    }
+    return aviso('Código copiado.', 'ok');
+  };
+  const licencia = h('textarea', { rows: 4, placeholder: 'Pega aquí tu licencia (empieza con NEJI-)', spellcheck: 'false', autocomplete: 'off' });
+  const activar = async () => {
+    if (!licencia.value.trim()) return aviso('Pega la licencia que te mandaron.', 'error');
+    try {
+      await api.put('/api/licencia', { texto: licencia.value });
+    } catch (e) {
+      return avisoError(e);
+    }
+    aviso('Licencia activada. ¡Gracias por usar Neji POS!', 'ok', 6000);
+    return recargarConfiguracion({ pestana: 'licencia' });   // la barra y la caja se enteran
+  };
+  const cajas = d.tipo === 'local' ? (d.cajas ? ` · hasta ${d.cajas} cajas` : ' · cajas sin límite') : '';
+  vaciar(zona,
+    h('div.panel',
+      h('div.fila.entre', h('h3', 'Licencia de Neji POS'), h(`span.etiqueta${clase ? '.' + clase : ''}`, titulo)),
+      d.estado === 'activa' ? [
+        h('p', h('b', d.cliente), d.rut ? ` · RUT ${d.rut}` : ''),
+        h('p', `${d.tipo_texto}${cajas}${d.numero ? ` · Licencia N° ${d.numero}` : ''}${d.emitida ? ` del ${fecha(d.emitida, false)}` : ''}`),
+        h('p.ayuda', 'Pago único: la licencia no vence.'),
+      ] : null,
+      d.estado === 'prueba' ? h('p', `Estás usando la prueba gratis de ${d.dias_prueba} días, que termina el ${fecha(d.vence, false)}. Después puedes ver, respaldar y configurar todo, pero no vender hasta activar la licencia.`) : null,
+      d.estado === 'vencida' ? h('p.rojo', 'Terminaron los días de prueba: activa la licencia para seguir vendiendo. Tus datos están intactos.') : null,
+      d.error ? h('div.error-modal', d.error) : null,
+      d.estado === 'libre' ? h('p.ayuda', 'Esta versión de Neji POS no pide licencia.') : null),
+    d.control ? h('div.panel',
+      h('h3', d.estado === 'activa' ? 'Cambiar la licencia' : 'Activar la licencia'),
+      h('ol.pasos',
+        h('li', 'Envíale el código de este equipo a quien te vende Neji POS:',
+          h('div.fila', { style: { margin: '.4rem 0' } }, codigo, h('button.btn.chico', { type: 'button', onclick: copiar }, 'Copiar'))),
+        h('li', 'Te mandará tu licencia: un texto que empieza con «NEJI-».'),
+        h('li', 'Pégalo aquí abajo y pulsa «Activar licencia».')),
+      h('p.ayuda', 'Las licencias son de pago único. «Caja» sirve para una caja; «Local (multicaja)», para varias o todas las cajas del local. Con varias cajas conectadas, el código es el del computador principal, el que tiene los datos.'),
+      licencia,
+      h('div.fila.fin', { style: { marginTop: '.6rem' } }, h('button.btn.primario', { type: 'button', onclick: activar }, 'Activar licencia'))) : null);
+}
+
 export async function montar(contenedor, parametros = {}) {
   const admin = esAdmin();
   const opciones = admin
     ? [['negocio', 'Negocio'], ['ticket', 'Ticket'], ['opciones', 'Opciones'], ['usuarios', 'Usuarios'], ['cajas', 'Cajas'], ['terminal', 'Esta terminal'],
       ['impresora', 'Impresora de tickets'], ['respaldos', 'Respaldos'], ['importar', 'Importar inventario'], ['sii', 'Boleta electrónica'],
-      ['certificacion', 'Certificación SII']]
+      ['certificacion', 'Certificación SII'], ['licencia', 'Licencia']]
     : [['terminal', 'Esta terminal'], ['impresora', 'Impresora de tickets']];
   let actual = opciones.some(([k]) => k === parametros.pestana) ? parametros.pestana : opciones[0][0];
   const barra = h('div');
@@ -1353,6 +1406,7 @@ export async function montar(contenedor, parametros = {}) {
       else if (p === 'impresora') await vistaImpresora(zona);
       else if (p === 'sii') await vistaSii(zona);
       else if (p === 'certificacion') await vistaCertificacion(zona);
+      else if (p === 'licencia') await vistaLicencia(zona);
       else vaciar(zona, vistaTerminal());
     } catch (e) {
       avisoError(e);

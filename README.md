@@ -560,6 +560,43 @@ sube el archivo (antes se guarda un respaldo de lo que había). O, a mano:
 
 ---
 
+## Licencias (para vender Neji POS)
+
+Neji POS se vende con **licencias de pago único** que crea quien lo vende, sin depender de ningún servicio:
+
+- **Caja**: sirve para una caja (la principal).
+- **Local (multicaja)**: sirve para varias cajas del mismo local, o para todas («sin límite»).
+- **Prueba**: sin licencia, Neji funciona completo **15 días** desde que se instala. Después se puede ver,
+  respaldar y configurar todo, pero no se registran ventas hasta activar la licencia. Una franja bajo la barra
+  avisa los días que quedan.
+
+**Cómo funciona.** Cada licencia es un texto (`NEJI-…`) firmado con tu **llave privada**, que solo está en tu
+computador. Neji trae tu **llave pública** y con ella comprueba que la licencia sea tuya, así que nadie puede
+inventar una. La licencia dice el cliente, el tipo, las cajas y el **código de equipo** del computador donde
+vale (el que tiene los datos; las otras cajas se conectan a él). Si se copia la base a otro computador, ahí no
+vale: hay que pedir otra.
+
+**Lo que haces tú (una vez):**
+
+1. En tu computador, con Python y `cryptography` instalados (`pip install cryptography`), abre
+   `herramientas/Generar licencias.bat` (o `python herramientas/licencias.py`).
+2. La primera vez crea tu llave: elige una contraseña y **respalda la carpeta `NejiLicencias`** de tu usuario
+   (por ejemplo, en un pendrive). Sin ella no puedes hacer licencias.
+3. El programa muestra tu **llave pública**: va en `neji/licencia.py` (`LLAVES_PUBLICAS`). Desde la versión
+   que la incluya, Neji empieza a pedir licencia. Mientras esa lista esté vacía no hay prueba ni licencias.
+
+**Por cada venta:**
+
+1. El cliente abre **Configuración → Licencia** y te manda el **código de equipo** (`XXXX-XXXX-XXXX-XXXX`).
+2. Abres el generador → «Crear una licencia»: cliente, RUT, tipo, cajas y ese código. Si lo dejas vacío, la
+   licencia sirve en cualquier computador; úsalo solo con clientes de confianza.
+3. Le mandas el texto `NEJI-…` (o el archivo de `NejiLicencias/licencias`). Él lo pega en
+   **Configuración → Licencia → Activar licencia**.
+
+Cada licencia queda anotada en `NejiLicencias/registro.csv`, con una nota para el precio o la forma de pago. La
+llave privada nunca va al repositorio (está en `.gitignore`). Para que sea difícil saltarse la revisión de
+licencia, el instalador lleva el código compilado (ver «Código compilado con Nuitka»).
+
 ## Para desarrolladores
 
 Tecnologías:
@@ -611,38 +648,33 @@ iscc empaquetado\NejiPOS.iss                # instalador (Inno Setup 6) -> dist\
                                             # (antes, deja build\MicrosoftEdgeWebview2Setup.exe)
 ```
 
-### Código cifrado con PyArmor (opcional)
+### Código compilado con Nuitka
 
-Dentro de `NejiPOS.exe` el código va compilado, pero un entendido puede sacarlo y leerlo. Con
-[PyArmor](https://pyarmor.readthedocs.io) el código de Neji (`escritorio.py` y todo `neji/`) va
-**cifrado**: quien abra el programa ve un bloque ilegible en vez del código, y el programa funciona
-igual. El workflow de Windows ya lo hace solo si encuentra la licencia; si no, compila como siempre (y
-lo dice en el resumen de la compilación).
+Dentro de `NejiPOS.exe` no va el código Python de Neji: la compilación de GitHub lo pasa con
+[Nuitka](https://nuitka.net) (gratis, licencia Apache) a **código de máquina**. El paquete `neji` y
+`escritorio.py` quedan como dos módulos nativos (`neji.*.pyd` y `escritorio.*.pyd`), y el programa solo
+lleva esos módulos y un arranque de tres líneas (`empaquetado/arranque.py`). Quien abra el programa no
+encuentra el código fuente, y la revisión de licencias no se puede borrar editando un archivo.
 
-Qué se necesita:
+- La compilación prueba el programa ya compilado: la prueba sin ventana informa `"codigo_compilado": true`,
+  y la compilación falla si en el paquete queda algún `.py` o `.pyc` de Neji.
+- Para hacerlo en tu computador (Windows, con Visual Studio Build Tools para C):
 
-1. **La licencia de PyArmor.** Para un programa que se usa en un negocio hace falta una licencia
-   pagada (Pyarmor Basic alcanza; se compra en el sitio de PyArmor o con `pyarmor reg --buy`). La
-   versión de prueba gratis no sirve: es solo para uso no comercial y no cifra archivos del tamaño de
-   los de Neji (responde «out of license»).
-2. **Registrarla una vez en tu computador** con el código que llega por correo:
-   `pip install pyarmor` y `pyarmor reg -p "Neji POS" pyarmor-regcode-XXXX.txt`. Queda un archivo
-   `pyarmor-regfile-XXXX.zip`: guárdalo bien (es la licencia).
-3. **Pedir el archivo para GitHub** (la compilación corre en un equipo que cambia cada vez):
-   `pyarmor reg -C pyarmor-regfile-XXXX.zip`, que deja un `pyarmor-ci-XXXX.zip`.
-4. **Guardarlo como secreto del repositorio**: en GitHub → *Settings → Secrets and variables →
-   Actions → New repository secret*, con el nombre `PYARMOR_LICENCIA` y como valor el archivo en
-   base64. En PowerShell:
-   `[Convert]::ToBase64String([IO.File]::ReadAllBytes("pyarmor-ci-XXXX.zip")) | Set-Clipboard`
-   (y pegar). Desde la siguiente compilación el código sale cifrado.
-5. Opcional: la variable de repositorio `PYARMOR_OPCIONES` agrega opciones de `pyarmor gen`, por
-   ejemplo `--mix-str` para cifrar también los textos (según lo que permita tu licencia).
+  ```powershell
+  py -3.12 -m pip install nuitka==4.2.2
+  py -3.12 -m nuitka --module neji --include-package=neji --output-dir=build\nuitka --remove-output --no-pyi-file
+  py -3.12 -m nuitka --module escritorio.py --output-dir=build\nuitka --remove-output --no-pyi-file
+  $env:NEJI_COMPILADO = "$PWD\build\nuitka"
+  py -3.12 -m PyInstaller --noconfirm --clean empaquetado\NejiPOS.spec
+  ```
 
-Bueno saber: el cifrado hace mucho más difícil leer o copiar el código, pero ningún cifrado de un
-programa que corre en el computador del usuario es imposible de romper. Lo realmente delicado (la
-firma electrónica, las contraseñas) no depende de esto: está protegido aparte (ver *Usuarios y
-seguridad*). Algunos antivirus desconfían de los programas cifrados con PyArmor: si pasa, se puede
-reportar el falso positivo al antivirus. Y el repositorio debe seguir siendo privado.
+  Sin `NEJI_COMPILADO`, PyInstaller arma el programa con el código Python, como antes.
+
+Bueno saber: compilar a código de máquina hace muy difícil leer o copiar el programa, pero ninguna
+protección de un programa que corre en el computador del usuario es imposible de romper. Lo realmente
+delicado (la firma electrónica, las contraseñas) está protegido aparte (ver *Usuarios y seguridad*). Las
+pantallas (los archivos JavaScript de `neji/static`) siempre se pueden ver, porque la ventana las lee. El
+repositorio debe seguir siendo privado.
 
 Para agregar una función nueva:
 

@@ -4,6 +4,7 @@ import json
 import logging
 from decimal import Decimal
 
+from .. import licencia
 from ..auth import tiene_permiso
 from ..chile import desglosar_iva, redondear, redondear_efectivo
 from ..db import ahora, fila, filas, leer_config, transaccion
@@ -239,6 +240,7 @@ def registrar_venta(con, datos, usuario, avisos=None):
         raise ErrorNegocio("El documento debe ser boleta o factura.")
     with transaccion(con):
         exigir_caja(con, caja_id)
+        licencia.exigir_venta(con, caja_id)
         turno = exigir_turno(con, caja_id)
         config = leer_config(con)
         cotizacion = cotizacion_vigente(con, datos)

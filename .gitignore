@@ -19,9 +19,11 @@ Thumbs.db
 build/
 dist/
 
-# PyArmor (código cifrado en NejiPOS.exe): sus archivos de trabajo y la licencia
-.pyarmor/
-*.patched.spec
-pyarmor-reg*
-pyarmor-ci*
-pyarmor.bug.log
+# Nuitka (código compilado de NejiPOS.exe; la salida queda en build/)
+*.pyd
+*.cpython-*.so
+nuitka-crash-report.xml
+
+# Licencias: la llave privada del vendedor nunca va al repositorio
+llave_privada*.pem
+NejiLicencias/
