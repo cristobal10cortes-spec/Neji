@@ -316,6 +316,9 @@ body:has(.ventas) #avisos { top: auto; bottom: 160px; }
 /* Cobro */
 .cobro-total { text-align: center; padding: .5rem; background: var(--primario-claro); border-radius: 10px; }
 .cobro-total .monto { font-size: 2.8rem; font-weight: 800; color: var(--primario); font-variant-numeric: tabular-nums; }
+.cobro-maquina { text-align: center; margin-top: .6rem; padding: .8rem; border: 2px dashed var(--primario); border-radius: 10px; background: var(--primario-claro); }
+.cobro-maquina .monto { font-size: 1.6rem; font-weight: 800; color: var(--primario); }
+.aviso-maquina { margin-top: .6rem; padding: .6rem .8rem; border-radius: 8px; background: #fff3d6; color: #6b4600; font-weight: 600; }
 .metodos { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: .4rem; }
 .metodos button { padding: .6rem .4rem; border: 2px solid var(--borde); border-radius: 10px; background: #fff; cursor: pointer; }
 .metodos button.activo { border-color: var(--primario); background: var(--primario-claro); font-weight: 700; }

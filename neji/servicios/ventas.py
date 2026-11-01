@@ -4,7 +4,7 @@ import json
 import logging
 from decimal import Decimal
 
-from .. import licencia
+from .. import licencia, pos
 from ..auth import tiene_permiso
 from ..chile import desglosar_iva, redondear, redondear_efectivo
 from ..db import ahora, fila, filas, leer_config, transaccion
@@ -291,6 +291,12 @@ def registrar_venta(con, datos, usuario, avisos=None):
                     f"{cliente['nombre']} supera su límite de crédito "
                     f"(disponible: {pesos(disponible)}).")
 
+        # Pago con la máquina POS integrada: el cobro tiene que estar aprobado y cuadrar con esta venta.
+        cobro_pos = None
+        if datos.get("pos_cobro_id"):
+            cobro_pos = pos.usar_en_venta(con, entero(datos["pos_cobro_id"], "pago de la máquina", minimo=1),
+                                          caja_id, pagos)
+
         cotizacion_id = None
         if datos.get("cotizacion_id"):
             cotizacion_id = entero(datos["cotizacion_id"], "cotización", minimo=1)
@@ -330,8 +336,13 @@ def registrar_venta(con, datos, usuario, avisos=None):
                                  referencia=f"Venta {folio}", permitir_negativo=permitir_negativo)
 
         for metodo, monto in pagos.items():
-            con.execute("INSERT INTO venta_pagos (venta_id, metodo, monto) VALUES (?, ?, ?)",
-                        (venta_id, metodo, monto))
+            de_maquina = cobro_pos if cobro_pos and cobro_pos["metodo"] == metodo else None
+            con.execute("INSERT INTO venta_pagos (venta_id, metodo, monto, autorizacion, tarjeta, pos_cobro_id) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (venta_id, metodo, monto, de_maquina and de_maquina["autorizacion"],
+                         de_maquina and de_maquina["tarjeta"], de_maquina and de_maquina["id"]))
+        if cobro_pos:
+            pos.marcar_usado(con, cobro_pos["id"], venta_id)
 
         if pagos.get("fiado"):
             mover_saldo(con, cliente["id"], "cargo", pagos["fiado"], usuario["id"],
@@ -360,7 +371,7 @@ def obtener_venta(con, venta_id):
     venta["items"] = filas(con.execute(
         "SELECT * FROM venta_items WHERE venta_id = ? ORDER BY id", (venta_id,)))
     venta["pagos"] = filas(con.execute(
-        "SELECT metodo, monto FROM venta_pagos WHERE venta_id = ? ORDER BY id", (venta_id,)))
+        "SELECT metodo, monto, autorizacion, tarjeta FROM venta_pagos WHERE venta_id = ? ORDER BY id", (venta_id,)))
     venta["devoluciones"] = filas(con.execute(
         """SELECT d.*, u.nombre AS usuario FROM devoluciones d
            JOIN usuarios u ON u.id = d.usuario_id WHERE d.venta_id = ? ORDER BY d.id""",

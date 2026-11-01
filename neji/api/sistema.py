@@ -9,7 +9,7 @@ import time
 from flask import current_app, jsonify, request, send_from_directory, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from .. import equipo, licencia, respaldos
+from .. import equipo, licencia, pos, respaldos
 from ..auth import PERMISOS, con_permiso, leer_permisos, permisos_de, solo_admin, usuario_actual
 from ..chile import formatear_rut, validar_rut
 from ..db import CONFIG_POR_DEFECTO, ahora, cerrar_db, filas, get_db, leer_config, transaccion
@@ -223,6 +223,7 @@ def ver_config():
     config["sii_activo"] = "1" if sii.activo(con) else "0"
     config["sii_ambiente"] = sii.ambiente_emision(sii.leer(con))
     config["licencia"] = licencia.resumen(con)
+    config["pos"] = pos.resumen(con)      # qué cajas cobran con máquina POS integrada
     return jsonify(config)
 
 

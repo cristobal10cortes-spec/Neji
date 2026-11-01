@@ -7,6 +7,7 @@ import {
   aviso, avisoError, confirmar, formulario, h, importe, leerCantidad, leerMonto, modal, modalAbierto, numero, pesos, pitido,
   redondeoEfectivo, vaciar,
 } from '../ui.js';
+import { cobrarEnMaquina } from '../pos.js';
 import { elegirCliente } from './clientes.js';
 import { abrirTurno, movimientoCaja } from './caja.js';
 import { panelVademecum } from './vademecum.js';
@@ -1096,6 +1097,13 @@ export async function montar(contenedor, parametros = {}) {
     const zona = h('div');
     const resumen = h('div');
     const zonaDocumento = h('div.documento-sii');
+    // Máquina POS integrada de esta caja (Configuración → Máquina POS): débito y crédito se cobran en ella.
+    const maquina = estado.config.pos?.[String(estado.cajaId)] || null;
+    const zonaMaquina = h('div');
+    const detenerMaquina = { ahora: false };
+    let cobroMaquina = null;   // pago aprobado en la máquina que todavía no es parte de una venta
+    let aMano = false;         // la máquina no respondió: se cobra a mano en ella y la venta se registra igual
+    let cerrado = false;
 
     function efectivoACobrar() {
       let noEfectivo = 0;
@@ -1144,7 +1152,10 @@ export async function montar(contenedor, parametros = {}) {
             h('label.campo', 'Transferencia', mixtos.transferencia),
             h('label.campo', `Fiado${c ? ' (' + c.nombre + ')' : ' (requiere cliente)'}`, mixtos.fiado)),
           h('p.ayuda', 'Lo que falte se paga en efectivo.'),
+          maquina ? h('p.ayuda', 'En el pago mixto, la tarjeta se cobra a mano en la máquina.') : null,
           filaEfectivo);
+      } else if (maquina && (m === 'debito' || m === 'credito')) {
+        vaciar(zona, h('p', `Al cobrar, el total se envía a ${maquina.nombre}: el cliente pasa la tarjeta y la venta se registra sola cuando el pago se aprueba.`));
       } else {
         vaciar(zona, h('p', `Se cobra el total con ${texto(m)}. Pasa la tarjeta o confirma la transferencia antes de aceptar.`));
       }
@@ -1189,7 +1200,7 @@ export async function montar(contenedor, parametros = {}) {
       cuerpo: [
         h('div.cobro-total', h('div.suave', 'Total a pagar'), h('div.monto', pesos(total)),
           t.cliente ? h('div', `Cliente: ${t.cliente.nombre}`) : null),
-        zonaDocumento, botonesMetodo, zona, resumen,
+        zonaDocumento, botonesMetodo, zona, resumen, zonaMaquina,
         h('label.check', imprimirTicket, 'Imprimir ticket'),
       ],
       botones: [
@@ -1197,14 +1208,31 @@ export async function montar(contenedor, parametros = {}) {
         { texto: 'Cobrar', tecla: 'Enter', clase: 'primario', accion: () => confirmarCobro() },
       ],
       alTeclear: (e) => {
+        if (enviando) return;     // esperando a la máquina o al servidor
         const i = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6'].indexOf(e.key);
         if (i >= 0) { e.preventDefault(); elegirMetodo(METODOS[i][0]); }
         else if (e.key === 'F7' && conSii) { e.preventDefault(); elegirDocumento(documento === 'boleta' ? 'factura' : 'boleta'); }
         else if (e.key === 'Enter' && !e.target.matches('button')) { e.preventDefault(); confirmarCobro(); }
       },
-      alCerrar: () => enfocar(),
+      alCerrar: () => {
+        cerrado = true;
+        detenerMaquina.ahora = true;              // si esperaba la tarjeta, se cancela el cobro en la máquina
+        if (cobroMaquina) anularCobroMaquina();   // aprobado pero sin venta: se anula
+        enfocar();
+      },
     });
     elegirDocumento('boleta');
+
+    async function anularCobroMaquina() {
+      const c = cobroMaquina;
+      cobroMaquina = null;
+      try {
+        await api.post(`/api/pos/cobros/${c.id}/cancelar`);
+        aviso(`Se anuló en la máquina el pago de ${pesos(c.monto)}, porque la venta no se registró.`, 'ok', 7000);
+      } catch (e) {
+        aviso(`Revisa la máquina: el pago de ${pesos(c.monto)} quedó aprobado y no se pudo anular (${e.message}).`, 'error', 10000);
+      }
+    }
     elegirMetodo('efectivo');
 
     async function confirmarCobro() {
@@ -1224,6 +1252,22 @@ export async function montar(contenedor, parametros = {}) {
 
       enviando = true;
       m.error('');
+      const conMaquina = Boolean(maquina) && !aMano && (metodo === 'debito' || metodo === 'credito');
+      if (conMaquina && !(cobroMaquina && cobroMaquina.monto === total && cobroMaquina.metodo === metodo)) {
+        if (cobroMaquina) await anularCobroMaquina();      // cambió el monto o el método: el anterior se anula
+        const r = await cobrarEnMaquina(zonaMaquina, { cajaId: estado.cajaId, monto: total, metodo, nombre: maquina.nombre, detener: detenerMaquina });
+        if (r.estado === 'aprobado') {
+          cobroMaquina = r.cobro;
+          if (cerrado) return anularCobroMaquina();     // se cerró el cobro mientras esperaba la tarjeta
+        } else if (r.estado === 'manual') {
+          aMano = true;
+          enviando = false;
+          return vaciar(zonaMaquina, h('p.aviso-maquina', `Cobra ${pesos(total)} a mano en la máquina y, cuando el pago esté aprobado, pulsa «Cobrar» para registrar la venta.`));
+        } else {
+          enviando = false;
+          return cerrado ? null : m.error(r.mensaje || 'El pago no se completó.');
+        }
+      }
       try {
         const venta = await api.post('/api/ventas', {
           caja_id: estado.cajaId,
@@ -1234,7 +1278,9 @@ export async function montar(contenedor, parametros = {}) {
           pagos,
           efectivo_recibido: total - noEfectivo > 0 ? recibido : null,
           documento: conSii ? documento : undefined,
+          pos_cobro_id: conMaquina && cobroMaquina ? cobroMaquina.id : undefined,
         });
+        cobroMaquina = null;
         const imprimirlo = imprimirTicket.checked;
         cerrarTicketActual();
         m.cerrar();
@@ -1246,7 +1292,7 @@ export async function montar(contenedor, parametros = {}) {
           await revisarTurno();
           aviso(e.message, 'error', 6000);
         } else {
-          m.error(e.message);
+          m.error(cobroMaquina ? `${e.message} El pago ya está aprobado en la máquina: al volver a cobrar no se cobra de nuevo.` : e.message);
         }
       } finally {
         enviando = false;
