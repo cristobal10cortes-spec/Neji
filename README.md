@@ -467,6 +467,27 @@ Neji sube cada envío y consulta su estado solo; en la pantalla se ve el **núme
 (TrackID)** de cada paso, que es el que se declara en sii.cl → *Revisar avance*. Al final se firma la
 declaración de cumplimiento en sii.cl y, con la resolución, se pasa a producción.
 
+### Máquina POS integrada (opcional)
+
+En **Configuración → Máquina POS** se elige la máquina de cada caja. Con una elegida, al cobrar con
+**débito o crédito** Neji le manda el total a la máquina: el cliente pasa la tarjeta y la venta se registra sola
+cuando el pago se aprueba, con el **código de autorización** y los últimos 4 dígitos en el ticket.
+
+- **Rechazado:** la venta no se registra y se puede cobrar de otra forma.
+- **La máquina no responde:** con **«Cobrar a mano»** se cobra en la máquina como siempre y después se registra
+  la venta.
+- **Cerrar el cobro mientras espera la tarjeta:** cancela el cobro en la máquina. Si ya estaba aprobado y la venta
+  no alcanzó a registrarse, lo anula.
+- **El servidor revisa cada pago:** tiene que estar aprobado, ser de la misma caja, cuadrar con el monto y el
+  método de la venta, y se usa una sola vez. Si la venta falla después de aprobado el pago, se reintenta sin
+  cobrar de nuevo.
+- **Pago mixto:** la parte con tarjeta se cobra a mano.
+
+Hoy está el **simulador de pruebas**, para probar todo sin máquina (con «Probar un cobro de $100»). **Klap** y
+**TUU (Haulmer)** aparecen como «próximamente»: se agregan como conectores en `neji/pos.py` cuando sus
+proveedores entreguen la documentación de integración. Cada conector solo tiene que iniciar, consultar, cancelar
+y anular un cobro. Las llaves de API se guardan cifradas.
+
 ### Reportes (administrador)
 
 - Ventas netas, número de tickets, ticket promedio, ganancia y margen, IVA débito,

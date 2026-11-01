@@ -390,7 +390,8 @@ export function ticketVenta(v, { destacarAtendio = false, diseno = disenoTicket(
   const ver = diseno.mostrar;
   const doc = documentoDeVenta(v);
   const factura = doc && FACTURAS.includes(doc.tipo);
-  const pagos = v.pagos.map((p) => ln(nombreMetodo(p.metodo), pesos(p.monto)));
+  const pagos = v.pagos.map((p) => [ln(nombreMetodo(p.metodo), pesos(p.monto)),
+    p.autorizacion ? h('div', `  ${p.tarjeta ? `Tarjeta ****${p.tarjeta} · ` : ''}Aut. ${p.autorizacion}`) : null]);
   const efectivo = v.pagos.find((p) => p.metodo === 'efectivo');
   const encabezado = encabezadoNegocio(diseno);
   const pie = doc ? diseno.pie.filter((l) => !LEYENDA_INTERNA.test(l.texto)) : diseno.pie;

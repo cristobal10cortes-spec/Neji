@@ -9,6 +9,7 @@ import {
 } from '../impresion.js';
 import { aviso, avisoError, confirmar, fecha, formulario, h, hoy, numero, pesos, pestanas, selectorFechas, tabla, vaciar } from '../ui.js';
 import { guardarLector, leerLector, probarLector } from '../lector.js';
+import { cobrarEnMaquina } from '../pos.js';
 import { componerRenglones } from '../renglones.js';
 import { importadorCsv } from './productos.js';
 
@@ -1325,6 +1326,79 @@ async function vistaCertificacion(zona) {
   pintar();
 }
 
+// --- Máquina POS integrada -----------------------------------------------------------------------------------
+// Opcional, por caja: débito y crédito se cobran en la máquina (ver neji/pos.py). Klap y TUU quedan listos para
+// cuando sus proveedores entreguen la documentación; mientras tanto, el simulador prueba todo sin máquina.
+
+async function vistaPos(zona) {
+  const datos = await api.get('/api/pos');
+  const proveedor = (clave) => datos.proveedores.find((p) => p.clave === clave);
+
+  function panelCaja(c) {
+    const elegido = h('select', [h('option', { value: '' }, 'Ninguna: débito y crédito se cobran a mano'),
+      ...datos.proveedores.map((p) => h('option', { value: p.clave, disabled: !p.disponible, selected: c.proveedor === p.clave },
+        p.disponible ? p.nombre : `${p.nombre} (próximamente)`))]);
+    const activo = h('input', { type: 'checkbox', checked: c.activo || !c.proveedor });
+    const campos = h('div.rejilla');
+    let controles = {};
+    const pintarCampos = () => {
+      const p = proveedor(elegido.value);
+      const suyo = (f) => (c.proveedor === p.clave ? c.datos[f.clave] : undefined);
+      controles = {};
+      vaciar(campos, (p?.campos || []).map((f) => {
+        let control;
+        if (f.tipo === 'opciones') {
+          control = h('select', Object.entries(f.opciones).map(([k, t]) => h('option', { value: k, selected: suyo(f) === k }, t)));
+        } else if (f.tipo === 'secreto') {
+          control = h('input', { type: 'password', autocomplete: 'new-password', placeholder: c.datos[`${f.clave}_guardada`] ? 'Guardada (escribe otra para cambiarla)' : '' });
+        } else {
+          control = h('input', { inputmode: f.tipo === 'numero' ? 'numeric' : null, value: suyo(f) ?? (f.tipo === 'numero' ? 3 : '') });
+        }
+        controles[f.clave] = control;
+        return campo(f.etiqueta, control, f.ayuda);
+      }));
+    };
+    elegido.addEventListener('change', pintarCampos);
+    pintarCampos();
+    const zonaPrueba = h('div');
+    const guardar = async () => {
+      try {
+        await api.put(`/api/pos/cajas/${c.caja_id}`, {
+          proveedor: elegido.value, activo: activo.checked,
+          datos: Object.fromEntries(Object.entries(controles).map(([k, el]) => [k, el.value])),
+        });
+      } catch (e) {
+        return avisoError(e);
+      }
+      aviso('Máquina guardada.', 'ok');
+      return recargarConfiguracion({ pestana: 'pos' });     // la caja se entera al cobrar
+    };
+    const probar = async () => {
+      const r = await cobrarEnMaquina(zonaPrueba, { cajaId: c.caja_id, monto: 100, metodo: 'debito', nombre: proveedor(c.proveedor)?.nombre, permitirManual: false });
+      if (r.estado !== 'aprobado') return aviso(r.mensaje || 'La prueba no se completó.', 'error', 7000);
+      await api.post(`/api/pos/cobros/${r.cobro.id}/cancelar`).catch(() => {});    // era solo una prueba
+      return aviso(`Prueba aprobada (autorización ${r.cobro.autorizacion}) y anulada.`, 'ok', 7000);
+    };
+    const usa = c.activo && c.proveedor;
+    return h('div.panel',
+      h('div.fila.entre', h('h3', c.nombre), h(`span.etiqueta${usa ? '.ok' : ''}`, usa ? proveedor(c.proveedor)?.nombre || c.proveedor : 'Cobro a mano')),
+      c.caja_activa ? null : h('p.suave', 'Esta caja está desactivada.'),
+      h('div.rejilla', campo('Máquina de esta caja', elegido), campo('Activa', h('label.check', activo, 'Cobrar débito y crédito con la máquina'))),
+      campos,
+      h('div.fila.fin', { style: { marginTop: '.6rem' } },
+        usa ? h('button.btn', { type: 'button', onclick: probar }, 'Probar un cobro de $100') : null,
+        h('button.btn.primario', { type: 'button', onclick: guardar }, 'Guardar')),
+      zonaPrueba);
+  }
+
+  vaciar(zona,
+    h('div.panel',
+      h('h3', 'Máquina POS integrada (opcional)'),
+      h('p', 'Con una máquina elegida, al cobrar con débito o crédito Neji le manda el total a la máquina de esa caja: el cliente pasa la tarjeta y la venta se registra sola cuando el pago se aprueba, con su código de autorización en el ticket. Si la máquina no responde, el cobro siempre se puede hacer a mano. Sin máquina elegida, todo sigue como hoy.'),
+      h('ul', datos.proveedores.map((p) => h('li', h('b', p.nombre), `: ${p.nota}`)))),
+    datos.cajas.map(panelCaja));
+}
+
 // --- Licencia --------------------------------------------------------------------------------------------------
 
 const ESTADO_LICENCIA = { activa: ['Activada', 'ok'], vencida: ['La prueba terminó', 'mal'], libre: ['Sin control de licencias', ''] };
@@ -1383,7 +1457,7 @@ export async function montar(contenedor, parametros = {}) {
   const opciones = admin
     ? [['negocio', 'Negocio'], ['ticket', 'Ticket'], ['opciones', 'Opciones'], ['usuarios', 'Usuarios'], ['cajas', 'Cajas'], ['terminal', 'Esta terminal'],
       ['impresora', 'Impresora de tickets'], ['respaldos', 'Respaldos'], ['importar', 'Importar inventario'], ['sii', 'Boleta electrónica'],
-      ['certificacion', 'Certificación SII'], ['licencia', 'Licencia']]
+      ['certificacion', 'Certificación SII'], ['pos', 'Máquina POS'], ['licencia', 'Licencia']]
     : [['terminal', 'Esta terminal'], ['impresora', 'Impresora de tickets']];
   let actual = opciones.some(([k]) => k === parametros.pestana) ? parametros.pestana : opciones[0][0];
   const barra = h('div');
@@ -1407,6 +1481,7 @@ export async function montar(contenedor, parametros = {}) {
       else if (p === 'sii') await vistaSii(zona);
       else if (p === 'certificacion') await vistaCertificacion(zona);
       else if (p === 'licencia') await vistaLicencia(zona);
+      else if (p === 'pos') await vistaPos(zona);
       else vaciar(zona, vistaTerminal());
     } catch (e) {
       avisoError(e);

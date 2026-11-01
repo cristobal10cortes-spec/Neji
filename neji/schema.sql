@@ -184,9 +184,41 @@ CREATE TABLE IF NOT EXISTS venta_pagos (
     id       INTEGER PRIMARY KEY,
     venta_id INTEGER NOT NULL REFERENCES ventas(id) ON DELETE CASCADE,
     metodo   TEXT NOT NULL CHECK (metodo IN ('efectivo', 'debito', 'credito', 'transferencia', 'fiado')),
-    monto    INTEGER NOT NULL
+    monto    INTEGER NOT NULL,
+    -- Pago con la máquina POS integrada (ver neji/pos.py): código de autorización, últimos 4 dígitos y el cobro.
+    autorizacion TEXT,
+    tarjeta      TEXT,
+    pos_cobro_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_venta_pagos_venta ON venta_pagos(venta_id);
+
+-- Máquina POS integrada de cada caja (opcional): proveedor (conector de neji/pos.py) y su configuración.
+CREATE TABLE IF NOT EXISTS pos_config (
+    caja_id   INTEGER PRIMARY KEY REFERENCES cajas(id),
+    proveedor TEXT NOT NULL,
+    activo    INTEGER NOT NULL DEFAULT 1,
+    datos     TEXT                -- JSON (las llaves de API van cifradas)
+);
+
+-- Cada cobro enviado a una máquina POS. Una venta usa un cobro aprobado una sola vez.
+CREATE TABLE IF NOT EXISTS pos_cobros (
+    id           INTEGER PRIMARY KEY,
+    caja_id      INTEGER NOT NULL REFERENCES cajas(id),
+    usuario_id   INTEGER NOT NULL REFERENCES usuarios(id),
+    proveedor    TEXT NOT NULL,
+    metodo       TEXT NOT NULL CHECK (metodo IN ('debito', 'credito')),
+    monto        INTEGER NOT NULL,
+    estado       TEXT NOT NULL CHECK (estado IN ('esperando', 'aprobado', 'rechazado', 'cancelado', 'anulado', 'error')),
+    autorizacion TEXT,
+    tarjeta      TEXT,
+    mensaje      TEXT,
+    externo      TEXT,            -- el número del cobro en el sistema del proveedor
+    datos        TEXT,            -- JSON del conector
+    creado       TEXT NOT NULL,
+    actualizado  TEXT NOT NULL,
+    venta_id     INTEGER REFERENCES ventas(id)
+);
+CREATE INDEX IF NOT EXISTS idx_pos_cobros_venta ON pos_cobros(venta_id);
 
 CREATE TABLE IF NOT EXISTS devoluciones (
     id             INTEGER PRIMARY KEY,
