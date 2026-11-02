@@ -1401,11 +1401,14 @@ async function vistaPos(zona) {
 
 // --- Licencia --------------------------------------------------------------------------------------------------
 
-const ESTADO_LICENCIA = { activa: ['Activada', 'ok'], vencida: ['La prueba terminó', 'mal'], libre: ['Sin control de licencias', ''] };
+const ESTADO_LICENCIA = { activa: ['Activada', 'ok'], vencida: ['La prueba terminó', 'mal'], expirada: ['Licencia vencida', 'mal'], libre: ['Sin control de licencias', ''] };
 
 async function vistaLicencia(zona) {
   const d = await api.get('/api/licencia');
-  const [titulo, clase] = d.estado === 'prueba' ? [`Prueba: quedan ${d.dias} ${d.dias === 1 ? 'día' : 'días'}`, 'aviso'] : ESTADO_LICENCIA[d.estado];
+  const dias = (n) => `${n} ${n === 1 ? 'día' : 'días'}`;
+  let [titulo, clase] = ESTADO_LICENCIA[d.estado] || ['', ''];
+  if (d.estado === 'prueba') [titulo, clase] = [`Prueba: quedan ${dias(d.dias)}`, 'aviso'];
+  else if (d.estado === 'activa' && d.hasta && d.dias <= 15) [titulo, clase] = [`Vence en ${dias(d.dias)}`, 'aviso'];
   const codigo = h('input.mono', { value: d.codigo_equipo, readonly: true, size: 22, 'aria-label': 'Código de este equipo', onfocus: (e) => e.target.select() });
   const copiar = async () => {
     codigo.select();
@@ -1431,23 +1434,27 @@ async function vistaLicencia(zona) {
   vaciar(zona,
     h('div.panel',
       h('div.fila.entre', h('h3', 'Licencia de Neji POS'), h(`span.etiqueta${clase ? '.' + clase : ''}`, titulo)),
-      d.estado === 'activa' ? [
+      d.estado === 'activa' || d.estado === 'expirada' ? [
         h('p', h('b', d.cliente), d.rut ? ` · RUT ${d.rut}` : ''),
         h('p', `${d.tipo_texto}${cajas}${d.numero ? ` · Licencia N° ${d.numero}` : ''}${d.emitida ? ` del ${fecha(d.emitida, false)}` : ''}`),
-        h('p.ayuda', 'Pago único: la licencia no vence.'),
+        d.hasta
+          ? h('p', { class: d.estado === 'expirada' ? 'rojo' : null }, d.estado === 'expirada'
+            ? `Venció el ${fecha(d.hasta, false)}: activa la renovación para seguir vendiendo. Tus datos están intactos.`
+            : `${d.duracion_texto}: vale hasta el ${fecha(d.hasta, false)} inclusive (quedan ${dias(d.dias)}).`)
+          : h('p.ayuda', 'De por vida: la licencia no vence.'),
       ] : null,
       d.estado === 'prueba' ? h('p', `Estás usando la prueba gratis de ${d.dias_prueba} días, que termina el ${fecha(d.vence, false)}. Después puedes ver, respaldar y configurar todo, pero no vender hasta activar la licencia.`) : null,
       d.estado === 'vencida' ? h('p.rojo', 'Terminaron los días de prueba: activa la licencia para seguir vendiendo. Tus datos están intactos.') : null,
       d.error ? h('div.error-modal', d.error) : null,
       d.estado === 'libre' ? h('p.ayuda', 'Esta versión de Neji POS no pide licencia.') : null),
     d.control ? h('div.panel',
-      h('h3', d.estado === 'activa' ? 'Cambiar la licencia' : 'Activar la licencia'),
+      h('h3', d.estado === 'expirada' || (d.estado === 'activa' && d.hasta) ? 'Renovar o cambiar la licencia' : d.estado === 'activa' ? 'Cambiar la licencia' : 'Activar la licencia'),
       h('ol.pasos',
         h('li', 'Envíale el código de este equipo a quien te vende Neji POS:',
           h('div.fila', { style: { margin: '.4rem 0' } }, codigo, h('button.btn.chico', { type: 'button', onclick: copiar }, 'Copiar'))),
         h('li', 'Te mandará tu licencia: un texto que empieza con «NEJI-».'),
         h('li', 'Pégalo aquí abajo y pulsa «Activar licencia».')),
-      h('p.ayuda', 'Las licencias son de pago único. «Caja» sirve para una caja; «Local (multicaja)», para varias o todas las cajas del local. Con varias cajas conectadas, el código es el del computador principal, el que tiene los datos.'),
+      h('p.ayuda', 'Las licencias pueden ser de por vida, mensuales, trimestrales o anuales: para renovar, se pega la nueva aquí mismo. «Caja» sirve para una caja; «Local (multicaja)», para varias o todas las cajas del local. Con varias cajas conectadas, el código es el del computador principal, el que tiene los datos.'),
       licencia,
       h('div.fila.fin', { style: { marginTop: '.6rem' } }, h('button.btn.primario', { type: 'button', onclick: activar }, 'Activar licencia'))) : null);
 }

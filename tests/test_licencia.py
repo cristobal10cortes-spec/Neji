@@ -31,9 +31,12 @@ def llave(monkeypatch):
     return privada
 
 
-def hecha(llave, tipo="caja", cajas=1, equipo=EQUIPO, cliente="Farmacia Los Andes"):
-    return licencia.armar({"numero": "0007", "emitida": "2026-10-28", "cliente": cliente, "rut": "76.086.428-5",
-                           "tipo": tipo, "cajas": cajas, "equipo": equipo}, llave)
+def hecha(llave, tipo="caja", cajas=1, equipo=EQUIPO, cliente="Farmacia Los Andes", hasta=None, duracion=None):
+    datos = {"numero": "0007", "emitida": "2026-10-28", "cliente": cliente, "rut": "76.086.428-5", "tipo": tipo,
+             "cajas": cajas, "equipo": equipo}
+    if hasta:
+        datos |= {"hasta": hasta, "duracion": duracion or "mensual"}
+    return licencia.armar(datos, llave)
 
 
 def poner(app, **valores):
@@ -239,3 +242,64 @@ def test_las_llaves_del_vendedor_son_validas():
         crudo = base64.b64decode(llave, validate=True)
         assert len(crudo) == 32
         Ed25519PublicKey.from_public_bytes(crudo)
+
+
+def dentro_de(dias):
+    return (date.today() + timedelta(days=dias)).isoformat()
+
+
+def test_licencia_que_vence_avisa_bloquea_y_se_renueva(app, api, productos, turno, llave):
+    hasta = dentro_de(10)
+    d = api.put("/api/licencia", {"texto": hecha(llave, hasta=hasta)})
+    assert (d["estado"], d["hasta"], d["dias"], d["duracion_texto"]) == ("activa", hasta, 11, "Mensual")
+    assert api.get("/api/config")["licencia"] == {"estado": "activa", "dias": 11, "hasta": hasta}
+    vender(api, productos)
+    # El último día todavía vale; al día siguiente (o con el reloj atrasado después de verlo) ya no.
+    poner(app, ultima_fecha=hasta)
+    assert api.get("/api/licencia")["dias"] == 1
+    vender(api, productos)
+    poner(app, ultima_fecha=(date.fromisoformat(hasta) + timedelta(days=1)).isoformat())
+    d = api.get("/api/licencia")
+    assert (d["estado"], d["dias"], d["puede_vender"]) == ("expirada", 0, False)
+    assert api.get("/api/config")["licencia"]["estado"] == "expirada"
+    r = vender(api, productos, esperado=403)
+    assert "venció el" in r["error"] and "renovación" in r["error"]
+    # Una licencia que ya venció no se puede activar; la renovación, sí.
+    r = api.put("/api/licencia", {"texto": hecha(llave, hasta=hasta)}, esperado=400)
+    assert "venció" in r["error"]
+    renovada = (date.fromisoformat(hasta) + timedelta(days=90)).isoformat()
+    d = api.put("/api/licencia", {"texto": hecha(llave, hasta=renovada, duracion="trimestral")})
+    assert (d["estado"], d["duracion_texto"]) == ("activa", "Trimestral")
+    vender(api, productos)
+    # De por vida: sin fecha ni aviso.
+    d = api.put("/api/licencia", {"texto": hecha(llave)})
+    assert "hasta" not in d and d["duracion_texto"] == "De por vida"
+    assert api.get("/api/config")["licencia"] == {"estado": "activa"}
+
+
+def test_el_generador_calcula_la_duracion(generador, tmp_path, monkeypatch):
+    assert generador.calcular_hasta("vida") is None
+    assert generador.calcular_hasta("mensual", "2026-11-02") == "2026-12-01"
+    assert generador.calcular_hasta("mensual", "2026-01-31") == "2026-02-27"
+    assert generador.calcular_hasta("trimestral", "2026-11-02") == "2027-02-01"
+    assert generador.calcular_hasta("anual", "2026-11-02") == "2027-11-01"
+    with pytest.raises(generador.Error, match="AAAA-MM-DD"):
+        generador.calcular_hasta("anual", "02-11-2026")
+    # Un registro de antes (sin duración) gana las columnas nuevas sin perder lo anotado.
+    carpeta = tmp_path / "NejiLicencias"
+    carpeta.mkdir()
+    (carpeta / "registro.csv").write_text(
+        "numero;emitida;cliente;rut;tipo;cajas;equipo;nota;archivo\n"
+        "0001;2026-10-31;Farmacia Vieja;;local;sin límite;*;gratis;0001_Farmacia_Vieja.txt\n", encoding="utf-8-sig")
+    generador.crear_llave("secreta1")
+    texto, datos = generador.crear_licencia(generador.cargar_llave("secreta1"), "Minimarket", "caja",
+                                            duracion="anual", desde="2026-11-02")
+    assert (datos["numero"], datos["duracion"], datos["hasta"]) == ("0002", "anual", "2027-11-01")
+    filas = (carpeta / "registro.csv").read_text(encoding="utf-8-sig").splitlines()
+    assert filas[0] == "numero;emitida;cliente;rut;tipo;cajas;duracion;hasta;equipo;nota;archivo"
+    assert filas[1].startswith("0001;2026-10-31;Farmacia Vieja;")
+    assert filas[1].endswith(";*;gratis;0001_Farmacia_Vieja.txt")
+    assert ";Anual;2027-11-01;" in filas[2]
+    assert "Validez: anual, hasta el 01-11-2027" in (carpeta / "licencias" / "0002_Minimarket.txt").read_text(
+        encoding="utf-8")
+    assert licencia.leer(texto, [generador.publica_de(generador.cargar_llave("secreta1"))])["hasta"] == "2027-11-01"

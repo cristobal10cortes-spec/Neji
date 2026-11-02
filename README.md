@@ -583,7 +583,8 @@ sube el archivo (antes se guarda un respaldo de lo que había). O, a mano:
 
 ## Licencias (para vender Neji POS)
 
-Neji POS se vende con **licencias de pago único** que crea quien lo vende, sin depender de ningún servicio:
+Neji POS se vende con **licencias** que crea quien lo vende, sin depender de ningún servicio. Cada una puede ser
+**de por vida** o **mensual, trimestral o anual**:
 
 - **Caja**: sirve para una caja (la principal).
 - **Local (multicaja)**: sirve para varias cajas del mismo local, o para todas («sin límite»).
@@ -609,8 +610,12 @@ vale: hay que pedir otra.
 **Por cada venta:**
 
 1. El cliente abre **Configuración → Licencia** y te manda el **código de equipo** (`XXXX-XXXX-XXXX-XXXX`).
-2. Abres el generador → «Crear una licencia»: cliente, RUT, tipo, cajas y ese código. Si lo dejas vacío, la
-   licencia sirve en cualquier computador; úsalo solo con clientes de confianza.
+2. Abres el generador → «Crear una licencia»: cliente, RUT, tipo, cajas, **duración** y ese código. Si dejas el
+   código vacío, la licencia sirve en cualquier computador; úsalo solo con clientes de confianza.
+   - **Mensual, trimestral o anual:** la licencia vale hasta un día fijo, contando desde hoy o desde el día que
+     indiques. Para renovar sin que el cliente pierda días, indica el día siguiente al vencimiento anterior.
+   - **15 días antes de vencer**, Neji muestra una franja con la fecha. Al vencer, pasa lo mismo que al terminar
+     la prueba: no se registran ventas hasta pegar la renovación en **Configuración → Licencia**.
 3. Le mandas el texto `NEJI-…` (o el archivo de `NejiLicencias/licencias`). Él lo pega en
    **Configuración → Licencia → Activar licencia**.
 
