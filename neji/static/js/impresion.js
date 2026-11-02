@@ -426,6 +426,8 @@ export function ticketVenta(v, { destacarAtendio = false, diseno = disenoTicket(
     v.pagos.some((p) => p.metodo === 'fiado') && v.cliente_saldo != null ? ln('Saldo pendiente cliente', pesos(v.cliente_saldo)) : null,
     v.devuelto ? ln('Devuelto', `-${pesos(v.devuelto)}`) : null,
     doc ? [h('hr'), timbreDte(doc, papel || papelTicket())] : null,
+    // Configuración → Boleta electrónica → «La máquina POS»: este ticket no es la boleta (no se emiten dos).
+    !doc && c.sii_modo === 'maquina' ? [h('hr'), h('div.c', 'La boleta la entrega la máquina POS')] : null,
     pie.length ? [h('hr'), lineasTicket(pie, c)] : null,
     h('div', { style: { height: '8mm' } }));
 }

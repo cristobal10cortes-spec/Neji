@@ -415,6 +415,8 @@ CREATE TABLE IF NOT EXISTS sii_documentos (
     correo_glosa   TEXT,
     correo_enviado TEXT,
     caso           TEXT,              -- certificación: el caso del set de pruebas («4670590-1», «CASO-1»)
+    proveedor      TEXT,              -- el proveedor de boleta electrónica que lo emitió (ambiente «proveedor»)
+    externo        TEXT,              -- su identificador en el proveedor
     UNIQUE (ambiente, tipo, folio)
 );
 CREATE INDEX IF NOT EXISTS idx_sii_documentos_venta ON sii_documentos(venta_id);

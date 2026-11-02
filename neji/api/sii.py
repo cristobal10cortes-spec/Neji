@@ -4,13 +4,13 @@ from flask import Response, current_app, jsonify, request
 
 from ..auth import con_permiso, solo_admin
 from ..db import get_db, transaccion
-from ..sii import NOMBRES, ErrorSII, demostracion, falta_modulo
+from ..sii import NOMBRES, ErrorSII, demostracion, falta_modulo, proveedores
 from ..sii import servicio as sii
 from ..validar import ErrorNegocio, entero
 from . import bp, datos_json, rango_fechas
 
 OCULTOS = {"firma_pfx", "firma_clave", "correo_clave", "cert_set", "cert_set_boletas", "cert_intercambio",
-           "cert_receptor"}
+           "cert_receptor", "proveedor_datos"}
 
 
 def _error(e):
@@ -33,6 +33,12 @@ def estado_sii():
         "correo": {"configurado": sii.correo_configurado(cfg), "clave_guardada": bool(cfg.get("correo_clave"))},
         "demo": demostracion.estado(con, cfg),
         "tipos": NOMBRES,
+        # ¿Quién emite la boleta? Neji, un proveedor (y cuál) o la máquina POS.
+        "modo": sii.modo(cfg),
+        "modos": sii.MODOS,
+        "proveedores": proveedores.lista(),
+        "proveedor": proveedores.publico(cfg),
+        "maquinas": proveedores.MAQUINAS_CON_BOLETA,
     })
 
 
@@ -206,7 +212,7 @@ def listar_documentos():
         parametros.append(request.args["estado"])
     filas = con.execute(
         f"""SELECT d.id, d.ambiente, d.tipo, d.folio, d.fecha, d.emitido, d.total, d.estado, d.glosa, d.rut_receptor,
-                   d.razon_receptor, d.venta_id, d.devolucion_id, v.folio AS venta_folio, e.trackid,
+                   d.razon_receptor, d.venta_id, d.devolucion_id, v.folio AS venta_folio, e.trackid, d.proveedor,
                    d.correo_receptor, d.correo_estado, d.correo_glosa, d.correo_enviado
             FROM sii_documentos d LEFT JOIN ventas v ON v.id = d.venta_id
             LEFT JOIN sii_envios e ON e.id = d.envio_id
@@ -235,8 +241,11 @@ def emitir_pendiente(venta_id):
 
     con = get_db()
     documento = (request.get_json(silent=True) or {}).get("documento") or "boleta"
+    documento = documento if documento in ("boleta", "factura") else "boleta"
     if not sii.activo(con):
         raise ErrorNegocio("La boleta electrónica no está activada.")
+    # Con un proveedor, se le pide fuera de la transacción (por internet).
+    del_proveedor = sii.usa_proveedor(sii.leer(con))
     try:
         with transaccion(con):
             venta = con.execute("SELECT estado FROM ventas WHERE id = ?", (venta_id,)).fetchone()
@@ -246,8 +255,12 @@ def emitir_pendiente(venta_id):
                 raise ErrorNegocio("La venta tiene devoluciones: ya no se le puede emitir el documento.")
             if sii.documento_de_venta(con, venta_id) is not None:
                 raise ErrorNegocio("Esta venta ya tiene su documento electrónico.")
-            sii.emitir_venta(con, venta_id, documento if documento in ("boleta", "factura") else "boleta",
-                             current_app.secret_key, int(leer_config(con)["iva_porcentaje"]))
+            if not del_proveedor:
+                sii.emitir_venta(con, venta_id, documento, current_app.secret_key,
+                                 int(leer_config(con)["iva_porcentaje"]))
+        if del_proveedor:
+            sii.emitir_venta_con_proveedor(con, venta_id, documento, current_app.secret_key,
+                                           int(leer_config(con)["iva_porcentaje"]))
     except ErrorSII as e:
         raise _error(e) from None
     _avisar_enviador()
