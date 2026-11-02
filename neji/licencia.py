@@ -6,6 +6,8 @@
 - La licencia dice a quién se vendió, el tipo (caja: una caja; local: varias o todas las cajas del local) y en
   qué computador vale: el «código de equipo» del que tiene la base de Neji (las otras cajas del local se
   conectan a él), o cualquiera («*»).
+- La licencia puede ser de por vida o vencer («hasta», el último día en que vale: mensual, trimestral, anual).
+  Quince días antes Neji avisa; al vencer pasa lo mismo que al terminar la prueba, y se renueva pegando otra.
 - Sin licencia, Neji funciona completo 15 días desde que se instaló. Después se puede ver, respaldar y
   configurar todo, pero no vender.
 - Sin llaves públicas (en desarrollo, o en una compilación sin ellas) no hay control de licencias.
@@ -29,6 +31,8 @@ LLAVES_PUBLICAS = [
 DIAS_PRUEBA = 15
 PREFIJO = "NEJI-"
 TIPOS = {"caja": "Caja", "local": "Local (multicaja)"}
+DURACIONES = {"vida": "De por vida", "mensual": "Mensual", "trimestral": "Trimestral", "anual": "Anual"}
+AVISAR_DIAS = 15        # cuántos días antes del vencimiento se avisa
 CUALQUIER_EQUIPO = "*"
 
 
@@ -69,6 +73,11 @@ def leer(texto, llaves=None):
             continue
         if not isinstance(datos, dict) or datos.get("tipo") not in TIPOS or not datos.get("cliente"):
             raise ErrorNegocio("La licencia no trae el cliente o el tipo: pide otra a quien te vendió Neji POS.")
+        try:
+            if datos.get("hasta"):
+                date.fromisoformat(datos["hasta"])
+        except (TypeError, ValueError):
+            raise ErrorNegocio("La licencia trae una fecha de vencimiento que no se entiende.") from None
         return datos
     raise ErrorNegocio("La licencia no es válida: no la emitió quien vende Neji POS o se modificó.")
 
@@ -189,10 +198,18 @@ def estado(con):
         return {"estado": "libre", "puede_vender": True, "cajas": 0}
     datos, error = _licencia_guardada(con)
     if datos:
-        return {"estado": "activa", "puede_vender": True, "cajas": int(datos.get("cajas") or 0),
-                "cliente": datos["cliente"], "rut": datos.get("rut") or "", "tipo": datos["tipo"],
-                "tipo_texto": TIPOS[datos["tipo"]], "numero": datos.get("numero") or "",
-                "emitida": datos.get("emitida") or "", "equipo": datos.get("equipo")}
+        resultado = {"estado": "activa", "puede_vender": True, "cajas": int(datos.get("cajas") or 0),
+                     "cliente": datos["cliente"], "rut": datos.get("rut") or "", "tipo": datos["tipo"],
+                     "tipo_texto": TIPOS[datos["tipo"]], "numero": datos.get("numero") or "",
+                     "emitida": datos.get("emitida") or "", "equipo": datos.get("equipo"),
+                     "duracion_texto": DURACIONES.get(datos.get("duracion") or "vida", "")}
+        if datos.get("hasta"):
+            # Días que quedan contando hoy; con el reloj atrasado cuenta la última fecha vista.
+            dias = (date.fromisoformat(datos["hasta"]) - date.fromisoformat(_hoy(con))).days + 1
+            resultado |= {"hasta": datos["hasta"], "dias": max(0, dias)}
+            if dias <= 0:
+                resultado |= {"estado": "expirada", "puede_vender": False, "cajas": 0}
+        return resultado
     hoy = _hoy(con)
     inicio = _inicio_prueba(con, hoy)
     restantes = DIAS_PRUEBA - (date.fromisoformat(hoy) - date.fromisoformat(inicio)).days
@@ -210,6 +227,8 @@ def activar(con, texto):
     if datos.get("equipo") not in (CUALQUIER_EQUIPO, equipo):
         raise ErrorNegocio(f"Esta licencia es para otro computador (código {datos.get('equipo')}). El código de "
                            f"este es {equipo}: pide la licencia con ese código.")
+    if datos.get("hasta") and datos["hasta"] < _hoy(con):
+        raise ErrorNegocio(f"Esta licencia venció el {_fecha(datos['hasta'])}: pide la renovación.")
     _poner(con, "texto", "".join(str(texto).split()))
     return datos
 
@@ -223,6 +242,9 @@ def cajas_habilitadas(con, limite):
 def exigir_venta(con, caja_id):
     """Antes de registrar una venta (dentro de su transacción)."""
     e = estado(con)
+    if e["estado"] == "expirada":
+        raise ErrorNegocio(f"La licencia de Neji POS venció el {_fecha(e['hasta'])}: para seguir vendiendo, activa "
+                           "la renovación en Configuración → Licencia.", status=403)
     if not e["puede_vender"]:
         raise ErrorNegocio("Terminaron los 15 días de prueba de Neji POS: para seguir vendiendo, activa la "
                            "licencia en Configuración → Licencia.", status=403)
@@ -244,7 +266,11 @@ def _cajas(n):
     return "una caja" if n == 1 else f"{n} cajas"
 
 
+def _fecha(iso):
+    return "-".join(reversed(iso.split("-")))
+
+
 def resumen(con):
-    """Lo que ven todas las cajas (en /api/config): para avisar de la prueba o de que terminó."""
+    """Lo que ven todas las cajas (en /api/config): para avisar de la prueba, de que vence o de que terminó."""
     e = estado(con)
-    return {k: e[k] for k in ("estado", "dias") if k in e}
+    return {k: e[k] for k in ("estado", "dias", "hasta") if k in e}

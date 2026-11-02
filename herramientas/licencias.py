@@ -20,13 +20,14 @@ Cada licencia queda guardada en licencias/ y anotada en registro.csv (tu lista d
 
 import argparse
 import base64
+import calendar
 import csv
 import getpass
 import os
 import re
 import sys
 import types
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent.parent
@@ -51,7 +52,8 @@ from neji.validar import ErrorNegocio  # noqa: E402
 ARCHIVO_LLAVE = "llave_privada.pem"
 ARCHIVO_PUBLICA = "llave_publica.txt"
 REGISTRO = "registro.csv"
-COLUMNAS = ["numero", "emitida", "cliente", "rut", "tipo", "cajas", "equipo", "nota", "archivo"]
+COLUMNAS = ["numero", "emitida", "cliente", "rut", "tipo", "cajas", "duracion", "hasta", "equipo", "nota", "archivo"]
+MESES = {"vida": 0, "mensual": 1, "trimestral": 3, "anual": 12}
 FORMATO_EQUIPO = re.compile(r"^[A-Z2-7]{4}-[A-Z2-7]{4}-[A-Z2-7]{4}-[A-Z2-7]{4}$")
 
 
@@ -103,13 +105,46 @@ def _registro(donde):
         return list(csv.DictReader(archivo, delimiter=";"))
 
 
+def _guardar_registro(donde, filas):
+    """Reescribe registro.csv con las columnas de ahora (un registro de una versión anterior gana las nuevas)."""
+    with (Path(donde) / REGISTRO).open("w", encoding="utf-8-sig", newline="") as salida:
+        escritor = csv.DictWriter(salida, COLUMNAS, delimiter=";", extrasaction="ignore")
+        escritor.writeheader()
+        escritor.writerows(filas)
+
+
+def sumar_meses(dia, meses):
+    total = dia.month - 1 + meses
+    anio, mes = dia.year + total // 12, total % 12 + 1
+    return dia.replace(year=anio, month=mes, day=min(dia.day, calendar.monthrange(anio, mes)[1]))
+
+
+def calcular_hasta(duracion, desde=None):
+    """Último día en que vale la licencia (None = de por vida). `desde`: el primer día (por defecto, hoy)."""
+    if duracion not in MESES:
+        raise Error("La duración es de por vida, mensual, trimestral o anual.")
+    if duracion == "vida":
+        return None
+    if isinstance(desde, str) and desde.strip():
+        try:
+            desde = date.fromisoformat(desde.strip())
+        except ValueError:
+            raise Error("La fecha de inicio va como AAAA-MM-DD (por ejemplo, 2026-12-01).") from None
+    desde = desde or date.today()
+    return (sumar_meses(desde, MESES[duracion]) - timedelta(days=1)).isoformat()
+
+
 def _nombre_archivo(numero, cliente):
     limpio = re.sub(r"[^A-Za-z0-9]+", "_", cliente).strip("_")[:40] or "cliente"
     return f"{numero}_{limpio}.txt"
 
 
-def crear_licencia(llave, cliente, tipo, cajas=None, equipo=licencia.CUALQUIER_EQUIPO, rut="", nota="", donde=None):
-    """Firma una licencia, la guarda en licencias/ y la anota en registro.csv. Devuelve (texto, datos)."""
+def crear_licencia(llave, cliente, tipo, cajas=None, equipo=licencia.CUALQUIER_EQUIPO, rut="", nota="", donde=None,
+                   duracion="vida", desde=None):
+    """Firma una licencia, la guarda en licencias/ y la anota en registro.csv. Devuelve (texto, datos).
+
+    `duracion`: vida, mensual, trimestral o anual, contando desde `desde` (por defecto, hoy). Para renovar sin
+    perder días, `desde` es el día siguiente al vencimiento anterior."""
     donde = Path(donde or carpeta())
     cliente = " ".join(str(cliente or "").split())
     if not cliente:
@@ -128,27 +163,27 @@ def crear_licencia(llave, cliente, tipo, cajas=None, equipo=licencia.CUALQUIER_E
         if not validar_rut(rut):
             raise Error("El RUT no es válido.")
         rut = formatear_rut(rut)
+    hasta = calcular_hasta(duracion, desde)
     anteriores = _registro(donde)
     numero = f"{len(anteriores) + 1:04d}"
     datos = {"numero": numero, "emitida": date.today().isoformat(), "cliente": cliente, "rut": rut, "tipo": tipo,
-             "cajas": cajas, "equipo": equipo}
+             "cajas": cajas, "equipo": equipo, "duracion": duracion}
+    if hasta:
+        datos["hasta"] = hasta
     texto = licencia.armar(datos, llave)
     licencia.leer(texto, [publica_de(llave)])          # se revisa como la revisará Neji
     archivo = _nombre_archivo(numero, cliente)
     (donde / "licencias").mkdir(parents=True, exist_ok=True)
     (donde / "licencias" / archivo).write_text(
         f"Licencia de Neji POS N° {numero}\nCliente: {cliente}{' (RUT ' + rut + ')' if rut else ''}\n"
-        f"Tipo: {describir(datos)}\nEquipo: {_equipo_texto(equipo)}\n\n"
+        f"Tipo: {describir(datos)}\nValidez: {validez(datos)}\nEquipo: {_equipo_texto(equipo)}\n\n"
         "Para activarla: en Neji POS, Configuración → Licencia, pega el texto que sigue y pulsa\n"
         "«Activar licencia».\n\n"
         f"{texto}\n", encoding="utf-8")
-    nuevo = not (donde / REGISTRO).exists()
-    with (donde / REGISTRO).open("a", encoding="utf-8-sig", newline="") as salida:
-        escritor = csv.DictWriter(salida, COLUMNAS, delimiter=";")
-        if nuevo:
-            escritor.writeheader()
-        escritor.writerow({"numero": numero, "emitida": datos["emitida"], "cliente": cliente, "rut": rut, "tipo": tipo,
-                           "cajas": cajas or "sin límite", "equipo": equipo, "nota": nota, "archivo": archivo})
+    fila = {"numero": numero, "emitida": datos["emitida"], "cliente": cliente, "rut": rut, "tipo": tipo,
+            "cajas": cajas or "sin límite", "duracion": licencia.DURACIONES[duracion], "hasta": hasta or "",
+            "equipo": equipo, "nota": nota, "archivo": archivo}
+    _guardar_registro(donde, anteriores + [fila])
     return texto, datos
 
 
@@ -156,6 +191,13 @@ def describir(datos):
     if datos["tipo"] == "caja":
         return "Caja (una caja)"
     return f"Local (multicaja), {'cajas sin límite' if not datos.get('cajas') else str(datos['cajas']) + ' cajas'}"
+
+
+def validez(datos):
+    if not datos.get("hasta"):
+        return "de por vida"
+    duracion = licencia.DURACIONES.get(datos.get("duracion"), "").lower()
+    return f"{duracion + ', ' if duracion else ''}hasta el {licencia._fecha(datos['hasta'])} (inclusive)"
 
 
 def _equipo_texto(equipo):
@@ -222,6 +264,7 @@ def accion_crear(argumentos=None):
     a = argumentos
     if a and a.cliente:
         cliente, tipo, cajas, equipo, rut, nota = a.cliente, a.tipo, a.cajas, a.equipo, a.rut, a.nota
+        duracion, desde = a.duracion, a.desde
     else:
         cliente = _preguntar("Cliente (nombre del negocio)")
         rut = _preguntar("RUT del cliente (opcional)")
@@ -230,6 +273,12 @@ def accion_crear(argumentos=None):
         cajas = None
         if tipo == "local":
             cajas = _preguntar("¿Cuántas cajas? (Enter = sin límite)", "0")
+        opcion = _preguntar("Duración: 1 = de por vida, 2 = mensual, 3 = trimestral, 4 = anual", "1")
+        duracion = {"2": "mensual", "3": "trimestral", "4": "anual"}.get(opcion.strip(), "vida")
+        desde = None
+        if duracion != "vida":
+            desde = _preguntar("¿Desde qué día? AAAA-MM-DD (Enter = hoy; para renovar, el día siguiente al "
+                               "vencimiento anterior)")
         equipo = _preguntar("Código del equipo del cliente (está en su Configuración → Licencia; "
                             "Enter = cualquier computador)")
         if not equipo:
@@ -237,8 +286,10 @@ def accion_crear(argumentos=None):
                 raise Error("Pídele al cliente el código de su equipo.")
             equipo = licencia.CUALQUIER_EQUIPO
         nota = _preguntar("Nota para tu registro (opcional, p. ej. precio o forma de pago)")
-    texto, datos = crear_licencia(cargar_llave(_clave()), cliente, tipo, cajas, equipo, rut, nota)
-    print(f"\nLicencia N° {datos['numero']} · {datos['cliente']} · {describir(datos)} · "
+    calcular_hasta(duracion, desde)          # una fecha mal escrita se avisa antes de pedir la contraseña
+    texto, datos = crear_licencia(cargar_llave(_clave()), cliente, tipo, cajas, equipo, rut, nota,
+                                  duracion=duracion, desde=desde)
+    print(f"\nLicencia N° {datos['numero']} · {datos['cliente']} · {describir(datos)} · {validez(datos)} · "
           f"{_equipo_texto(datos['equipo'])}\n")
     print(texto)
     print(f"\nQuedó guardada en {carpeta() / 'licencias'} y anotada en {carpeta() / REGISTRO}.")
@@ -254,6 +305,7 @@ def accion_ver(texto=None):
     print(f"\nLicencia N° {datos.get('numero')} del {datos.get('emitida')}")
     print(f"Cliente: {datos['cliente']}{' (RUT ' + datos['rut'] + ')' if datos.get('rut') else ''}")
     print(f"Tipo: {describir(datos)}")
+    print(f"Validez: {validez(datos)}")
     print(f"Equipo: {_equipo_texto(datos.get('equipo'))}")
 
 
@@ -289,6 +341,8 @@ def main(argv=None):
     crear.add_argument("--equipo", default=licencia.CUALQUIER_EQUIPO)
     crear.add_argument("--rut", default="")
     crear.add_argument("--nota", default="")
+    crear.add_argument("--duracion", choices=list(MESES), default="vida")
+    crear.add_argument("--desde", default=None, help="primer día (AAAA-MM-DD); por defecto, hoy")
     a = parser.parse_args(argv)
     try:
         if a.accion == "llave":

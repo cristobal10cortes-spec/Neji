@@ -3,7 +3,7 @@
 import { api, cuandoSeCierreSesion } from './api.js';
 import { cargarSesion, esAdmin, esFarmacia, estado, nombreCaja, puede } from './estado.js';
 import { iniciarLector } from './lector.js';
-import { aviso, avisoError, cerrarModales, h, modalAbierto, teclaEnModal, vaciar } from './ui.js';
+import { aviso, avisoError, cerrarModales, fecha, h, modalAbierto, teclaEnModal, vaciar } from './ui.js';
 import * as caja from './vistas/caja.js';
 import * as clientes from './vistas/clientes.js';
 import * as config from './vistas/config.js';
@@ -130,17 +130,30 @@ function marca() {
   return h('div.marca', primera, resto.length ? h('span', ` ${resto.join(' ')}`) : null);
 }
 
-/** Franja bajo la barra durante la prueba: cuántos días quedan, o que terminó (y no se puede vender). */
+const AVISAR_VENCIMIENTO = 15;   // días antes de que venza la licencia (como neji/licencia.py AVISAR_DIAS)
+
+/**
+ * Franja bajo la barra: los días de prueba, que la licencia vence pronto, o que la prueba o la licencia
+ * terminaron (y no se puede vender).
+ */
 function avisoLicencia() {
   const l = estado.config?.licencia;
-  if (!l || !['prueba', 'vencida'].includes(l.estado)) return null;
-  const vencida = l.estado === 'vencida';
-  return h(`div.franja-licencia${vencida ? '.vencida' : ''}`, { role: vencida ? 'alert' : 'status' },
-    h('span', vencida
+  const dias = (n) => (n === 1 ? 'queda 1 día' : `quedan ${n} días`);
+  let texto;
+  let bloqueada = false;
+  if (l?.estado === 'prueba') texto = `Prueba gratis de Neji POS: ${dias(l.dias)}.`;
+  else if (l?.estado === 'activa' && l.hasta && l.dias <= AVISAR_VENCIMIENTO) {
+    texto = `La licencia de Neji POS vence el ${fecha(l.hasta, false)} (${dias(l.dias)}): renuévala con quien te la vendió.`;
+  } else if (l?.estado === 'vencida' || l?.estado === 'expirada') {
+    bloqueada = true;
+    texto = l.estado === 'vencida'
       ? 'Terminaron los 15 días de prueba de Neji POS: puedes ver y respaldar todo, pero las ventas no se registran hasta activar la licencia.'
-      : `Prueba gratis de Neji POS: ${l.dias === 1 ? 'queda 1 día' : `quedan ${l.dias} días`}.`),
+      : `La licencia de Neji POS venció el ${fecha(l.hasta, false)}: puedes ver y respaldar todo, pero las ventas no se registran hasta renovarla.`;
+  } else return null;
+  return h(`div.franja-licencia${bloqueada ? '.vencida' : ''}`, { role: bloqueada ? 'alert' : 'status' },
+    h('span', texto),
     esAdmin()
-      ? h('button.btn.chico', { type: 'button', onclick: () => ir('config', { pestana: 'licencia' }) }, 'Activar licencia')
+      ? h('button.btn.chico', { type: 'button', onclick: () => ir('config', { pestana: 'licencia' }) }, l.estado === 'prueba' || l.estado === 'vencida' ? 'Activar licencia' : 'Renovar licencia')
       : h('span', 'La activa el administrador.'));
 }
 
