@@ -359,9 +359,26 @@ la planilla de Excel (`.xlsx`) tal como la exporta eleventa u otro sistema, o un
 
 ### Boleta y factura electrónica (SII, opcional)
 
-Si el dueño lo activa, Neji emite los documentos tributarios electrónicos **con su propia firma
-electrónica** y los manda solo al SII. Si no se activa, todo sigue igual que antes, con el
-comprobante interno.
+En **Configuración → Boleta electrónica → «¿Quién emite la boleta?»** se elige una de tres formas:
+
+| Forma | Quién hace qué |
+|---|---|
+| **Neji, directo con el SII** | Neji firma y timbra con la firma electrónica y los folios del negocio, y envía solo al SII. El negocio se certifica una vez (pestaña *Certificación SII*). Sin mensualidad. Es lo que se explica en el resto de esta sección. |
+| **Un proveedor de boleta electrónica** | Una empresa autorizada por el SII (OpenFactura de Haulmer, SuperFactura, SimpleFactura, LibreDTE…) emite por el negocio: Neji le pide la boleta por internet al cobrar e imprime el ticket con su timbre. El proveedor inscribe y certifica al negocio, maneja los folios y envía al SII; el negocio le paga una mensualidad. |
+| **La máquina POS** | La máquina del local (Klap, TUU, Mercado Pago, Transbank, Getnet…, si su plan incluye la boleta) entrega la boleta. Neji registra la venta e imprime un comprobante interno con la línea «La boleta la entrega la máquina POS», para no emitir dos boletas. |
+
+**Con un proveedor** se elige el proveedor, se escriben los datos que entrega (su llave de API, que se guarda
+cifrada y no vuelve a la pantalla), los datos de la empresa y la resolución, y se activa. Las devoluciones llevan
+su nota de crédito y la factura se pide igual que siempre. La boleta se le pide **después** de guardar la venta
+(nada de red dentro de la venta): si el proveedor no responde, la venta se hace igual con el comprobante
+interno, se avisa, y la boleta se emite después desde el historial de ventas (botón *Emitir*), sin emitirla dos
+veces. Hoy los proveedores aparecen como «próximamente»: cada uno se conecta con un conector en
+`neji/sii/proveedores.py` cuando entregue la documentación de su API y una cuenta de prueba (ver
+[Para desarrolladores](#para-desarrolladores)). Al cambiar de forma, la boleta electrónica queda desactivada
+hasta configurarla y activarla de nuevo; lo ya emitido queda guardado.
+
+**Neji, directo con el SII:** Neji emite los documentos tributarios electrónicos **con la firma electrónica del
+dueño** y los manda solo al SII. Si no se activa, todo sigue igual que antes, con el comprobante interno.
 
 - **Boleta electrónica** (39), boleta exenta (41), **factura electrónica** (33), factura exenta (34),
   **nota de crédito** (61) y nota de débito (56, en la certificación). Una venta solo con productos exentos sale como documento exento.
@@ -483,9 +500,10 @@ cuando el pago se aprueba, con el **código de autorización** y los últimos 4 
   cobrar de nuevo.
 - **Pago mixto:** la parte con tarjeta se cobra a mano.
 
-Hoy está el **simulador de pruebas**, para probar todo sin máquina (con «Probar un cobro de $100»). **Klap** y
-**TUU (Haulmer)** aparecen como «próximamente»: se agregan como conectores en `neji/pos.py` cuando sus
-proveedores entreguen la documentación de integración. Cada conector solo tiene que iniciar, consultar, cancelar
+Hoy está el **simulador de pruebas**, para probar todo sin máquina (con «Probar un cobro de $100»). **Klap**,
+**TUU (Haulmer)**, **Mercado Pago (Point)**, **Transbank (POS Integrado)** y **Getnet** aparecen como
+«próximamente»: se agregan como conectores en `neji/pos.py` cuando sus proveedores entreguen la documentación de
+integración. Cada conector solo tiene que iniciar, consultar, cancelar
 y anular un cobro. Las llaves de API se guardan cifradas.
 
 ### Reportes (administrador)
@@ -654,6 +672,14 @@ docs/investigacion.md  lo mejor de cada POS y qué se tomó de cada uno
   navegador solo envía producto, cantidad y tipo de precio.
 - Cada venta se guarda en una sola transacción. El folio, el inventario, los
   pagos y el fiado quedan consistentes aunque haya varias cajas.
+- **Agregar un proveedor de boleta electrónica** (`neji/sii/proveedores.py`): una clase con `clave`, `nombre`,
+  `campos` (lo que se configura; los de tipo `secreto` se guardan cifrados), `validar(datos)`, `pruebas(config)`
+  y `emitir(doc, config)`, que recibe el documento armado por Neji (tipo, líneas, totales, emisor, receptor,
+  referencias y una `referencia` única para no emitir dos veces) y devuelve `{folio, xml}` (el DTE timbrado; el
+  timbre se saca del XML). Se pone en `CONECTORES` en vez de su `Pendiente`; lo demás (venta, devolución,
+  emitir después, ticket con timbre) ya está hecho. `tests/test_sii_proveedores.py` tiene un proveedor de
+  prueba que muestra la forma.
+- **Agregar una máquina POS** (`neji/pos.py`): igual, con `iniciar`, `consultar`, `cancelar` y `anular`.
 
 Para correr las pruebas:
 
@@ -713,7 +739,10 @@ Para agregar una función nueva:
 - [x] **Boleta y factura electrónica SII** con la firma del dueño (certificación propia; ver
   [Boleta y factura electrónica](#boleta-y-factura-electrónica-sii-opcional)).
 - [ ] Guía de despacho y nota de débito electrónicas.
-- [ ] Integración con máquinas de tarjeta (Transbank, Getnet, Mercado Pago, SumUp).
+- [x] Base para máquinas de tarjeta integradas, con simulador (ver [Máquina POS integrada](#máquina-pos-integrada-opcional)).
+- [ ] Conectores de las máquinas: Klap, TUU, Mercado Pago, Transbank, Getnet (falta su documentación).
+- [x] Base para emitir la boleta con un proveedor de boleta electrónica o dejarla a la máquina POS.
+- [ ] Conectores de proveedores de boleta: OpenFactura (Haulmer), SuperFactura, SimpleFactura, LibreDTE.
 - [ ] Lotes con fecha de vencimiento propia (hoy hay una fecha por producto).
 - [ ] Kits, paquetes y promociones (2x1, 3x2).
 - [ ] Puntos de fidelización (Loyverse).

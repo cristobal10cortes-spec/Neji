@@ -838,8 +838,16 @@ async function vistaRespaldos(zona) {
 }
 
 // --- Boleta electrónica (SII) -----------------------------------------------------------------------------
-// Opcional: con la firma electrónica del dueño y los folios (CAF) del SII, cada venta lleva su boleta (o
-// factura) electrónica y Neji la envía sola al SII. Sin activarla, todo sigue con el comprobante interno.
+// Opcional. ¿Quién emite la boleta?: Neji (con la firma electrónica del dueño y los folios (CAF) del SII, cada venta
+// lleva su boleta o factura y Neji la envía sola al SII), un proveedor de boleta electrónica (Neji le pide la boleta
+// por internet: neji/sii/proveedores.py) o la máquina POS (Neji no emite, para no emitir dos). Sin activarla, todo
+// sigue con el comprobante interno.
+
+const MODOS_BOLETA = {
+  neji: 'Neji firma y timbra cada boleta con la firma electrónica y los folios del negocio, y la envía sola al SII. El negocio se certifica una vez ante el SII (pestaña «Certificación SII»). Sin mensualidad.',
+  proveedor: 'Una empresa autorizada por el SII emite la boleta por el negocio: Neji se la pide por internet al cobrar e imprime el ticket con su timbre. El proveedor hace la inscripción y certificación ante el SII, maneja los folios y envía todo al SII; el negocio le paga una mensualidad.',
+  maquina: 'La máquina POS del local entrega la boleta. Neji registra la venta e imprime solo un comprobante interno, sin boleta, para no emitir dos boletas por la misma venta.',
+};
 
 const CAMPOS_EMISOR = [
   ['rut', 'RUT de la empresa', '76.123.456-7'], ['razon_social', 'Razón social', 'Como está inscrita en el SII'],
@@ -862,10 +870,12 @@ async function vistaSii(zona) {
   };
   const ejecutar = async (accion, ok) => {
     const antes = datos.config.activo;
+    const modoAntes = datos.modo;
     try {
       const r = await accion();
       if (r) datos = r.config ? r : datos;
       if (ok) aviso(typeof ok === 'function' ? ok(r) : ok, 'ok', 6000);
+      if (modoAntes !== datos.modo) return recargarConfiguracion({ pestana: 'sii' });
       if (antes !== datos.config.activo) return alCambiarActivo(antes);
       pintar();
     } catch (e) {
@@ -874,19 +884,113 @@ async function vistaSii(zona) {
     return null;
   };
 
+  const proveedorElegido = () => datos.proveedores.find((p) => p.clave === datos.proveedor.proveedor);
+
+  // ¿Quién emite la boleta? Al cambiar, la boleta electrónica queda desactivada hasta configurarla y activarla.
+  function panelQuien() {
+    let elegido = datos.modo;
+    const tarjetas = [];
+    const guardarBtn = h('button.btn.primario', { type: 'button', disabled: true }, 'Cambiar');
+    const opcion = (clave) => {
+      const radio = h('input.radio', { type: 'radio', name: 'modo-boleta', value: clave, checked: clave === datos.modo,
+        onchange: () => {
+          elegido = clave;
+          tarjetas.forEach((t) => t.classList.toggle('elegida', t.dataset.modo === clave));
+          guardarBtn.disabled = clave === datos.modo;
+        } });
+      const extra = clave === 'proveedor' ? `Proveedores: ${datos.proveedores.map((p) => p.nombre).join(', ')}.`
+        : clave === 'maquina' ? `Por ejemplo ${datos.maquinas.join(', ')}, si el plan contratado incluye la boleta.` : null;
+      const t = h('label.opcion-modo', { class: clave === datos.modo ? 'elegida' : null, 'data-modo': clave }, radio,
+        h('div', h('b', datos.modos[clave]), clave === datos.modo ? h('span.etiqueta.ok', { style: { marginLeft: '.5rem' } }, 'Elegida') : null,
+          h('div.suave', MODOS_BOLETA[clave]), extra ? h('div.suave', extra) : null));
+      tarjetas.push(t);
+      return t;
+    };
+    guardarBtn.onclick = async () => {
+      const activa = datos.config.activo === '1' || datos.demo?.activo;
+      const texto = `Desde ahora: «${datos.modos[elegido]}».${activa ? ' La boleta electrónica se desactiva hasta que la configures y la actives de nuevo.' : ''} Lo ya emitido queda guardado.`;
+      if (!(await confirmar('¿Quién emite la boleta?', texto, { aceptar: 'Cambiar' }))) return;
+      ejecutar(() => api.put('/api/sii', { modo: elegido }), elegido === 'maquina'
+        ? 'Listo: la boleta la entrega la máquina POS y Neji imprime el comprobante interno.'
+        : 'Listo: ahora configura y activa la boleta electrónica.');
+    };
+    return h('div.panel',
+      h('h3', '¿Quién emite la boleta?'),
+      h('div.opciones-modo', Object.keys(datos.modos).map(opcion)),
+      h('div.fila.fin', { style: { marginTop: '.6rem' } }, guardarBtn));
+  }
+
+  // El proveedor de boleta electrónica: cuál y su configuración (la llave de su API se guarda cifrada).
+  function panelProveedor() {
+    const actual = datos.proveedor;
+    const elegido = h('select', [h('option', { value: '' }, 'Elige el proveedor'),
+      ...datos.proveedores.map((p) => h('option', { value: p.clave, disabled: !p.disponible, selected: actual.proveedor === p.clave },
+        p.disponible ? p.nombre : `${p.nombre} (próximamente)`))]);
+    const campos = h('div.rejilla');
+    let controles = {};
+    const pintarCampos = () => {
+      const p = datos.proveedores.find((x) => x.clave === elegido.value);
+      const suyo = (f) => (actual.proveedor === p.clave ? actual.datos[f.clave] : undefined);
+      controles = {};
+      vaciar(campos, (p?.campos || []).map((f) => {
+        let control;
+        if (f.tipo === 'opciones') {
+          control = h('select', Object.entries(f.opciones).map(([k, t]) => h('option', { value: k, selected: suyo(f) === k }, t)));
+        } else if (f.tipo === 'secreto') {
+          control = h('input', { type: 'password', autocomplete: 'new-password', placeholder: actual.proveedor === p.clave && actual.datos[`${f.clave}_guardada`] ? 'Guardada (escribe otra para cambiarla)' : '' });
+        } else {
+          control = h('input', { inputmode: f.tipo === 'numero' ? 'numeric' : null, value: suyo(f) ?? '' });
+        }
+        controles[f.clave] = control;
+        return campo(f.etiqueta, control, f.ayuda);
+      }));
+    };
+    elegido.addEventListener('change', pintarCampos);
+    pintarCampos();
+    const hayDisponible = datos.proveedores.some((p) => p.disponible);
+    const guardar = () => {
+      if (!elegido.value) return aviso('Elige el proveedor.', 'error');
+      return ejecutar(() => api.put('/api/sii', {
+        proveedor: elegido.value,
+        proveedor_datos: Object.fromEntries(Object.entries(controles).map(([k, el]) => [k, el.value])),
+      }), 'Proveedor guardado.');
+    };
+    return h('div.panel',
+      h('h3', 'Proveedor de boleta electrónica'),
+      h('p', 'Contrata el servicio con el proveedor: él inscribe y certifica al negocio ante el SII (normalmente necesita el certificado digital del representante legal, de cualquier empresa autorizada como Acepta o E-Cert) y te entrega los datos para conectar su sistema (su llave de API). Escríbelos aquí, completa «Datos de la empresa» y activa la boleta electrónica.'),
+      h('ul', datos.proveedores.map((p) => h('li', h('b', p.nombre), p.disponible ? ': listo para usar.' : `: ${p.nota}`))),
+      hayDisponible ? null : h('p.ayuda', 'Todavía no hay proveedores conectados: cada uno se agrega con una actualización de Neji, cuando el proveedor entrega la documentación de su sistema. Mientras tanto, la boleta la puede emitir Neji directo con el SII o la máquina POS.'),
+      h('div.rejilla', campo('Proveedor', elegido)),
+      campos,
+      h('div.fila.fin', { style: { marginTop: '.6rem' } },
+        h('button.btn.primario', { type: 'button', disabled: !hayDisponible, onclick: guardar }, 'Guardar proveedor')));
+  }
+
+  function panelMaquina() {
+    return h('div.panel',
+      h('h3', 'La boleta la entrega la máquina POS'),
+      h('p', 'Neji registra cada venta (stock, caja y reportes) e imprime un comprobante interno; la boleta electrónica la entrega la máquina POS del local, como hasta ahora. Así no se emiten dos boletas por la misma venta.'),
+      h('p.ayuda', `Sirve con las máquinas que emiten boleta (${datos.maquinas.join(', ')}), según el plan que tenga contratado el negocio. Para que Neji le mande el monto a la máquina, configúrala en la pestaña «Máquina POS».`),
+      h('p.ayuda', 'Revisa que el pie del ticket (pestaña «Ticket») diga que es un comprobante interno y no una boleta.'));
+  }
+
   function panelEstado() {
     const c = datos.config;
     const activa = c.activo === '1';
     const produccion = c.ambiente === 'produccion';
+    const conProveedor = datos.modo === 'proveedor';
+    const etiqueta = conProveedor ? proveedorElegido()?.nombre || 'proveedor' : datos.ambientes[c.ambiente];
     return h('div.panel',
       h('div.fila.entre',
         h('h3', 'Boleta y factura electrónica (SII)'),
         h('div.fila',
           datos.demo?.activo ? h('span.etiqueta.aviso', 'Modo demostración') : null,
-          h(`span.etiqueta.${activa ? 'ok' : 'mal'}`, activa ? `Activada · ${datos.ambientes[c.ambiente]}` : 'No activada'))),
-      h('p', 'Opcional. Con tu firma electrónica y los folios que autoriza el SII, cada venta lleva su boleta electrónica (o factura, si la pides al cobrar), las devoluciones su nota de crédito, y Neji las envía solas al SII. Si no la activas, Neji sigue con el comprobante interno de siempre.'),
+          h(`span.etiqueta.${activa ? 'ok' : 'mal'}`, activa ? `Activada · ${etiqueta}` : 'No activada'))),
+      conProveedor
+        ? h('p', 'Con el proveedor configurado, cada venta lleva su boleta electrónica (o factura, si la pides al cobrar) y las devoluciones su nota de crédito: Neji se las pide al proveedor por internet. Si el proveedor no responde, la venta se hace igual con el comprobante interno y la boleta se emite después desde el historial de ventas.')
+        : h('p', 'Opcional. Con tu firma electrónica y los folios que autoriza el SII, cada venta lleva su boleta electrónica (o factura, si la pides al cobrar), las devoluciones su nota de crédito, y Neji las envía solas al SII. Si no la activas, Neji sigue con el comprobante interno de siempre.'),
       datos.falta_modulo ? h('div.error-modal', datos.falta_modulo) : null,
-      !produccion ? h('p.ayuda', 'Ambiente de certificación: los documentos van al SII de pruebas (maullin.sii.cl) y no valen como venta real. Úsalo para el set de pruebas del SII; cuando el SII te autorice, cambia a producción con tu resolución y folios de producción.') : null,
+      !produccion && !conProveedor ? h('p.ayuda', 'Ambiente de certificación: los documentos van al SII de pruebas (maullin.sii.cl) y no valen como venta real. Úsalo para el set de pruebas del SII; cuando el SII te autorice, cambia a producción con tu resolución y folios de producción.') : null,
       !activa && datos.pendientes.length ? h('div', h('b', 'Falta para activar:'), h('ul', datos.pendientes.map((x) => h('li', x)))) : null,
       h('div.fila.fin', { style: { marginTop: '.6rem' } },
         activa
@@ -933,14 +1037,15 @@ async function vistaSii(zona) {
     const ambiente = h('select', Object.entries(datos.ambientes).map(([k, t]) => h('option', { value: k, selected: c.ambiente === k }, t)));
     const fechaRes = h('input', { type: 'date', value: c.fecha_resolucion || '' });
     const numeroRes = h('input', { inputmode: 'numeric', value: c.numero_resolucion ?? '0' });
+    const deNeji = datos.modo === 'neji';
     const guardar = async (e) => {
       e.preventDefault();
-      const cambio = ambiente.value !== c.ambiente;
+      const cambio = deNeji && ambiente.value !== c.ambiente;
       if (cambio && !(await confirmar('Cambiar de ambiente', `Pasar a «${datos.ambientes[ambiente.value]}». Los folios (CAF) son de cada ambiente: carga los de ${ambiente.value === 'produccion' ? 'producción' : 'certificación'}. La boleta electrónica se desactiva hasta que esté todo listo.`, { aceptar: 'Cambiar' }))) return;
       const valores = Object.fromEntries(Object.entries(controles).map(([k, el]) => [k, el.value]));
       ejecutar(() => api.put('/api/sii', {
-        ...valores, ambiente: ambiente.value, fecha_resolucion: fechaRes.value, numero_resolucion: numeroRes.value,
-        ...(cambio ? { activo: false } : {}),
+        ...valores, ...(deNeji ? { ambiente: ambiente.value } : {}), fecha_resolucion: fechaRes.value,
+        numero_resolucion: numeroRes.value, ...(cambio ? { activo: false } : {}),
       }), 'Datos guardados.');
     };
     const campoSii = (k) => {
@@ -956,11 +1061,14 @@ async function vistaSii(zona) {
       h('h3', 'Datos de la empresa'),
       h('p.ayuda', 'Tal como están en el SII: salen en cada boleta y factura. Pueden ser distintos del nombre de fantasía del encabezado del ticket.'),
       h('div.rejilla', CAMPOS_EMISOR.map(([k]) => campoSii(k))),
-      h('h3', { style: { marginTop: '1rem' } }, 'Ambiente y resolución'),
-      h('div.rejilla',
+      h('h3', { style: { marginTop: '1rem' } }, deNeji ? 'Ambiente y resolución' : 'Resolución'),
+      deNeji ? h('div.rejilla',
         campo('Ambiente', ambiente),
         campo('Fecha de resolución', fechaRes, 'En certificación, la fecha que te da el SII al postular; en producción, la de tu resolución.'),
-        campo('Número de resolución', numeroRes, 'En certificación es 0; en producción, el de tu resolución.')),
+        campo('Número de resolución', numeroRes, 'En certificación es 0; en producción, el de tu resolución.'))
+        : h('div.rejilla',
+          campo('Fecha de resolución', fechaRes, 'La de la resolución del SII que autoriza al negocio a emitir: te la da el proveedor.'),
+          campo('Número de resolución', numeroRes, 'Sale en cada boleta («Res. N° ...»): te lo da el proveedor.')),
       h('div.fila.fin', { style: { marginTop: '1rem' } }, h('button.btn.primario', { type: 'submit' }, 'Guardar datos')));
   }
 
@@ -1112,13 +1220,15 @@ async function vistaSii(zona) {
   }
 
   function pintar() {
+    const modo = datos.modo;
     vaciar(zona,
-      panelEstado(),
-      panelDemo(),
-      panelEmisor(),
-      h('div.columnas', panelFirma(), panelEnvios()),
-      panelFolios(),
-      panelCorreo(),
+      panelQuien(),
+      modo === 'maquina' ? panelMaquina() : null,
+      modo === 'proveedor' ? panelProveedor() : null,
+      modo !== 'maquina' ? panelEstado() : null,
+      modo === 'neji' ? panelDemo() : null,
+      modo !== 'maquina' ? panelEmisor() : null,
+      modo === 'neji' ? [h('div.columnas', panelFirma(), panelEnvios()), panelFolios(), panelCorreo()] : null,
       h('div.panel',
         h('h3', datos.demo?.activo ? 'Documentos emitidos en demostración' : 'Documentos emitidos'),
         selectorFechas(filtroDocumentosSii, (f) => { filtroDocumentosSii = f; cargarDocumentos(); }),
@@ -1327,8 +1437,9 @@ async function vistaCertificacion(zona) {
 }
 
 // --- Máquina POS integrada -----------------------------------------------------------------------------------
-// Opcional, por caja: débito y crédito se cobran en la máquina (ver neji/pos.py). Klap y TUU quedan listos para
-// cuando sus proveedores entreguen la documentación; mientras tanto, el simulador prueba todo sin máquina.
+// Opcional, por caja: débito y crédito se cobran en la máquina (ver neji/pos.py). Klap, TUU, Mercado Pago,
+// Transbank y Getnet quedan listos para cuando entreguen su documentación; mientras tanto, el simulador prueba todo
+// sin máquina.
 
 async function vistaPos(zona) {
   const datos = await api.get('/api/pos');

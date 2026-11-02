@@ -1174,6 +1174,8 @@ export async function montar(contenedor, parametros = {}) {
         }, nombre))),
         estado.config.sii_ambiente === 'demostracion'
           ? h('p.ayuda', 'Modo demostración: el documento sale timbrado, pero sin valor tributario y no se envía al SII.') : null,
+        estado.config.sii_ambiente === 'proveedor_pruebas'
+          ? h('p.ayuda', 'Ambiente de pruebas del proveedor: el documento sale timbrado, pero no vale.') : null,
         documento === 'factura'
           ? (c ? h('p.ayuda', `Factura a ${c.nombre}. Debe tener RUT, giro, dirección y comuna, y su correo para mandarle la factura (se editan en Clientes).`)
             : h('div.fila', h('span.rojo', 'Para la factura elige el cliente.'),

@@ -10,22 +10,29 @@
 - Intercambio: cuando el SII acepta una factura (o la nota de crédito de una factura), el mismo hilo le
   manda el XML por correo al cliente, si se configuró la cuenta de correo.
 - Modo demostración (demostracion.py): se emite igual, con folios y firma de mentira, y nada va al SII.
+- ¿Quién emite la boleta? (sii_config «modo»): «neji» (todo lo anterior), «proveedor» (otra empresa autorizada
+  por el SII la emite por el negocio: proveedores.py; se le pide después de guardar la venta, fuera de la
+  transacción) o «maquina» (la entrega la máquina POS del local y Neji no emite nada).
 """
 
 import base64
 import hashlib
 import logging
+import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta
 
 from ..chile import limpiar_rut, validar_rut
 from ..db import ahora, conectar, transaccion
-from . import BOLETAS, FACTURAS, NOMBRES, NS_SII, RUT_CONSUMIDOR_FINAL, ErrorSII, demostracion, falta_modulo
+from . import (BOLETAS, FACTURAS, NOMBRES, NS_SII, RUT_CONSUMIDOR_FINAL, ErrorSII, demostracion, falta_modulo,
+               proveedores)
 
 registro = logging.getLogger("neji.sii")
 
 AMBIENTES = {"certificacion": "Certificación (pruebas del SII)", "produccion": "Producción"}
+MODOS = {"neji": "Neji, directo con el SII", "proveedor": "Un proveedor de boleta electrónica",
+         "maquina": "La máquina POS"}
 CAMPOS_TEXTO = {"rut": 12, "razon_social": 100, "giro": 80, "direccion": 70, "comuna": 20, "ciudad": 20,
                 "telefono": 20, "email": 80, "oficina_sii": 40, "fecha_resolucion": 10,
                 "correo_servidor": 120, "correo_usuario": 120, "correo_remitente": 120}
@@ -42,6 +49,7 @@ def leer(con):
     cfg.setdefault("ambiente", "certificacion")
     cfg.setdefault("numero_resolucion", "0")
     cfg.setdefault("demo", "0")
+    cfg.setdefault("modo", "neji")
     return cfg
 
 
@@ -50,14 +58,32 @@ def _poner(con, clave, valor):
                 (clave, valor, valor))
 
 
+def modo(cfg):
+    """Quién emite la boleta: «neji», «proveedor» o «maquina»."""
+    return cfg.get("modo") if cfg.get("modo") in MODOS else "neji"
+
+
+def usa_proveedor(cfg):
+    return modo(cfg) == "proveedor"
+
+
 def activo(con):
-    """Si las ventas llevan boleta electrónica (la de verdad o la de demostración)."""
+    """Si las ventas llevan boleta electrónica (la de verdad, la de demostración o la del proveedor)."""
     cfg = leer(con)
-    return (cfg.get("activo") == "1" or cfg.get("demo") == "1") and not falta_modulo()
+    if falta_modulo():
+        return False
+    if modo(cfg) == "neji":
+        return cfg.get("activo") == "1" or cfg.get("demo") == "1"
+    if modo(cfg) == "proveedor":
+        return cfg.get("activo") == "1" and not proveedores.faltan(cfg)
+    return False                # la máquina POS entrega la boleta: Neji no emite
 
 
 def ambiente_emision(cfg):
-    """Dónde quedan los documentos que se emiten al vender: el ambiente configurado o el de demostración."""
+    """Dónde quedan los documentos que se emiten al vender: el ambiente configurado, el de demostración o el del
+    proveedor."""
+    if usa_proveedor(cfg):
+        return proveedores.ambiente(cfg)
     return demostracion.AMBIENTE if cfg.get("demo") == "1" else cfg["ambiente"]
 
 
@@ -66,6 +92,9 @@ def cambiar_demo(con, quiere):
     if quiere:
         if falta_modulo():
             raise ErrorSII(falta_modulo())
+        if modo(leer(con)) != "neji":
+            raise ErrorSII("El modo demostración es para la boleta que emite Neji: en «¿Quién emite la boleta?» "
+                           "elige «Neji, directo con el SII».")
         motivo = demostracion.bloqueo(leer(con))
         if motivo:
             raise ErrorSII(motivo)
@@ -83,6 +112,7 @@ def guardar(con, datos, secreto=None):
     """
     from .textos import correo_valido, texto_sii
 
+    _cambiar_modo(con, datos, secreto)
     cambios = {}
     for clave, largo in CAMPOS_TEXTO.items():
         if clave in datos:
@@ -145,8 +175,40 @@ def guardar(con, datos, secreto=None):
     return final
 
 
+def _cambiar_modo(con, datos, secreto):
+    """Quién emite la boleta y, si es un proveedor, cuál y su configuración. Al cambiar de forma (o de proveedor),
+    la boleta electrónica se desactiva hasta que esté todo listo y se vuelva a activar."""
+    cfg = leer(con)
+    if "modo" in datos and datos["modo"] != modo(cfg):
+        if datos["modo"] not in MODOS:
+            raise ErrorSII("Elige quién emite la boleta: Neji, un proveedor o la máquina POS.")
+        if modo(cfg) == "neji" and cfg["ambiente"] == "produccion":
+            n = con.execute("SELECT COUNT(*) FROM sii_documentos WHERE ambiente = 'produccion' AND "
+                            "estado IN ('pendiente', 'enviado')").fetchone()[0]
+            if n:
+                raise ErrorSII(f"Antes de cambiar, Neji tiene que terminar de enviar al SII {n} documento"
+                               f"{'s' if n != 1 else ''} (mira «Envíos al SII»). Vuelve a intentarlo en unos "
+                               "minutos.")
+        _poner(con, "modo", datos["modo"])
+        _poner(con, "activo", "0")
+        _poner(con, "demo", "0")
+        cfg = leer(con)
+    if datos.get("proveedor"):
+        if not secreto:
+            raise ErrorSII("No se puede guardar la configuración del proveedor.")
+        guardado = proveedores.preparar(cfg, datos["proveedor"], datos.get("proveedor_datos") or {},
+                                        lambda texto: _cifrador(secreto).encrypt(texto.encode()).decode())
+        if datos["proveedor"] != cfg.get("proveedor"):
+            _poner(con, "activo", "0")
+        _poner(con, "proveedor", datos["proveedor"])
+        _poner(con, "proveedor_datos", guardado)
+
+
 def pendientes_para_activar(con):
     cfg = leer(con)
+    if modo(cfg) == "maquina":
+        # La máquina entrega la boleta: para que la emita Neji hay que elegir otra forma.
+        return ["elegir «Neji» o «un proveedor» en «¿Quién emite la boleta?»"]
     faltan = []
     if falta_modulo():
         faltan.append(falta_modulo())
@@ -155,6 +217,8 @@ def pendientes_para_activar(con):
                           ("fecha_resolucion", "la fecha de resolución")):
         if not cfg.get(clave):
             faltan.append(nombre)
+    if modo(cfg) == "proveedor":
+        return faltan + proveedores.faltan(cfg)
     if not actecos(cfg):
         faltan.append("la actividad económica (Acteco)")
     if not cfg.get("firma_pfx"):
@@ -333,31 +397,33 @@ def _para_emitir(con, cfg, tipo, secreto):
     return cfg["ambiente"], emisor(cfg), folio, caf, cargar_firma(cfg, secreto)
 
 
-def _guardar_documento(con, cfg, doc, resultado, venta_id=None, devolucion_id=None, ambiente=None):
+def _guardar_documento(con, cfg, doc, resultado, venta_id=None, devolucion_id=None, ambiente=None, proveedor=None,
+                       externo=None):
     receptor = doc.get("receptor") or {}
     t = resultado["totales"]
     ambiente = ambiente or cfg["ambiente"]
-    # Lo de demostración no se manda a nadie (ni al SII ni al cliente).
-    demo = ambiente == demostracion.AMBIENTE
-    correo, correo_estado, correo_glosa = (None, None, None) if demo else _intercambio(doc)
+    # Lo de demostración no se manda a nadie (ni al SII ni al cliente). Lo del proveedor lo envía el proveedor.
+    ajeno = ambiente == demostracion.AMBIENTE or proveedor is not None
+    correo, correo_estado, correo_glosa = (None, None, None) if ajeno else _intercambio(doc)
+    ted = resultado["ted"]
     return con.execute(
         """INSERT INTO sii_documentos (ambiente, tipo, folio, fecha, emitido, venta_id, devolucion_id,
-               rut_receptor, razon_receptor, neto, iva, exento, total, xml, ted, correo_receptor, correo_estado,
-               correo_glosa)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               rut_receptor, razon_receptor, neto, iva, exento, total, xml, ted, estado, correo_receptor,
+               correo_estado, correo_glosa, proveedor, externo)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (ambiente, doc["tipo"], doc["folio"], doc["fecha"], ahora(), venta_id, devolucion_id,
          limpiar_rut(receptor.get("rut")) or RUT_CONSUMIDOR_FINAL, receptor.get("razon_social") or "Consumidor Final",
-         t["neto"], t["iva"], t["exento"], t["total"], resultado["xml"], resultado["ted"].decode("iso-8859-1"),
-         correo, correo_estado, correo_glosa),
+         t["neto"], t["iva"], t["exento"], t["total"], resultado["xml"],
+         ted.decode("iso-8859-1") if isinstance(ted, bytes) else ted,
+         "enviado" if proveedor else "pendiente", correo, correo_estado, correo_glosa, proveedor, externo),
     ).lastrowid
 
 
-def emitir_venta(con, venta_id, documento, secreto, tasa_iva=19):
-    """Emite la boleta (o factura) de una venta ya guardada. Llamar dentro de una transacción."""
-    from . import dte
-
-    cfg = leer(con)
+def _doc_venta(con, venta_id, documento, tasa_iva):
+    """(venta, documento sin folio ni emisor) de la boleta o factura de una venta ya guardada."""
     venta = con.execute("SELECT * FROM ventas WHERE id = ?", (venta_id,)).fetchone()
+    if venta is None:
+        raise ErrorSII("Venta no encontrada.")
     items = con.execute("SELECT * FROM venta_items WHERE venta_id = ? ORDER BY id", (venta_id,)).fetchall()
     cliente = (con.execute("SELECT * FROM clientes WHERE id = ?", (venta["cliente_id"],)).fetchone()
                if venta["cliente_id"] else None)
@@ -373,14 +439,32 @@ def emitir_venta(con, venta_id, documento, secreto, tasa_iva=19):
             receptor = {"rut": cliente["rut"], "razon_social": cliente["nombre"]}
     exento_bruto = sum(i["importe"] for i in items if i["exento"])
     descuento_exento = exento_bruto - venta["exento"] if venta["descuento"] else 0
-    ambiente, datos_emisor, folio, caf, firma = _para_emitir(con, cfg, tipo, secreto)
     fiado = con.execute("SELECT 1 FROM venta_pagos WHERE venta_id = ? AND metodo = 'fiado'", (venta_id,)).fetchone()
-    doc = {"tipo": tipo, "folio": folio, "fecha": venta["fecha"][:10], "emisor": datos_emisor, "receptor": receptor,
-           "lineas": [{"nombre": i["descripcion"], "codigo": i["codigo"], "cantidad": i["cantidad"],
-                       "precio": i["precio_unitario"], "monto": i["importe"], "exento": bool(i["exento"])}
-                      for i in items],
-           "descuento_afecto": venta["descuento"] - descuento_exento, "descuento_exento": descuento_exento,
-           "tasa_iva": tasa_iva, "credito": bool(fiado)}
+    return venta, {"tipo": tipo, "fecha": venta["fecha"][:10], "receptor": receptor,
+                   "lineas": [{"nombre": i["descripcion"], "codigo": i["codigo"], "cantidad": i["cantidad"],
+                               "precio": i["precio_unitario"], "monto": i["importe"], "exento": bool(i["exento"])}
+                              for i in items],
+                   "descuento_afecto": venta["descuento"] - descuento_exento, "descuento_exento": descuento_exento,
+                   "tasa_iva": tasa_iva, "credito": bool(fiado)}
+
+
+def revisar_venta(con, venta_id, documento, tasa_iva=19):
+    """Revisa (sin emitir) que la venta tenga lo necesario para su documento: p. ej. la factura, el cliente."""
+    _doc_venta(con, venta_id, documento, tasa_iva)
+
+
+def emitir_venta(con, venta_id, documento, secreto, tasa_iva=19):
+    """Emite la boleta (o factura) de una venta ya guardada. Llamar dentro de una transacción.
+
+    Solo cuando la emite Neji: con un proveedor es emitir_venta_con_proveedor, fuera de la transacción."""
+    from . import dte
+
+    cfg = leer(con)
+    if usa_proveedor(cfg):
+        raise ErrorSII("La boleta la emite el proveedor (emitir_venta_con_proveedor).")
+    venta, doc = _doc_venta(con, venta_id, documento, tasa_iva)
+    ambiente, datos_emisor, folio, caf, firma = _para_emitir(con, cfg, doc["tipo"], secreto)
+    doc |= {"folio": folio, "emisor": datos_emisor}
     resultado = dte.construir(doc, caf, firma)
     if resultado["totales"]["total"] != venta["total"]:     # no debería pasar: mismos cálculos que la venta
         raise ErrorSII(f"El total del documento ({resultado['totales']['total']}) no cuadra con la venta "
@@ -395,16 +479,13 @@ def documento_de_venta(con, venta_id):
         "AND estado != 'rechazado' ORDER BY id DESC LIMIT 1", (venta_id,)).fetchone()
 
 
-def emitir_nota_credito(con, devolucion_id, secreto, tasa_iva=19):
-    """Nota de crédito por una devolución, si la venta tiene boleta o factura electrónica. Dentro de la
-    transacción de la devolución. Devuelve el id del documento o None (venta sin documento electrónico)."""
-    from . import dte
-
+def _doc_nota_credito(con, devolucion_id, cfg, tasa_iva):
+    """(devolución, nota de crédito sin folio ni emisor), o None si la venta no tiene documento electrónico (o
+    es de otro ambiente: p. ej. de antes de cambiar a un proveedor)."""
     devolucion = con.execute("SELECT * FROM devoluciones WHERE id = ?", (devolucion_id,)).fetchone()
     original = documento_de_venta(con, devolucion["venta_id"])
     if original is None:
         return None
-    cfg = leer(con)
     if original["ambiente"] != ambiente_emision(cfg):
         return None
     venta = con.execute("SELECT * FROM ventas WHERE id = ?", (devolucion["venta_id"],)).fetchone()
@@ -422,15 +503,119 @@ def emitir_nota_credito(con, devolucion_id, secreto, tasa_iva=19):
                                                  (venta["cliente_id"],)).fetchone())
     elif original["rut_receptor"] and original["rut_receptor"] != RUT_CONSUMIDOR_FINAL:
         receptor = {"rut": original["rut_receptor"], "razon_social": original["razon_receptor"]}
+    return devolucion, {"tipo": 61, "fecha": devolucion["fecha"][:10], "receptor": receptor, "lineas": lineas,
+                        "tasa_iva": tasa_iva,
+                        "referencias": [{"tipo": original["tipo"], "folio": original["folio"],
+                                         "fecha": original["fecha"], "codigo": 1 if anula else 3,
+                                         "razon": devolucion["motivo"] or "Devolución de mercadería"}]}
+
+
+def emitir_nota_credito(con, devolucion_id, secreto, tasa_iva=19):
+    """Nota de crédito por una devolución, si la venta tiene boleta o factura electrónica. Dentro de la
+    transacción de la devolución. Devuelve el id del documento o None (venta sin documento electrónico).
+
+    Solo cuando la emite Neji: con un proveedor es emitir_nota_credito_con_proveedor, fuera de la transacción."""
+    from . import dte
+
+    cfg = leer(con)
+    if usa_proveedor(cfg):
+        raise ErrorSII("La nota de crédito la emite el proveedor (emitir_nota_credito_con_proveedor).")
+    preparado = _doc_nota_credito(con, devolucion_id, cfg, tasa_iva)
+    if preparado is None:
+        return None
+    devolucion, doc = preparado
     ambiente, datos_emisor, folio, caf, firma = _para_emitir(con, cfg, 61, secreto)
-    doc = {"tipo": 61, "folio": folio, "fecha": devolucion["fecha"][:10], "emisor": datos_emisor, "receptor": receptor,
-           "lineas": lineas, "tasa_iva": tasa_iva,
-           "referencias": [{"tipo": original["tipo"], "folio": original["folio"], "fecha": original["fecha"],
-                            "codigo": 1 if anula else 3,
-                            "razon": devolucion["motivo"] or "Devolución de mercadería"}]}
+    doc |= {"folio": folio, "emisor": datos_emisor}
     resultado = dte.construir(doc, caf, firma)
     return _guardar_documento(con, cfg, doc, resultado, venta_id=devolucion["venta_id"], devolucion_id=devolucion_id,
                               ambiente=ambiente)
+
+
+# --- Con un proveedor de boleta electrónica -------------------------------------------------------------------
+# Fuera de la transacción de la venta: se arma el documento (lectura), se le pide al proveedor por internet y se
+# guarda lo que devuelve en una transacción corta. Un candado por venta (o devolución) evita pedir dos veces lo
+# mismo a la vez (p. ej. doble clic en «Emitir boleta» del historial).
+
+_CANDADOS = [threading.Lock() for _ in range(32)]
+
+
+def _candado(*clave):
+    return _CANDADOS[hash(clave) % len(_CANDADOS)]
+
+
+def _descifrador(secreto):
+    return lambda texto: _cifrador(secreto).decrypt(texto.encode()).decode()
+
+
+def _xml_bytes(xml):
+    if isinstance(xml, str):
+        cabeza = xml[:100].upper()
+        return xml.encode("iso-8859-1" if "ISO-8859-1" in cabeza else "utf-8")
+    return bytes(xml or b"")
+
+
+def _emitir_con_proveedor(con, cfg, doc, secreto, total=None, venta_id=None, devolucion_id=None):
+    from . import dte
+
+    conector, config = proveedores.para_emitir(cfg, _descifrador(secreto))
+    totales = dte.calcular_totales(doc["tipo"], doc["lineas"], doc.get("descuento_afecto", 0),
+                                   doc.get("descuento_exento", 0), doc.get("tasa_iva", 19))
+    if total is not None and totales["total"] != total:      # no debería pasar: mismos cálculos que la venta
+        raise ErrorSII(f"El total del documento ({totales['total']}) no cuadra con la venta ({total}).")
+    try:
+        r = conector.emitir(doc, config)
+    except ErrorSII:
+        raise
+    except Exception as e:  # noqa: BLE001 (un error del conector se muestra como uno del proveedor)
+        registro.exception("Error del proveedor %s", conector.clave)
+        raise ErrorSII(f"{conector.nombre} no pudo emitir el documento: {e}") from None
+    try:
+        folio = int(r.get("folio"))
+    except (TypeError, ValueError):
+        folio = 0
+    xml = _xml_bytes(r.get("xml"))
+    if folio <= 0 or not xml:
+        raise ErrorSII(f"{conector.nombre} no devolvió el folio y el documento timbrado.")
+    ted = r.get("ted") or proveedores.ted_del_xml(xml)
+    try:
+        with transaccion(con):
+            return _guardar_documento(con, cfg, doc | {"folio": folio}, {"xml": xml, "ted": ted, "totales": totales},
+                                      venta_id=venta_id, devolucion_id=devolucion_id,
+                                      ambiente=proveedores.ambiente(cfg), proveedor=conector.nombre,
+                                      externo=str(r["externo"])[:200] if r.get("externo") else None)
+    except sqlite3.IntegrityError:
+        raise ErrorSII(f"{conector.nombre} devolvió el folio {folio}, que ya está en otro documento.") from None
+
+
+def emitir_venta_con_proveedor(con, venta_id, documento, secreto, tasa_iva=19):
+    """La boleta (o factura) de una venta ya guardada, pedida al proveedor. FUERA de una transacción.
+    Devuelve el id del documento."""
+    with _candado("venta", venta_id):
+        with transaccion(con):
+            cfg = leer(con)
+            if documento_de_venta(con, venta_id) is not None:
+                raise ErrorSII("Esta venta ya tiene su documento electrónico.")
+            venta, doc = _doc_venta(con, venta_id, documento, tasa_iva)
+        doc |= {"emisor": emisor(cfg), "referencia": f"venta-{venta_id}"}
+        return _emitir_con_proveedor(con, cfg, doc, secreto, total=venta["total"], venta_id=venta_id)
+
+
+def emitir_nota_credito_con_proveedor(con, devolucion_id, secreto, tasa_iva=19):
+    """La nota de crédito de una devolución, pedida al proveedor. FUERA de una transacción. Devuelve el id del
+    documento, o None si la venta no tiene documento electrónico del proveedor."""
+    with _candado("devolucion", devolucion_id):
+        with transaccion(con):
+            cfg = leer(con)
+            if con.execute("SELECT 1 FROM sii_documentos WHERE devolucion_id = ? AND tipo = 61",
+                           (devolucion_id,)).fetchone():
+                raise ErrorSII("Esta devolución ya tiene su nota de crédito.")
+            preparado = _doc_nota_credito(con, devolucion_id, cfg, tasa_iva)
+        if preparado is None:
+            return None
+        devolucion, doc = preparado
+        doc |= {"emisor": emisor(cfg), "referencia": f"devolucion-{devolucion_id}"}
+        return _emitir_con_proveedor(con, cfg, doc, secreto, venta_id=devolucion["venta_id"],
+                                     devolucion_id=devolucion_id)
 
 
 ESTADOS_CORREO = {"pendiente": "XML por enviar al cliente", "enviado": "XML enviado al cliente",
@@ -442,6 +627,11 @@ ESTADOS = {"pendiente": "Por enviar al SII", "enviado": "Enviado, esperando resp
 def texto_estado(fila):
     if fila["ambiente"] == demostracion.AMBIENTE:
         return "Demostración: no se envía al SII"
+    if fila["ambiente"] in proveedores.AMBIENTES:
+        quien = (fila["proveedor"] if "proveedor" in fila.keys() else None) or "el proveedor"
+        if fila["ambiente"] == proveedores.AMBIENTE_PRUEBAS:
+            return f"Prueba de {quien}: no vale como documento"
+        return f"Emitido por {quien}"
     return ESTADOS.get(fila["estado"], fila["estado"])
 
 
@@ -499,8 +689,8 @@ def para_ticket(con, fila, cfg=None):
     return {"id": fila["id"], "tipo": fila["tipo"], "nombre": NOMBRES.get(fila["tipo"], ""), "folio": fila["folio"],
             "fecha": fila["fecha"], "ambiente": fila["ambiente"], "estado": fila["estado"],
             "estado_texto": texto_estado(fila), "glosa": fila["glosa"],
-            # Demostración: el ticket lleva la leyenda «SIN VALOR TRIBUTARIO» y no remite a sii.cl.
-            "demo": fila["ambiente"] == demostracion.AMBIENTE,
+            # Demostración (o pruebas del proveedor): la leyenda «SIN VALOR TRIBUTARIO» y no remite a sii.cl.
+            "demo": fila["ambiente"] in (demostracion.AMBIENTE, proveedores.AMBIENTE_PRUEBAS),
             "neto": fila["neto"], "iva": fila["iva"], "exento": fila["exento"], "total": fila["total"],
             "rut_receptor": fila["rut_receptor"], "razon_receptor": fila["razon_receptor"],
             "devolucion_id": fila["devolucion_id"], "ted": fila["ted"],
@@ -622,8 +812,9 @@ def _ciclo(ruta_db, secreto, conexion, correo):
         cfg = leer(con)
         if falta_modulo():
             return resumen
-        # Con la boleta electrónica desactivada solo se mueven los envíos de la certificación.
-        activo = cfg.get("activo") == "1"
+        # Con la boleta electrónica desactivada (o emitida por un proveedor o la máquina POS) solo se mueven los
+        # envíos de la certificación.
+        activo = cfg.get("activo") == "1" and modo(cfg) == "neji"
         if not activo and not con.execute("SELECT 1 FROM sii_envios WHERE ambiente = ? AND etapa IS NOT NULL AND "
                                           "estado IN ('por_enviar', 'enviado')", (cfg["ambiente"],)).fetchone():
             return resumen

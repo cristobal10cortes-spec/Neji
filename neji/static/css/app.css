@@ -116,6 +116,12 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible {
 textarea { min-height: 70px; resize: vertical; }
 label.campo { display: flex; flex-direction: column; gap: .25rem; font-size: .9rem; color: var(--suave); }
 label.check { display: flex; align-items: center; gap: .5rem; cursor: pointer; }
+/* ¿Quién emite la boleta? (Configuración → Boleta electrónica) */
+.opciones-modo { display: grid; gap: .5rem; }
+.opcion-modo { display: flex; align-items: flex-start; gap: .7rem; padding: .7rem .8rem; border: 1px solid var(--borde);
+  border-radius: var(--radio); cursor: pointer; }
+.opcion-modo.elegida { border-color: var(--primario); background: var(--primario-claro); }
+.opcion-modo input.radio { margin-top: .15rem; }
 label.check input, input.radio { width: 18px; height: 18px; flex: none; }
 .ayuda { font-size: .82rem; color: var(--suave); }
 

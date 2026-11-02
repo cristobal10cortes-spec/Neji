@@ -140,7 +140,8 @@ def migrar(con):
         if columna not in clientes:
             con.execute(f"ALTER TABLE clientes ADD COLUMN {columna} TEXT")
     documentos = _columnas(con, "sii_documentos")
-    for columna in ("correo_receptor", "correo_estado", "correo_glosa", "correo_enviado", "caso"):   # 0.1.30
+    for columna in ("correo_receptor", "correo_estado", "correo_glosa", "correo_enviado", "caso",   # 0.1.30
+                    "proveedor", "externo"):                                                       # proveedores
         if columna not in documentos:
             con.execute(f"ALTER TABLE sii_documentos ADD COLUMN {columna} TEXT")
     envios = _columnas(con, "sii_envios")

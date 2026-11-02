@@ -2,8 +2,12 @@
 
 Es opcional y se configura por caja (Configuración → Máquina POS). Cada proveedor es un «conector» con la misma
 forma: iniciar el cobro, consultar cómo va, cancelarlo mientras espera o anularlo si ya se aprobó. Hoy está el
-simulador, para probar todo sin máquina; Klap y TUU (Haulmer) aparecen como pendientes hasta tener su
-documentación de integración. Para agregar un proveedor basta con un conector nuevo en CONECTORES.
+simulador, para probar todo sin máquina; Klap, TUU (Haulmer), Mercado Pago, Transbank y Getnet aparecen como
+pendientes hasta tener su documentación de integración. Para agregar un proveedor basta con un conector nuevo en
+CONECTORES.
+
+Si la máquina además entrega la boleta (Configuración → Boleta electrónica → «La máquina POS»), Neji no emite
+boleta para no emitir dos.
 
 El cobro se guarda (pos_cobros) y una venta lo usa una sola vez: el servidor revisa que esté aprobado, que sea de
 la misma caja, del mismo monto y método, y que ninguna otra venta lo haya usado. Si la venta no se pudo registrar
@@ -114,6 +118,12 @@ CONECTORES = {c.clave: c for c in (
     Pendiente("klap", "Klap",
               "Pendiente: falta la documentación de integración de Klap (programa «POS Integrados»)."),
     Pendiente("tuu", "TUU (Haulmer)", "Pendiente: falta la documentación de «Pago remoto» de TUU."),
+    Pendiente("mercadopago", "Mercado Pago (Point)",
+              "Pendiente: falta integrar Mercado Pago Point (la orden de cobro llega a la máquina por internet)."),
+    Pendiente("transbank", "Transbank (POS Integrado)",
+              "Pendiente: falta integrar el «POS Integrado» de Transbank (la máquina va conectada a la caja por "
+              "USB)."),
+    Pendiente("getnet", "Getnet", "Pendiente: falta la documentación de integración de Getnet."),
 )}
 
 

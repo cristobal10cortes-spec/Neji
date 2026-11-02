@@ -221,7 +221,9 @@ def ver_config():
     config = leer_config(con)
     # Lo que la caja necesita saber de la boleta electrónica (lo demás está en /api/sii, solo administrador).
     config["sii_activo"] = "1" if sii.activo(con) else "0"
-    config["sii_ambiente"] = sii.ambiente_emision(sii.leer(con))
+    cfg_sii = sii.leer(con)
+    config["sii_ambiente"] = sii.ambiente_emision(cfg_sii)
+    config["sii_modo"] = sii.modo(cfg_sii)     # «maquina»: la boleta la entrega la máquina POS
     config["licencia"] = licencia.resumen(con)
     config["pos"] = pos.resumen(con)      # qué cajas cobran con máquina POS integrada
     return jsonify(config)

@@ -199,7 +199,8 @@ def _emitir_documento(con, venta_id, documento, avisos, tasa_iva):
     """Boleta o factura electrónica de la venta (si el SII está activo), dentro de la transacción de la venta.
 
     Si la boleta no se puede emitir, la venta queda con su comprobante interno y se avisa. La factura pedida,
-    en cambio, no se vende sin ella.
+    en cambio, no se vende sin ella. Devuelve True si el documento lo emite un proveedor: se le pide después de
+    guardar la venta (_documento_del_proveedor), porque nada de red ocurre dentro de la transacción.
     """
     from ..sii import ErrorSII
     from ..sii import servicio as sii
@@ -207,7 +208,14 @@ def _emitir_documento(con, venta_id, documento, avisos, tasa_iva):
     if not sii.activo(con):
         if documento == "factura":
             raise ErrorNegocio("La factura electrónica no está activada (Configuración → Boleta electrónica).")
-        return
+        return False
+    if sii.usa_proveedor(sii.leer(con)):
+        if documento == "factura":          # lo que falte para la factura (el cliente), antes de vender
+            try:
+                sii.revisar_venta(con, venta_id, documento, tasa_iva)
+            except ErrorSII as e:
+                raise ErrorNegocio(f"No se pudo emitir la factura: {e}") from None
+        return True
     con.execute("SAVEPOINT documento_sii")
     try:
         sii.emitir_venta(con, venta_id, documento, _secreto(), tasa_iva)
@@ -221,7 +229,7 @@ def _emitir_documento(con, venta_id, documento, avisos, tasa_iva):
             raise ErrorNegocio(f"No se pudo emitir la factura: {e}") from None
         if avisos is not None:
             avisos.append(f"La venta quedó registrada, pero sin boleta electrónica: {e}")
-        return
+        return False
     if avisos is not None:
         cfg = sii.leer(con)
         quedan = {}
@@ -230,6 +238,24 @@ def _emitir_documento(con, venta_id, documento, avisos, tasa_iva):
         for tipo, n in quedan.items():
             if tipo in (39, 33) and n <= 20:
                 avisos.append(f"Quedan {n} folios de {sii.NOMBRES[tipo].lower()}: pide más al SII.")
+    return False
+
+
+def _documento_del_proveedor(con, venta_id, documento, avisos, tasa_iva):
+    """Le pide la boleta (o factura) al proveedor, con la venta ya guardada. Si no responde, la venta queda con su
+    comprobante interno y se avisa: el documento se emite después desde el historial de ventas."""
+    from ..sii import ErrorSII
+    from ..sii import servicio as sii
+
+    try:
+        sii.emitir_venta_con_proveedor(con, venta_id, documento, _secreto(), tasa_iva)
+    except Exception as e:  # noqa: BLE001 (la venta ya está hecha)
+        if not isinstance(e, ErrorSII):
+            registro.exception("Error al pedir al proveedor el documento de la venta %s", venta_id)
+        if avisos is not None:
+            nombre = "factura" if documento == "factura" else "boleta"
+            avisos.append(f"La venta quedó registrada, pero sin {nombre} electrónica: {e} Emítela después desde "
+                          "el historial de ventas (botón «Emitir»).")
 
 
 def registrar_venta(con, datos, usuario, avisos=None):
@@ -352,7 +378,9 @@ def registrar_venta(con, datos, usuario, avisos=None):
         if cotizacion_id:
             con.execute("UPDATE cotizaciones SET estado = 'vendida' WHERE id = ? AND estado = 'vigente'",
                         (cotizacion_id,))
-        _emitir_documento(con, venta_id, documento, avisos, int(config["iva_porcentaje"]))
+        del_proveedor = _emitir_documento(con, venta_id, documento, avisos, int(config["iva_porcentaje"]))
+    if del_proveedor:
+        _documento_del_proveedor(con, venta_id, documento, avisos, int(config["iva_porcentaje"]))
     return venta_id
 
 
@@ -491,15 +519,20 @@ def devolver(con, venta_id, datos, usuario, avisos=None):
         estado = "devuelta" if not queda_algo else "devuelta_parcial"
         con.execute("UPDATE ventas SET devuelto = ?, estado = ? WHERE id = ?",
                     (devuelto, estado, venta_id))
-        _emitir_nota_credito(con, devolucion_id, avisos)
+        del_proveedor = _emitir_nota_credito(con, devolucion_id, avisos)
+    if del_proveedor:
+        _nota_credito_del_proveedor(con, devolucion_id, avisos)
     return devolucion_id
 
 
 def _emitir_nota_credito(con, devolucion_id, avisos):
+    """Nota de crédito de la devolución, dentro de su transacción. True si la emite un proveedor (después)."""
     from ..sii import servicio as sii
 
     if not sii.activo(con):
-        return
+        return False
+    if sii.usa_proveedor(sii.leer(con)):
+        return True
     con.execute("SAVEPOINT nota_credito_sii")
     try:
         sii.emitir_nota_credito(con, devolucion_id, _secreto(), int(leer_config(con)["iva_porcentaje"]))
@@ -510,6 +543,21 @@ def _emitir_nota_credito(con, devolucion_id, avisos):
         registro.warning("Sin nota de crédito para la devolución %s: %s", devolucion_id, e)
         if avisos is not None:
             avisos.append(f"La devolución quedó registrada, pero sin nota de crédito electrónica: {e}")
+    return False
+
+
+def _nota_credito_del_proveedor(con, devolucion_id, avisos):
+    from ..sii import ErrorSII
+    from ..sii import servicio as sii
+
+    try:
+        sii.emitir_nota_credito_con_proveedor(con, devolucion_id, _secreto(), int(leer_config(con)["iva_porcentaje"]))
+    except Exception as e:  # noqa: BLE001 (la devolución ya está hecha)
+        if not isinstance(e, ErrorSII):
+            registro.exception("Error al pedir al proveedor la nota de crédito de la devolución %s", devolucion_id)
+        if avisos is not None:
+            avisos.append(f"La devolución quedó registrada, pero sin nota de crédito electrónica: {e} Emítela en "
+                          "el sistema del proveedor.")
 
 
 def crear_cotizacion(con, datos, usuario):
