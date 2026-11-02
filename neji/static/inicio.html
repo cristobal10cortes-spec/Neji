@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neji POS</title>
+<!-- Primer inicio de NejiPOS.exe (escritorio.py → inicio_con_eleccion): ¿este computador es el principal o una
+     caja conectada al principal? La ventana llama a window.pywebview.api (ApiInicio). -->
+<style>
+  :root { --fondo: #f3f5f7; --panel: #fff; --borde: #d9dee4; --texto: #1d2329; --suave: #5f6b77;
+    --primario: #0f766e; --primario-oscuro: #0b5953; --primario-claro: #e3f3f1; --peligro: #c62828;
+    --peligro-claro: #fdecec; --aviso: #fff4cc; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.45 "Segoe UI", system-ui, sans-serif; color: var(--texto); background: var(--fondo); }
+  main { max-width: 860px; margin: 0 auto; padding: 2.2rem 1.2rem 2rem; }
+  h1 { margin: 0; font-size: 1.7rem; color: var(--primario-oscuro); }
+  h1 span { color: var(--primario); }
+  .sub { margin: .2rem 0 1.4rem; font-size: 1.2rem; }
+  .opciones { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+  @media (max-width: 760px) { .opciones { grid-template-columns: 1fr; } }
+  .opcion { background: var(--panel); border: 1px solid var(--borde); border-radius: 10px; padding: 1.1rem 1.2rem;
+    display: flex; flex-direction: column; gap: .7rem; }
+  .opcion h2 { margin: 0; font-size: 1.15rem; display: flex; align-items: center; gap: .55rem; }
+  .opcion h2 svg { width: 26px; height: 26px; color: var(--primario); flex: none; }
+  .opcion p { margin: 0; color: var(--suave); }
+  .relleno { flex: 1; }
+  label.check { display: flex; gap: .5rem; align-items: flex-start; cursor: pointer; }
+  label.check input { width: 18px; height: 18px; margin-top: .1rem; flex: none; }
+  button { font: inherit; padding: .6rem 1rem; border-radius: 8px; border: 1px solid var(--borde); background: #fff;
+    cursor: pointer; color: var(--texto); }
+  button.primario { background: var(--primario); border-color: var(--primario); color: #fff; font-weight: 600; }
+  button.primario:hover:not(:disabled) { background: var(--primario-oscuro); }
+  button:disabled { opacity: .6; cursor: default; }
+  input[type=text] { font: inherit; padding: .55rem .7rem; border: 1px solid var(--borde); border-radius: 8px;
+    min-width: 0; flex: 1; }
+  .fila { display: flex; gap: .5rem; align-items: center; }
+  .aviso { padding: .75rem 1rem; border-radius: 8px; margin-bottom: 1rem; background: var(--aviso); }
+  .aviso.error { background: var(--peligro-claro); color: var(--peligro); }
+  .encontrado { display: flex; gap: .7rem; align-items: center; justify-content: space-between; padding: .6rem .7rem;
+    border: 1px solid var(--borde); border-radius: 8px; background: var(--primario-claro); }
+  .encontrado b { display: block; }
+  .encontrado span { color: var(--suave); font-size: .9rem; }
+  .ayuda { color: var(--suave); font-size: .9rem; }
+  ul.ayuda { margin: .2rem 0 0; padding-left: 1.2rem; }
+  details summary { cursor: pointer; color: var(--primario-oscuro); }
+  details .fila { margin-top: .5rem; }
+  .pie { margin-top: 1.4rem; color: var(--suave); font-size: .9rem; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Neji <span>POS</span></h1>
+  <p class="sub">¿Cómo vas a usar este computador?</p>
+  <div id="aviso" class="aviso" hidden></div>
+  <div class="opciones">
+    <section class="opcion" id="op-principal">
+      <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>Computador principal</h2>
+      <p>Aquí quedan guardadas las ventas, los productos y el stock. Si el local tiene más cajas, se conectan a este computador.</p>
+      <label class="check"><input type="checkbox" id="otras"> <span>Otras cajas se van a conectar a este computador <span class="ayuda">(Windows puede preguntar si permite el acceso a la red: acepta en «Redes privadas»)</span></span></label>
+      <div class="relleno"></div>
+      <button type="button" class="primario" id="btn-principal">Usar como computador principal</button>
+    </section>
+    <section class="opcion" id="op-caja">
+      <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.55a11 11 0 0 1 14 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01"/></svg>Caja conectada al principal</h2>
+      <p>Vende con los productos, el stock y los usuarios del computador principal. Neji POS lo busca solo en la red del local.</p>
+      <div id="resultado"></div>
+      <div class="relleno"></div>
+      <button type="button" class="primario" id="btn-buscar">Buscar el computador principal</button>
+      <details id="a-mano">
+        <summary>Escribir la dirección a mano</summary>
+        <div class="fila">
+          <input type="text" id="direccion" placeholder="192.168.1.20" autocomplete="off" aria-label="Dirección del computador principal">
+          <button type="button" id="btn-conectar">Conectar</button>
+        </div>
+        <p class="ayuda">Aparece en el computador principal, en Configuración → Cajas.</p>
+      </details>
+    </section>
+  </div>
+  <p class="pie">Se puede cambiar después con el acceso directo «Neji POS - principal o caja» del menú Inicio.</p>
+</main>
+<script>
+const ESTADO = /*ESTADO*/null || {};
+const $ = (id) => document.getElementById(id);
+const botones = () => [...document.querySelectorAll('button')];
+let ocupado = false;
+
+/** El puente con Python (pywebview lo arma al cargar la página). */
+function puente() {
+  return new Promise((listo) => {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.buscar) return listo(window.pywebview.api);
+    window.addEventListener('pywebviewready', () => listo(window.pywebview.api), { once: true });
+  });
+}
+
+function avisar(texto, error = false) {
+  const zona = $('aviso');
+  zona.hidden = !texto;
+  zona.className = error ? 'aviso error' : 'aviso';
+  zona.textContent = texto || '';
+}
+
+function el(etiqueta, texto, clase) {
+  const nodo = document.createElement(etiqueta);
+  if (texto != null) nodo.textContent = texto;
+  if (clase) nodo.className = clase;
+  return nodo;
+}
+
+/** Corre una acción con los botones desactivados; si Python responde {ok: false}, muestra el error. */
+async function ejecutar(boton, texto, accion) {
+  if (ocupado) return null;
+  ocupado = true;
+  const original = boton.textContent;
+  botones().forEach((b) => { b.disabled = true; });
+  boton.textContent = texto;
+  try {
+    const r = await accion(await puente());
+    if (r && r.ok === false) avisar(r.error || 'No se pudo.', true);
+    return r;
+  } catch (e) {
+    avisar(String(e && e.message || e), true);
+    return null;
+  } finally {
+    ocupado = false;
+    boton.textContent = original;
+    botones().forEach((b) => { b.disabled = false; });
+  }
+}
+
+function conectar(direccion, boton) {
+  avisar('');
+  // Si sale bien, Python carga Neji POS del computador principal en esta misma ventana.
+  return ejecutar(boton, 'Conectando…', (api) => api.conectar(direccion));
+}
+
+function mostrarEncontrados(lista) {
+  const zona = $('resultado');
+  zona.replaceChildren();
+  if (!lista.length) {
+    zona.append(el('p', 'No encontré el computador principal en la red. Revisa que:', 'ayuda'));
+    const ul = el('ul', null, 'ayuda');
+    ['esté encendido y con Neji POS abierto;',
+      'en él esté marcado Configuración → Cajas → «Permitir que otras cajas de la red se conecten» (y que Neji POS se haya vuelto a abrir después);',
+      'Windows le haya permitido el acceso a la red en «Redes privadas»;',
+      'los dos computadores estén conectados a la misma red (el mismo router o WiFi).',
+    ].forEach((t) => ul.append(el('li', t)));
+    zona.append(ul, el('p', 'Luego vuelve a buscar, o escribe su dirección a mano.', 'ayuda'));
+    $('a-mano').open = true;
+    return;
+  }
+  zona.append(el('p', lista.length === 1 ? 'Encontré este computador principal:' : 'Encontré estos computadores con Neji POS:', 'ayuda'));
+  lista.forEach((p) => {
+    const fila = el('div', null, 'encontrado');
+    const datos = el('div');
+    datos.append(el('b', p.negocio || 'Neji POS'), el('span', `${p.ip}${p.version ? ' · versión ' + p.version : ''}`));
+    const boton = el('button', 'Conectar', 'primario');
+    boton.type = 'button';
+    boton.addEventListener('click', () => conectar(p.direccion, boton));
+    fila.append(datos, boton);
+    zona.append(fila);
+  });
+}
+
+async function buscar(limpiar = true) {
+  if (limpiar) avisar('');
+  $('resultado').replaceChildren(el('p', 'Buscando en la red del local… (tarda unos segundos)', 'ayuda'));
+  const r = await ejecutar($('btn-buscar'), 'Buscando…', (api) => api.buscar());
+  if (r && r.ok) mostrarEncontrados(r.encontrados || []);
+  else $('resultado').replaceChildren();
+}
+
+$('btn-principal').addEventListener('click', () => {
+  avisar('');
+  // Si sale bien, Python abre Neji POS de este computador en esta misma ventana.
+  ejecutar($('btn-principal'), 'Preparando…', (api) => api.usar_principal($('otras').checked));
+});
+$('btn-buscar').addEventListener('click', () => buscar());
+$('btn-conectar').addEventListener('click', () => conectar($('direccion').value, $('btn-conectar')));
+$('direccion').addEventListener('keydown', (e) => { if (e.key === 'Enter') conectar($('direccion').value, $('btn-conectar')); });
+
+if (ESTADO.aviso) avisar(ESTADO.aviso, true);
+if (ESTADO.direccion) $('direccion').value = ESTADO.direccion;
+if (ESTADO.buscar) buscar(false);        // el aviso de por qué se vuelve a preguntar queda a la vista
+</script>
+</body>
+</html>

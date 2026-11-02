@@ -1,6 +1,10 @@
 """Neji POS como programa de escritorio: su propia ventana, con el servidor adentro.
 
-    NejiPOS.exe                         abre Neji POS en su propia ventana
+    NejiPOS.exe                         abre Neji POS en su propia ventana. La primera vez pregunta si
+                                        este computador es el principal o una caja conectada al
+                                        principal (que busca solo en la red); queda guardado en
+                                        equipo.json, en la carpeta de datos
+    NejiPOS.exe --elegir                vuelve a preguntar si es el principal o una caja
     NejiPOS.exe --red                   además acepta otras cajas de la red local
                                         (también se activa en Configuración → Cajas)
     NejiPOS.exe --conectar 192.168.1.5  caja secundaria: abre la ventana conectada al equipo
@@ -27,6 +31,7 @@ import mimetypes
 import os
 import shutil
 import socket
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -574,11 +579,11 @@ class ApiEscritorio:
         return self.lectores()
 
 
-def crear_ventana(webview, url, confirmar_cierre=True, titulo=None):
+def crear_ventana(webview, url, confirmar_cierre=True, titulo=None, html=None, api=None):
     return webview.create_window(
-        titulo or f"{TITULO} {VERSION}", url, width=1366, height=800, min_size=(1024, 640), maximized=True,
-        confirm_close=confirmar_cierre, text_select=True, zoomable=True, background_color="#F3F5F7",
-        js_api=ApiEscritorio())
+        titulo or f"{TITULO} {VERSION}", url, html=html, width=1366, height=800, min_size=(1024, 640),
+        maximized=True, confirm_close=confirmar_cierre, text_select=True, zoomable=True, background_color="#F3F5F7",
+        js_api=api or ApiEscritorio())
 
 
 def abrir_ventana(url, red=False, titulo=None):
@@ -635,6 +640,14 @@ def prueba_de_humo(salida=None):
         pedir("/api/recetario/formas", 200, "application/json", b"psula")
         pedir("/api/equipo", 200, "application/json", b"carpeta_datos")
         pedir("/api/sii", 200, "application/json", b'"falta_modulo":""')
+        # La página del primer inicio («¿principal o caja?») va dentro del programa.
+        try:
+            bien = "¿Cómo vas a usar este computador?" in pagina_inicio({})
+        except OSError as e:
+            bien = False
+            resultados.append({"inicio": f"{type(e).__name__}: {e}", "ok": False})
+        ok &= bien
+        resultados.append({"pagina_inicio": bien, "ok": bien})
 
         # Boleta electrónica: firma (cryptography), XML firmado y verificado (lxml) y timbre PDF417 empaquetados.
         try:
@@ -798,6 +811,18 @@ def informar(salida, resultado, resumen=None):
 
 # --- Inicio -----------------------------------------------------------------------------------------
 
+def avisar_version_principal(equipo, version_principal):
+    """La interfaz (pantallas, tickets) la da el equipo principal: si tiene una versión anterior a la de esta
+    caja, los cambios no se verían y nadie sabría por qué. Devuelve el título de la ventana."""
+    mas_antigua = not version_principal or (numeros(version_principal) and numeros(VERSION)
+                                            and numeros(version_principal) < numeros(VERSION))
+    if mas_antigua:
+        mensaje(f"Esta caja tiene Neji POS {VERSION}, pero las pantallas las da el equipo principal "
+                f"({equipo}), que tiene {f'la versión {version_principal}' if version_principal else 'una versión anterior'}."
+                "\n\nPara ver los cambios de la versión nueva, instálala también en el equipo principal.")
+    return f"{TITULO} {version_principal or ''} (conectado a {equipo})".replace("  ", " ")
+
+
 def conectar(destino, datos):
     """Caja secundaria: abre la ventana apuntando al equipo principal."""
     base = "http://" + destino.removeprefix("http://").rstrip("/")
@@ -808,21 +833,185 @@ def conectar(destino, datos):
                 "encendido, con Neji POS abierto y con «Permitir otras cajas» activado en "
                 "Configuración → Cajas.", error=True)
         return 1
-    # La interfaz (pantallas, tickets) la da el equipo principal: su versión es la que se ve.
     version_principal = (estado_neji(base) or {}).get("version")
-    equipo = base.removeprefix("http://")
-    mas_antigua = not version_principal or (numeros(version_principal) and numeros(VERSION)
-                                            and numeros(version_principal) < numeros(VERSION))
-    if mas_antigua:
-        # Se actualizó esta caja y no el principal: los cambios no se verían y nadie sabría por qué.
-        mensaje(f"Esta caja tiene Neji POS {VERSION}, pero las pantallas las da el equipo principal "
-                f"({equipo}), que tiene {f'la versión {version_principal}' if version_principal else 'una versión anterior'}."
-                "\n\nPara ver los cambios de la versión nueva, instálala también en el equipo principal.")
-    titulo = f"{TITULO} {version_principal or ''} (conectado a {equipo})".replace("  ", " ")
+    titulo = avisar_version_principal(base.removeprefix("http://"), version_principal)
     fallo = abrir_ventana(base + "/", titulo=titulo)
     if fallo and sin_ventana(base + "/", *fallo, datos):
         relanzar()
     return 0
+
+
+def iniciar_principal(puerto, red_pedida=False, recordar_red=False):
+    """Pone en marcha el servidor de este equipo (el principal). Devuelve (servidor, base, red), o el código de
+    salida si no se pudo (ya avisado al usuario). `recordar_red`: deja marcado «Permitir que otras cajas se
+    conecten» (Configuración → Cajas) para las próximas veces."""
+    base = f"http://{HOST_VENTANA}:{puerto}"
+    if responde_neji(base) and not resolver_otra_instancia(base, puerto):
+        return 0
+    app = crear_app()
+    from neji import equipo
+    if recordar_red:
+        equipo.guardar_opcion(app.config["DATABASE"], "modo_red", "1")
+    red = red_pedida or equipo.modo_red_configurado(app.config["DATABASE"])
+    if equipo.opcion_activada(app.config["DATABASE"], "impresion_directa"):
+        imprimir_directo()
+    host = "0.0.0.0" if red else HOST_VENTANA
+    if not puerto_libre(host, puerto):
+        mensaje(f"No se pudo iniciar Neji POS: otro programa está usando el puerto {puerto}.", error=True)
+        return 1
+    equipo.anunciar(red, puerto, escritorio=True)
+    servidor = iniciar_servidor(app, host, puerto)
+    if not esperar(base):
+        detener_servidor(servidor)
+        mensaje(f"El servidor de Neji POS no respondió. Revisa {carpeta_datos() / 'neji.log'}.", error=True)
+        return 1
+    return servidor, base, red
+
+
+# --- ¿Principal o caja? -----------------------------------------------------------------------------------
+# La primera vez, Neji POS pregunta cómo se va a usar el computador: principal (guarda las ventas y los
+# productos; las otras cajas se conectan a él) o caja conectada al principal (lo busca solo en la red:
+# neji/red_local.py). La elección queda en equipo.json, en la carpeta de datos de este computador.
+
+ARCHIVO_EQUIPO = "equipo.json"
+
+
+def leer_eleccion(datos):
+    """{"tipo": "principal"} o {"tipo": "caja", "principal": "ip:puerto", "negocio": ...}, o None."""
+    try:
+        eleccion = json.loads((Path(datos) / ARCHIVO_EQUIPO).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(eleccion, dict) or eleccion.get("tipo") not in ("principal", "caja"):
+        return None
+    if eleccion["tipo"] == "caja" and not eleccion.get("principal"):
+        return None
+    return eleccion
+
+
+def guardar_eleccion(datos, eleccion):
+    Path(datos).mkdir(parents=True, exist_ok=True)
+    (Path(datos) / ARCHIVO_EQUIPO).write_text(json.dumps(eleccion, ensure_ascii=False), encoding="utf-8")
+
+
+def base_configurada(datos):
+    """True si en este computador ya hay una base de Neji POS en uso (con usuarios): entonces es un principal."""
+    ruta = Path(datos) / "neji.db"
+    if not ruta.exists():
+        return False
+    try:
+        con = sqlite3.connect(ruta.resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            return con.execute("SELECT 1 FROM usuarios LIMIT 1").fetchone() is not None
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return True          # una base que no se puede leer no es de una caja nueva: no se pregunta
+
+
+def pagina_inicio(estado):
+    """La página «¿Cómo vas a usar este computador?» (neji/static/inicio.html) con su estado inicial."""
+    import neji
+
+    html = (Path(neji.__file__).resolve().parent / "static" / "inicio.html").read_text(encoding="utf-8")
+    # En un <script>: «<» escapado, para que un texto nunca cierre la etiqueta.
+    return html.replace("/*ESTADO*/null", json.dumps(estado, ensure_ascii=False).replace("<", "\\u003c"), 1)
+
+
+class ApiInicio(ApiEscritorio):
+    """La ventana del primer inicio (window.pywebview.api). Después de elegir, la misma ventana muestra Neji POS
+    y sigue dando las impresoras y lectores de este computador, como ApiEscritorio. Devuelve {ok, error?}."""
+
+    def __init__(self, datos, puerto=PUERTO):
+        self._datos, self._puerto = Path(datos), puerto
+        self._ventana = None
+        self._servidor = None
+        self._candado = threading.Lock()
+
+    def buscar(self):
+        from neji import red_local
+        try:
+            return {"ok": True, "encontrados": red_local.buscar(self._puerto)}
+        except Exception as e:  # noqa: BLE001
+            registro.exception("No se pudo buscar el computador principal")
+            return {"ok": False, "error": f"No se pudo buscar en la red: {e}", "encontrados": []}
+
+    def usar_principal(self, otras_cajas=False):
+        with self._candado:
+            if self._servidor is None:
+                iniciado = iniciar_principal(self._puerto, bool(otras_cajas), recordar_red=bool(otras_cajas))
+                if isinstance(iniciado, int):
+                    return {"ok": False, "error": "No se pudo iniciar Neji POS en este computador."}
+                self._servidor, base, _ = iniciado
+            guardar_eleccion(self._datos, {"tipo": "principal"})
+            registro.info("Este computador es el principal")
+            self._ventana.set_title(f"{TITULO} {VERSION}")
+            self._ventana.load_url(f"http://{HOST_VENTANA}:{self._puerto}/")
+            return {"ok": True}
+
+    def conectar(self, direccion):
+        from neji import red_local
+        with self._candado:
+            if self._servidor is not None:
+                return {"ok": False, "error": "Este computador ya quedó como principal."}
+            try:
+                direccion = red_local.normalizar(direccion, self._puerto)
+            except ValueError as e:
+                return {"ok": False, "error": str(e)}
+            estado = red_local.estado(direccion, 4)
+            if estado is None:
+                return {"ok": False, "error": f"No respondió Neji POS en {direccion}. Revisa que el computador "
+                        "principal esté encendido, con Neji POS abierto y con «Permitir que otras cajas de la red "
+                        "se conecten» marcado en Configuración → Cajas."}
+            guardar_eleccion(self._datos, {"tipo": "caja", "principal": direccion,
+                                           "negocio": str(estado.get("negocio") or "")})
+            registro.info("Esta caja se conecta al principal en %s", direccion)
+            self._ventana.set_title(avisar_version_principal(direccion, estado.get("version")))
+            self._ventana.load_url(f"http://{direccion}/")
+            return {"ok": True}
+
+
+def inicio_con_eleccion(datos, puerto=PUERTO, aviso=None, direccion=None, buscar=False):
+    """Muestra «¿Cómo vas a usar este computador?» y, elegido, Neji POS en la misma ventana. Devuelve el código de
+    salida, o None si no hay ventana propia (sin WebView2): entonces sigue como principal, como siempre."""
+    estado, detalle, _ = preparar_motor()
+    if estado != "ok":
+        registro.warning("Sin ventana para elegir principal o caja (%s): %s", estado, detalle)
+        return None
+    webview = configurar_webview()
+    api = ApiInicio(datos, puerto)
+    api._ventana = crear_ventana(webview, None, html=pagina_inicio(
+        {"aviso": aviso, "direccion": direccion, "buscar": buscar}), api=api)
+    carpeta_webview().mkdir(parents=True, exist_ok=True)
+    try:
+        webview.start(private_mode=False, storage_path=str(carpeta_webview()), localization=textos(False))
+    finally:
+        if api._servidor is not None:
+            detener_servidor(api._servidor)
+            registro.info("Neji POS cerrado")
+    return 0
+
+
+def conectar_caja(eleccion, datos, puerto=PUERTO):
+    """Caja ya elegida: se conecta a su principal. Si el principal cambió de dirección (el router le dio otra), lo
+    vuelve a buscar en la red por el nombre del negocio; si no lo encuentra, pregunta de nuevo."""
+    from neji import red_local
+    direccion = eleccion["principal"]
+    if responde_neji(f"http://{direccion}", 4):
+        return conectar(direccion, datos)
+    negocio = eleccion.get("negocio") or ""
+    encontrados = red_local.buscar(puerto)
+    mismos = [e for e in encontrados if e["negocio"] == negocio] if negocio else []
+    if len(mismos) == 1:
+        registro.info("El principal cambió de dirección: %s → %s", direccion, mismos[0]["direccion"])
+        guardar_eleccion(datos, eleccion | {"principal": mismos[0]["direccion"]})
+        return conectar(mismos[0]["direccion"], datos)
+    aviso = (f"No se encontró el computador principal{f' de {negocio}' if negocio else ''} en {direccion}. "
+             "Revisa que esté encendido y con Neji POS abierto, y vuelve a buscarlo.")
+    resultado = inicio_con_eleccion(datos, puerto, aviso=aviso, direccion=direccion, buscar=True)
+    if resultado is None:
+        return conectar(direccion, datos)        # sin ventana propia: el aviso de siempre
+    return resultado
 
 
 def main(argv=None):
@@ -831,6 +1020,8 @@ def main(argv=None):
     parser.add_argument("--red", action="store_true", help="aceptar otras cajas de la red local")
     parser.add_argument("--conectar", metavar="EQUIPO",
                         help="caja secundaria: conectarse al Neji POS de otro equipo (IP o IP:puerto)")
+    parser.add_argument("--elegir", action="store_true",
+                        help="volver a elegir si este computador es el principal o una caja")
     parser.add_argument("--impresion-directa", action="store_true",
                         help="imprimir sin mostrar el cuadro de impresión")
     parser.add_argument("--prueba", action="store_true", help="prueba sin ventana")
@@ -862,26 +1053,22 @@ def main(argv=None):
     if args.conectar:
         return conectar(args.conectar, datos)
 
-    base = f"http://{HOST_VENTANA}:{args.puerto}"
-    if responde_neji(base) and not resolver_otra_instancia(base, args.puerto):
-        return 0
-    app = crear_app()
-    from neji import equipo
-    red = args.red or equipo.modo_red_configurado(app.config["DATABASE"])
-    if equipo.opcion_activada(app.config["DATABASE"], "impresion_directa"):
-        imprimir_directo()
-    host = "0.0.0.0" if red else HOST_VENTANA
-    if not puerto_libre(host, args.puerto):
-        mensaje(f"No se pudo iniciar Neji POS: otro programa está usando el puerto {args.puerto}.",
-                error=True)
-        return 1
-    equipo.anunciar(red, args.puerto, escritorio=True)
-    servidor = iniciar_servidor(app, host, args.puerto)
+    # ¿Principal o caja? Se pregunta la primera vez (sin elección guardada y sin una base ya en uso) o con
+    # --elegir. Una instalación que ya vende como principal sigue igual, sin preguntar.
+    eleccion = leer_eleccion(datos)
+    if args.elegir or (eleccion is None and not base_configurada(datos)):
+        resultado = inicio_con_eleccion(datos, args.puerto)
+        if resultado is not None:
+            return resultado
+    elif eleccion and eleccion["tipo"] == "caja":
+        return conectar_caja(eleccion, datos, args.puerto)
+
+    iniciado = iniciar_principal(args.puerto, args.red)
+    if isinstance(iniciado, int):
+        return iniciado
+    servidor, base, red = iniciado
     volver_a_abrir = False
     try:
-        if not esperar(base):
-            mensaje(f"El servidor de Neji POS no respondió. Revisa {datos / 'neji.log'}.", error=True)
-            return 1
         fallo = abrir_ventana(base + "/", red)
         if fallo:
             volver_a_abrir = sin_ventana(base + "/", *fallo, datos)

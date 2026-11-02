@@ -183,16 +183,28 @@ otra pantalla (Neji vuelve a Ventas). Lo escaneado no queda escrito donde estaba
 
 ### Varias cajas (multicaja)
 
-1. En el computador principal, marca **Configuración → Cajas → Permitir que otras
-   cajas de la red se conecten** y vuelve a abrir Neji POS. Ahí mismo aparece la
-   dirección para las otras cajas, del tipo `http://192.168.1.20:5000`.
-   - La primera vez Windows pregunta si permite el acceso a la red: acepta en
-     **Redes privadas**.
-   - Con Python, `iniciar-red.bat` hace lo mismo.
-2. En los otros computadores abre esa dirección en el navegador, o crea un acceso
-   directo a `NejiPOS.exe --conectar 192.168.1.20` para usarla en su propia ventana.
-3. Crea las cajas en **Configuración → Cajas**.
-4. En cada equipo elige qué caja es en **Configuración → Esta terminal**.
+La primera vez que se abre NejiPOS.exe pregunta **«¿Cómo vas a usar este computador?»**:
+
+- **Computador principal**: guarda las ventas, los productos y el stock. Si se marca **«Otras cajas se van a
+  conectar a este computador»**, queda activado **Configuración → Cajas → Permitir que otras cajas de la red se
+  conecten** (Windows pregunta si permite el acceso a la red: acepta en **Redes privadas**).
+- **Caja conectada al principal**: con **«Buscar el computador principal»**, Neji POS revisa la red del local
+  y muestra los principales que encuentra (nombre del negocio, dirección y versión); se elige uno y queda
+  conectado. También se puede escribir su dirección a mano (sale en el principal, en Configuración → Cajas).
+
+La elección queda guardada en ese computador (`equipo.json`, en la carpeta de datos). Si el router le da otra
+dirección al principal, la caja lo vuelve a encontrar sola por el nombre del negocio. Para cambiar la
+elección: acceso directo **«Neji POS - principal o caja»** del menú Inicio (o `NejiPOS.exe --elegir`). Una
+instalación que ya vendía como principal sigue igual, sin preguntar.
+
+Después:
+
+1. Crea las cajas en **Configuración → Cajas**.
+2. En cada equipo elige qué caja es en **Configuración → Esta terminal**.
+
+También funciona como antes: abrir la dirección del principal (`http://192.168.1.20:5000`) en el navegador,
+o un acceso directo a `NejiPOS.exe --conectar 192.168.1.20`. Con Python, `iniciar-red.bat` activa la red en el
+principal.
 
 El computador principal debe quedar encendido y con Neji POS abierto mientras las
 otras cajas vendan. Cada caja tiene su propio turno y su propio corte.
