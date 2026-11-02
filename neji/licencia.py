@@ -24,8 +24,10 @@ from .validar import ErrorNegocio
 
 # Llaves públicas del vendedor (la que imprime `python herramientas/licencias.py llave`), en base64. Van en el
 # código y no en un archivo aparte, para que no se puedan cambiar por otras junto al programa.
+# Una llave vieja se deja en la lista: las licencias que se firmaron con ella siguen valiendo.
 LLAVES_PUBLICAS = [
-    "00QZU6AS9Jl2rVW5OqkS+05S1s5ridkzoVDZfFg6V6w=",     # Cristóbal (NejiLicencias, creada el 31-10-2026)
+    "00QZU6AS9Jl2rVW5OqkS+05S1s5ridkzoVDZfFg6V6w=",     # 31-10-2026 (se olvidó su contraseña: ya no firma)
+    "hpmd2z2LZQjh6XyxXxr0NiAl18U7KzlLbbfAIo4lIU0=",     # 02-11-2026, la que firma las licencias nuevas
 ]
 
 DIAS_PRUEBA = 15
