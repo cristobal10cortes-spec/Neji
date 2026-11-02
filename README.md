@@ -340,6 +340,23 @@ la planilla de Excel (`.xlsx`) tal como la exporta eleventa u otro sistema, o un
   - Entiende columnas como «Código», «Producto», «P. Venta», «Costo», «Stock», «Inv. Mínimo» o «Categoría».
   - Los CSV pueden ir separados por `;` o por `,`.
 
+### Proveedores (facturas por pagar)
+
+En **Proveedores** se anota cada factura que llega: **proveedor, N° de factura, monto total**, fecha y, si tiene
+plazo, cuándo vence. Arriba se ve **cuánto se debe en total**, cuánto está **vencido**, cuánto **vence en los
+próximos 7 días** y cuánto se **pagó este mes**.
+
+- **La lista suma sola**: abajo sale el total de lo que se está viendo (todas, o las de un proveedor).
+- **Cuánto se le debe a cada proveedor**: un resumen por proveedor; con un clic se ven solo sus facturas.
+- **Sumar y pagar varias**: se marcan las casillas de las facturas, se ve la suma de las elegidas y se marcan como
+  pagadas de una vez (fecha y cómo se pagó: transferencia, cheque, efectivo u otro). Se puede deshacer.
+- **Notas de crédito** del proveedor (por devoluciones): se anotan igual y restan de lo que se le debe.
+- **Proveedores**: se agregan solos al anotar su primera factura (sin duplicarse por mayúsculas o tildes); en
+  «Lista de proveedores» se les pone RUT y contacto. Al escribir el proveedor se sugieren también los que tienen
+  los productos.
+- No deja anotar dos veces el mismo número del mismo proveedor.
+- La pestaña la ve el administrador y los cajeros con el permiso **«Proveedores»** (Configuración → Usuarios).
+
 ### Clientes y crédito
 
 - RUT validado con su dígito verificador.
