@@ -28,6 +28,17 @@ def opcion_activada(ruta_db, clave):
     return fila is not None and fila[0] == "1"
 
 
+def guardar_opcion(ruta_db, clave, valor):
+    """Guarda una opción de la configuración antes de iniciar el servidor (p. ej. al elegir «principal»)."""
+    con = sqlite3.connect(ruta_db)
+    try:
+        con.execute("INSERT INTO config (clave, valor) VALUES (?, ?) "
+                    "ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor", (clave, valor))
+        con.commit()
+    finally:
+        con.close()
+
+
 def modo_red_configurado(ruta_db):
     """True si en Configuración → Cajas se permitió que otras cajas se conecten a este equipo."""
     return opcion_activada(ruta_db, "modo_red")

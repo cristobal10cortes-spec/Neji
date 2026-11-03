@@ -49,6 +49,7 @@ Source: "..\build\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: dele
 
 [Icons]
 Name: "{autoprograms}\Neji POS"; Filename: "{app}\NejiPOS.exe"
+Name: "{autoprograms}\Neji POS - principal o caja"; Filename: "{app}\NejiPOS.exe"; Parameters: "--elegir"; Comment: "Elegir si este computador es el principal o una caja conectada al principal"
 Name: "{autodesktop}\Neji POS"; Filename: "{app}\NejiPOS.exe"; Tasks: escritorio
 
 [Run]

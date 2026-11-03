@@ -11,6 +11,7 @@ import * as cotizaciones from './vistas/cotizaciones.js';
 import * as historial from './vistas/historial.js';
 import * as inventario from './vistas/inventario.js';
 import * as productos from './vistas/productos.js';
+import * as proveedores from './vistas/proveedores.js';
 import * as recetario from './vistas/recetario.js';
 import * as reportes from './vistas/reportes.js';
 import * as vademecum from './vistas/vademecum.js';
@@ -20,11 +21,12 @@ const VISTAS = [
   { clave: 'ventas', titulo: 'Ventas', tecla: 'F1', modulo: ventas },
   { clave: 'clientes', titulo: 'Clientes', tecla: 'F2', modulo: clientes },
   { clave: 'productos', titulo: 'Productos', tecla: 'F3', modulo: productos },
-  { clave: 'inventario', titulo: 'Inventario', tecla: 'F4', modulo: inventario, permiso: 'inventario' },
-  { clave: 'vademecum', titulo: 'Vademécum', modulo: vademecum, farmacia: true },
-  { clave: 'recetario', titulo: 'Recetario', modulo: recetario, farmacia: true },
+  { clave: 'inventario', titulo: 'Inventario', corto: 'Invent.', tecla: 'F4', modulo: inventario, permiso: 'inventario' },
+  { clave: 'proveedores', titulo: 'Proveedores', corto: 'Prov.', modulo: proveedores, permiso: 'proveedores' },
+  { clave: 'vademecum', titulo: 'Vademécum', corto: 'Vadem.', modulo: vademecum, farmacia: true },
+  { clave: 'recetario', titulo: 'Recetario', corto: 'Recet.', modulo: recetario, farmacia: true },
   { clave: 'caja', titulo: 'Caja', modulo: caja },
-  { clave: 'historial', titulo: 'Historial', modulo: historial },
+  { clave: 'historial', titulo: 'Historial', corto: 'Hist.', modulo: historial },
   { clave: 'cotizaciones', titulo: 'Cotizaciones', corto: 'Cotiz.', modulo: cotizaciones },
   { clave: 'reportes', titulo: 'Reportes', modulo: reportes, permiso: 'reportes' },
   { clave: 'config', titulo: 'Configuración', corto: 'Config.', modulo: config },

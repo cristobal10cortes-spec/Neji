@@ -23,6 +23,7 @@ PERMISOS = [
     ("clientes_credito", "Dar crédito (límite) a clientes y borrarlos", False, False),
     ("productos", "Crear, editar e importar productos (ve los costos)", False, False),
     ("inventario", "Inventario: entradas, ajustes y compras sugeridas (ve los costos)", False, False),
+    ("proveedores", "Proveedores: anotar sus facturas y marcar los pagos", False, False),
     ("reportes", "Ver reportes, costos y ganancias", False, False),
     ("vademecum", "Editar el vademécum y los precios del recetario", False, True),
 ]

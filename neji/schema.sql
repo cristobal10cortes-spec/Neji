@@ -422,3 +422,33 @@ CREATE TABLE IF NOT EXISTS sii_documentos (
 CREATE INDEX IF NOT EXISTS idx_sii_documentos_venta ON sii_documentos(venta_id);
 CREATE INDEX IF NOT EXISTS idx_sii_documentos_devolucion ON sii_documentos(devolucion_id);
 CREATE INDEX IF NOT EXISTS idx_sii_documentos_estado ON sii_documentos(estado, envio_id);
+
+-- Proveedores y sus facturas por pagar (pantalla Proveedores). Las notas de crédito del proveedor (por
+-- devoluciones) restan de lo que se le debe.
+CREATE TABLE IF NOT EXISTS proveedores (
+    id       INTEGER PRIMARY KEY,
+    nombre   TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    rut      TEXT,
+    contacto TEXT,                 -- vendedor, teléfono o correo
+    notas    TEXT,
+    activo   INTEGER NOT NULL DEFAULT 1,
+    creado   TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS facturas_proveedor (
+    id           INTEGER PRIMARY KEY,
+    proveedor_id INTEGER NOT NULL REFERENCES proveedores(id),
+    tipo         TEXT NOT NULL DEFAULT 'factura' CHECK (tipo IN ('factura', 'nota_credito')),
+    numero       TEXT NOT NULL,    -- el número (folio) del documento
+    fecha        TEXT NOT NULL,    -- fecha del documento (AAAA-MM-DD)
+    vence        TEXT,             -- hasta cuándo pagarla (AAAA-MM-DD), si tiene plazo
+    monto        INTEGER NOT NULL CHECK (monto > 0),   -- el total del documento (con IVA)
+    nota         TEXT,
+    pagada       TEXT,             -- fecha del pago (o de descontar la nota de crédito); NULL = por pagar
+    medio_pago   TEXT,             -- transferencia, cheque, efectivo, otro
+    usuario_id   INTEGER REFERENCES usuarios(id),
+    creado       TEXT NOT NULL,
+    UNIQUE (proveedor_id, tipo, numero)
+);
+CREATE INDEX IF NOT EXISTS idx_facturas_proveedor_pagada ON facturas_proveedor(pagada, vence);
+CREATE INDEX IF NOT EXISTS idx_facturas_proveedor_proveedor ON facturas_proveedor(proveedor_id);

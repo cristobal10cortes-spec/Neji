@@ -60,12 +60,12 @@ h3 { font-size: 1.05rem; }
 .nav button.activo { background: #fff; color: var(--barra); font-weight: 600; }
 .nav kbd { margin-right: .3rem; }
 .nav .nombre-corto { display: none; }
-@media (max-width: 1340px) {
+@media (max-width: 1440px) {
   .nav { gap: 0; }
   .nav kbd { display: none; }
   .nav button { padding: .4rem .42rem; font-size: .86rem; }
 }
-@media (max-width: 1120px) {
+@media (max-width: 1200px) {
   .nav button:has(.nombre-corto) .nombre-largo { display: none; }
   .nav .nombre-corto { display: inline; }
 }

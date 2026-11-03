@@ -459,8 +459,8 @@ function panelRed(equipo) {
   const situacion = h('div');
   const pintar = () => {
     if (equipo?.red_activa && permitir.checked) {
-      vaciar(situacion, h('p', 'Las otras cajas entran desde su navegador a ', h('b.mono', equipo.direccion_red),
-        ' (o abren NejiPOS.exe con ', h('span.mono', `--conectar ${equipo.direccion_red.replace('http://', '')}`), ').'));
+      vaciar(situacion, h('p', 'En las otras cajas, al abrir Neji POS por primera vez elige «Caja conectada al principal»: encuentra solo este equipo. Si no, su dirección es ',
+        h('b.mono', equipo.direccion_red), ' (también se abre en el navegador).'));
     } else if (permitir.checked !== Boolean(equipo?.red_activa)) {
       vaciar(situacion, h('p', h('b', 'El cambio se aplica la próxima vez que abras Neji POS en este equipo.')));
     } else {
