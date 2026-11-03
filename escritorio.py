@@ -879,7 +879,8 @@ ARCHIVO_EQUIPO = "equipo.json"
 def leer_eleccion(datos):
     """{"tipo": "principal"} o {"tipo": "caja", "principal": "ip:puerto", "negocio": ...}, o None."""
     try:
-        eleccion = json.loads((Path(datos) / ARCHIVO_EQUIPO).read_text(encoding="utf-8"))
+        # utf-8-sig: el archivo también se lee si lo guardó un programa de Windows que le pone BOM.
+        eleccion = json.loads((Path(datos) / ARCHIVO_EQUIPO).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return None
     if not isinstance(eleccion, dict) or eleccion.get("tipo") not in ("principal", "caja"):

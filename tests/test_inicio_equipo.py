@@ -79,6 +79,9 @@ def test_guardar_y_leer_la_eleccion(tmp_path):
     assert escritorio.leer_eleccion(tmp_path) is None
     (tmp_path / "equipo.json").write_text("roto", encoding="utf-8")
     assert escritorio.leer_eleccion(tmp_path) is None
+    # Guardado por Windows con BOM (PowerShell, Bloc de notas): se lee igual.
+    (tmp_path / "equipo.json").write_text('{"tipo": "principal"}', encoding="utf-8-sig")
+    assert escritorio.leer_eleccion(tmp_path) == {"tipo": "principal"}
 
 
 def test_una_base_en_uso_es_de_un_principal(tmp_path):

@@ -232,6 +232,10 @@ jobs:
           # Como en una actualización real: Neji POS (otra copia, de otra carpeta) queda abierto y el
           # instalador lo tiene que cerrar; si no, se seguiría viendo la versión anterior.
           $env:NEJI_DATOS = Join-Path $env:RUNNER_TEMP 'datos-abierto'
+          # Lo que se actualiza es un equipo que ya vende como principal: no pregunta «¿principal o caja?»
+          # (esa pregunta es solo para un computador nuevo) y el servidor arranca al tiro.
+          New-Item -ItemType Directory -Force -Path $env:NEJI_DATOS | Out-Null
+          Set-Content -Path (Join-Path $env:NEJI_DATOS 'equipo.json') -Value '{"tipo": "principal"}' -Encoding utf8BOM
           $abierto = Start-Process -FilePath 'dist\NejiPOS\NejiPOS.exe' -PassThru
           $listo = $false
           foreach ($i in 1..60) {
