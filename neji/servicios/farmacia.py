@@ -28,6 +28,21 @@ def normalizar_nombre(nombre):
     return re.sub(r"\s+", " ", str(nombre or "")).strip().upper()
 
 
+# Sales y formas que no cambian qué principio activo es: «LOSARTÁN POTÁSICO», «CLORHIDRATO DE TRAMADOL» y
+# «AMLODIPINO BESILATO» llevan la misma ficha que LOSARTÁN, TRAMADOL y AMLODIPINO.
+_SALES = re.compile(
+    r"\b(clorhidrato|bromhidrato|besilato|maleato|mesilato|fumarato|succinato|tartrato|potasico|potasica|"
+    r"sodico|sodica|calcico|calcica|magnesico|magnesica|trihidrato|dihidrato|monohidrato|hemihidrato|"
+    r"sesquihidrato|anhidro|anhidra|micronizado|micronizada)\b")
+
+
+def clave_base(nombre):
+    """El nombre sin tildes, mayúsculas ni sal: para encontrar la ficha de «LOSARTAN POTASICO» en «LOSARTÁN»."""
+    texto = _SALES.sub(" ", sin_acentos(nombre or ""))
+    texto = re.sub(r"^\s*de\b|\bde\s*$", " ", re.sub(r"\s+", " ", texto).strip())
+    return re.sub(r"\s+", " ", texto).strip()
+
+
 def separar_principios(entrada):
     """'PARACETAMOL 500 mg + CAFEINA' -> [('PARACETAMOL', '500 mg'), ('CAFEINA', None)].
 
@@ -112,7 +127,7 @@ def principios_de_productos(con, ids):
     if not ids:
         return resultado
     for pa in filas(con.execute(
-            f"""SELECT pp.producto_id, pa.id, pa.nombre, pp.concentracion, pa.accion_terapeutica,
+            f"""SELECT pp.producto_id, pa.id, pa.nombre, pp.concentracion, pa.accion_terapeutica, pa.dosis,
                        pa.efectos_adversos, pa.contraindicaciones, pa.notas
                 FROM producto_principios pp JOIN principios_activos pa ON pa.id = pp.principio_id
                 WHERE pp.producto_id IN ({', '.join('?' for _ in ids)})

@@ -257,7 +257,7 @@ Se activa en **Configuración → Opciones → Farmacia**, o al configurar Neji 
 
 - Cada producto tiene sus **principios activos** con concentración, por ejemplo
   `PARACETAMOL 500 mg + CAFEINA 65 mg`.
-- Cada principio activo tiene su ficha: acción terapéutica, efectos adversos,
+- Cada principio activo tiene su ficha: para qué sirve, **dosis habitual**, efectos adversos,
   contraindicaciones y notas.
 - Al vender, la **ficha del vademécum** se muestra a la izquierda del buscador: para
   qué sirve, efectos adversos, contraindicaciones y notas de cada principio activo.
@@ -278,6 +278,17 @@ Se activa en **Configuración → Opciones → Farmacia**, o al configurar Neji 
   producto no tiene stock, la ficha lo marca y recuerda usar `Ctrl+B`.
 - La pantalla **Vademécum** lista los principios activos con cuántos productos hay en
   stock. Desde la ficha se puede vender directamente.
+- **Vademécum base**: Neji trae unos 170 principios activos comunes escritos en palabras simples (para qué
+  sirven, dosis habitual de adultos y, en los de uso común, de niños, efectos adversos y precauciones), en
+  `neji/static/referencia/vademecum_base.csv`. El botón **Vademécum base** los carga: agrega los que falten y le pone
+  la ficha a los que ya existen, aunque estén con su sal (LOSARTÁN completa LOSARTAN POTASICO). Se elige entre
+  **completar** solo lo vacío (lo que la farmacia escribió se respeta) o **reemplazar** las fichas técnicas por
+  las simples. Es información de referencia: **la debe revisar el químico farmacéutico** antes de usarla con
+  pacientes.
+- **Importar y exportar** (Excel `.xlsx` o CSV): una fila por principio activo con las columnas *Principio
+  activo, Para qué sirve, Dosis habitual, Efectos adversos, Contraindicaciones y precauciones, Notas* (y
+  opcionalmente *Otros nombres*, separados por `|`, y el precio del recetario). Se puede exportar, corregir en
+  Excel y volver a importar. Una celda vacía nunca borra lo que había.
 
 **Recetario magistral**
 

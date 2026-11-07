@@ -285,6 +285,7 @@ CREATE TABLE IF NOT EXISTS principios_activos (
     id                 INTEGER PRIMARY KEY,
     nombre             TEXT NOT NULL UNIQUE COLLATE NOCASE,
     accion_terapeutica TEXT,
+    dosis              TEXT,             -- dosis habitual (posología de referencia)
     efectos_adversos   TEXT,
     contraindicaciones TEXT,
     notas              TEXT,

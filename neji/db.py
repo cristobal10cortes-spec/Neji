@@ -154,6 +154,8 @@ def migrar(con):
     for columna, tipo in (("autorizacion", "TEXT"), ("tarjeta", "TEXT"), ("pos_cobro_id", "INTEGER")):   # máquina POS
         if columna not in pagos:
             con.execute(f"ALTER TABLE venta_pagos ADD COLUMN {columna} {tipo}")
+    if "dosis" not in _columnas(con, "principios_activos"):        # vademécum: dosis habitual
+        con.execute("ALTER TABLE principios_activos ADD COLUMN dosis TEXT")
     usuarios = _columnas(con, "usuarios")
     if "nombre_ticket" not in usuarios:
         con.execute("ALTER TABLE usuarios ADD COLUMN nombre_ticket TEXT")

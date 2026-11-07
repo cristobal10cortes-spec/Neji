@@ -1,6 +1,6 @@
 // Vademécum: principios activos, su ficha clínica y los productos que los contienen.
 
-import { api, qs } from '../api.js';
+import { api, descargar, qs } from '../api.js';
 import { ir } from '../app.js';
 import { puede } from '../estado.js';
 import { formProducto } from './productos.js';
@@ -17,10 +17,11 @@ export function formPrincipio(pa = null, { soloRecetario = false } = {}) {
   const campos = [{ nombre: 'nombre', etiqueta: 'Principio activo', valor: pa?.nombre, requerido: true, autofocus: !pa }];
   if (!soloRecetario) {
     campos.push(
-      { nombre: 'accion_terapeutica', etiqueta: 'Acción / uso terapéutico', tipo: 'area', valor: pa?.accion_terapeutica, ancho: true, autofocus: Boolean(pa) },
+      { nombre: 'accion_terapeutica', etiqueta: 'Para qué sirve (acción / uso terapéutico)', tipo: 'area', valor: pa?.accion_terapeutica, ancho: true, autofocus: Boolean(pa) },
+      { nombre: 'dosis', etiqueta: 'Dosis habitual', tipo: 'area', valor: pa?.dosis, ancho: true, placeholder: 'Ej: Adultos: 500 mg a 1 g cada 6 a 8 horas. Máximo 4 g al día.' },
       { nombre: 'efectos_adversos', etiqueta: 'Efectos adversos', tipo: 'area', valor: pa?.efectos_adversos, ancho: true },
       { nombre: 'contraindicaciones', etiqueta: 'Contraindicaciones e interacciones', tipo: 'area', valor: pa?.contraindicaciones, ancho: true },
-      { nombre: 'notas', etiqueta: 'Notas (posología habitual, embarazo, conservación...)', tipo: 'area', valor: pa?.notas, ancho: true },
+      { nombre: 'notas', etiqueta: 'Notas (embarazo, lactancia, conservación...)', tipo: 'area', valor: pa?.notas, ancho: true },
     );
   }
   campos.push(
@@ -34,7 +35,7 @@ export function formPrincipio(pa = null, { soloRecetario = false } = {}) {
     alEnviar: (v) => {
       // Al editar solo el precio se conserva la ficha clínica tal como estaba.
       const ficha = soloRecetario && pa ? {
-        accion_terapeutica: pa.accion_terapeutica, efectos_adversos: pa.efectos_adversos,
+        accion_terapeutica: pa.accion_terapeutica, dosis: pa.dosis, efectos_adversos: pa.efectos_adversos,
         contraindicaciones: pa.contraindicaciones, notas: pa.notas,
       } : {};
       const datos = { ...ficha, ...v, unidad_receta: v.unidad_receta || null, precio_receta: v.precio_receta === '' ? null : v.precio_receta };
@@ -66,7 +67,8 @@ export async function fichaPrincipio(id, alCambiar = () => {}, { alVender = null
       h('div.fila',
         h(`span.etiqueta.${pa.con_stock ? 'ok' : 'mal'}`, `${pa.con_stock} de ${pa.productos} productos con stock`),
         pa.precio_receta != null ? h('span.etiqueta', `Recetario: ${textoPrecioReceta(pa)}`) : null),
-      bloque('Acción terapéutica', pa.accion_terapeutica) || h('p.suave', 'Sin ficha clínica todavía.'),
+      bloque('Para qué sirve', pa.accion_terapeutica) || h('p.suave', 'Sin ficha clínica todavía.'),
+      bloque('Dosis habitual', pa.dosis),
       bloque('Efectos adversos', pa.efectos_adversos),
       bloque('Contraindicaciones e interacciones', pa.contraindicaciones),
       bloque('Notas', pa.notas),
@@ -90,7 +92,7 @@ export async function fichaPrincipio(id, alCambiar = () => {}, { alVender = null
           }, 'Vender'),
         },
       ], pa.lista_productos, { vacio: 'Ningún producto del catálogo tiene este principio activo.' }),
-      h('p.ayuda', 'Información de referencia ingresada por la farmacia. No reemplaza la indicación del médico ni la del químico farmacéutico.'),
+      h('p.ayuda', 'Información de referencia. No reemplaza la indicación del médico ni la del químico farmacéutico.'),
     ],
     botones: puede('vademecum') ? [
       {
@@ -107,7 +109,8 @@ export async function fichaPrincipio(id, alCambiar = () => {}, { alVender = null
 }
 
 const SECCIONES_FICHA = [
-  ['accion_terapeutica', 'Acción terapéutica'],
+  ['accion_terapeutica', 'Para qué sirve'],
+  ['dosis', 'Dosis habitual'],
   ['efectos_adversos', 'Efectos adversos'],
   ['contraindicaciones', 'Contraindicaciones e interacciones'],
   ['notas', 'Notas'],
@@ -281,7 +284,7 @@ export function panelVademecum({
         : h('div.ficha-pa',
           h('p.suave', 'Este producto no tiene principio activo asignado.'),
           puede('productos') && p.id ? h('button.btn.chico', { type: 'button', onclick: () => asignarPrincipio(p.id) }, 'Asignar principio activo') : null),
-      detalle.length ? h('p.ayuda', 'Información de referencia de la farmacia. No reemplaza la indicación del médico ni la del químico farmacéutico.') : null);
+      detalle.length ? h('p.ayuda', 'Información de referencia. No reemplaza la indicación del médico ni la del químico farmacéutico.') : null);
     const conAlternativas = alternativas && detalle.length && p.id;
     pie.classList.toggle('oculto', !conAlternativas);
     if (conAlternativas) {
@@ -300,6 +303,87 @@ export function panelVademecum({
   };
 }
 
+// --- Importar, exportar y vademécum base -----------------------------------------------------------------
+
+const MODOS = [
+  ['completar', 'Solo completar lo que está vacío (lo que ya escribiste se respeta)'],
+  ['reemplazar', 'Reemplazar con lo del archivo (las celdas vacías no borran nada)'],
+];
+
+function mostrarResultado(titulo, r) {
+  modal({
+    titulo,
+    cuerpo: [
+      h('p', `${numero(r.creados)} principios activos nuevos, ${numero(r.actualizados)} fichas completadas o cambiadas, ${numero(r.sin_cambios)} sin cambios.`),
+      r.errores.length ? [h('p.rojo', `${r.errores.length} filas con problemas:`),
+        h('ul', r.errores.map((e) => h('li', `Fila ${e.fila}: ${e.error}`)))] : null,
+    ],
+    botones: [{ texto: 'Aceptar', clase: 'primario', accion: (m) => m.cerrar() }],
+  });
+}
+
+function importarPlanilla(alTerminar) {
+  const archivo = h('input', { type: 'file', accept: '.xlsx,.csv,.txt' });
+  const modo = h('select', MODOS.map(([v, t]) => h('option', { value: v }, t)));
+  const crear = h('input', { type: 'checkbox', checked: true });
+  modal({
+    titulo: 'Importar vademécum (Excel o CSV)',
+    cuerpo: [
+      h('p', 'Una fila por principio activo, con estas columnas (la primera fila, los títulos):'),
+      h('p.mono', 'Principio activo · Para qué sirve · Dosis habitual · Efectos adversos · Contraindicaciones y precauciones · Notas'),
+      h('p.ayuda', 'Es el mismo formato de «Exportar»: puedes exportar, corregir en Excel e importar. Cada principio activo se busca por su nombre, sin importar tildes, mayúsculas ni la sal (LOSARTÁN completa la ficha de LOSARTAN POTASICO).'),
+      h('label.campo', 'Archivo', archivo),
+      h('label.campo', 'Si el principio activo ya tiene ficha', modo),
+      h('label.check', crear, 'Agregar los principios activos que todavía no están'),
+    ],
+    botones: [
+      { texto: 'Cancelar', accion: (m) => m.cerrar() },
+      { texto: 'Importar', clase: 'primario', accion: async (m) => {
+        if (!archivo.files?.[0]) return m.error('Elige el archivo (Excel .xlsx o CSV).');
+        const datos = new FormData();
+        datos.append('archivo', archivo.files[0]);
+        datos.append('modo', modo.value);
+        datos.append('crear', crear.checked ? '1' : '0');
+        try {
+          const r = await api.subir('/api/principios/importar', datos);
+          m.cerrar();
+          alTerminar();
+          return mostrarResultado('Vademécum importado', r);
+        } catch (e) {
+          return m.error(e.message);
+        }
+      } },
+    ],
+  });
+}
+
+function cargarBase(alTerminar) {
+  const modo = h('select', MODOS.map(([v, t]) => h('option', { value: v }, t)));
+  modal({
+    titulo: 'Vademécum base de Neji POS',
+    cuerpo: [
+      h('p', 'Los principios activos más comunes de las farmacias, escritos en palabras simples: para qué sirven, la dosis habitual, los efectos adversos y las precauciones. Los que no tengas se agregan; los que ya tienes (aunque estén con su sal, como LOSARTAN POTASICO) reciben la ficha.'),
+      h('p.rojo', 'Es información de referencia: que el químico farmacéutico la revise antes de usarla con los pacientes.'),
+      h('label.campo', 'Si el principio activo ya tiene ficha', modo),
+      h('p.ayuda', 'Para cambiar fichas técnicas por las simples elige «Reemplazar». También puedes descargar la planilla para revisarla en Excel e importarla después.'),
+    ],
+    botones: [
+      { texto: 'Descargar planilla', accion: () => descargar('/static/referencia/vademecum_base.csv').catch(avisoError) },
+      { texto: 'Cancelar', accion: (m) => m.cerrar() },
+      { texto: 'Cargar vademécum base', clase: 'primario', accion: async (m) => {
+        try {
+          const r = await api.post('/api/principios/base', { modo: modo.value });
+          m.cerrar();
+          alTerminar();
+          return mostrarResultado('Vademécum base cargado', r);
+        } catch (e) {
+          return m.error(e.message);
+        }
+      } },
+    ],
+  });
+}
+
 export async function montar(contenedor) {
   const buscar = h('input', { type: 'search', placeholder: 'Principio activo o uso terapéutico (ej: losartán, antihipertensivo)', autofocus: true, style: { maxWidth: '460px' } });
   const conStock = h('input', { type: 'checkbox' });
@@ -309,7 +393,11 @@ export async function montar(contenedor) {
   vaciar(contenedor,
     h('div.fila.entre',
       h('h2', 'Vademécum'),
-      puede('vademecum') ? h('button.btn.primario', { type: 'button', onclick: async () => { if (await formPrincipio()) cargar(); } }, 'Nuevo principio activo') : null),
+      puede('vademecum') ? h('div.fila',
+        h('button.btn', { type: 'button', onclick: () => cargarBase(cargar) }, 'Vademécum base'),
+        h('button.btn', { type: 'button', onclick: () => importarPlanilla(cargar) }, 'Importar'),
+        h('button.btn', { type: 'button', onclick: () => descargar('/api/principios/exportar').catch(avisoError) }, 'Exportar'),
+        h('button.btn.primario', { type: 'button', onclick: async () => { if (await formPrincipio()) cargar(); } }, 'Nuevo principio activo')) : null),
     h('div.fila', buscar, h('label.check', conStock, 'Solo con productos en stock'), h('span.espacio'), contador),
     h('p.ayuda', 'En la venta, escribe % antes del nombre para buscar productos por componente (ej: %paracetamol).'),
     lista);
@@ -326,7 +414,7 @@ export async function montar(contenedor) {
       : `${numero(principios.length)} principios activos`;
     vaciar(lista, tabla([
       { titulo: 'Principio activo', valor: (p) => h('b', p.nombre) },
-      { titulo: 'Acción terapéutica', valor: (p) => p.accion_terapeutica || h('span.suave', 'sin ficha') },
+      { titulo: 'Para qué sirve', valor: (p) => p.accion_terapeutica || h('span.suave', 'sin ficha') },
       { titulo: 'Productos', valor: (p) => h('span', { class: p.con_stock ? 'verde' : 'suave' }, `${p.con_stock} con stock / ${p.productos}`), clase: 'num' },
       { titulo: 'Recetario', valor: (p) => textoPrecioReceta(p), clase: 'num' },
     ], principios, {
