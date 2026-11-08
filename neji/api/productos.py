@@ -7,9 +7,9 @@ import re
 from flask import Response, jsonify, request
 
 from ..auth import con_permiso, tiene_permiso, usuario_actual
-from ..db import ahora, fila, filas, get_db, sin_acentos, transaccion
+from ..db import ahora, fila, filas, get_db, leer_config, sin_acentos, transaccion
 from ..servicios.farmacia import (SQL_PRINCIPIOS_TEXTO, alternativas, guardar_principios_producto,
-                                  principios_de_producto, principios_de_productos)
+                                  principios_de_producto, principios_de_productos, vincular_por_descripcion)
 from ..servicios.inventario import mover_existencia
 from ..xlsx import es_xls_antiguo, es_xlsx, leer_xlsx
 from ..validar import (ErrorNegocio, booleano, cantidad, celda_csv, entero, fecha_flexible,
@@ -214,10 +214,18 @@ def crear_producto():
         p = leer_producto(con, datos)
         existencia = cantidad(datos.get("existencia") or 0, "existencia")
         producto_id = _guardar_nuevo(con, p, existencia, usuario_actual()["id"])
-        if "principios" in datos:
+        detectado = None
+        if datos.get("principios"):
             guardar_principios_producto(con, producto_id, datos["principios"])
+        elif _es_farmacia(con):
+            # Sin principio activo escrito: se busca en la descripción («KITADOL 500 MG PARACETAMOL X 24»).
+            detectado = vincular_por_descripcion(con, producto_id, p["descripcion"], {})
     producto = fila(con.execute(f"{SELECT_PRODUCTO} WHERE p.id = ?", (producto_id,)).fetchone())
-    return jsonify(_con_principios(con, producto)), 201
+    return jsonify(_con_principios(con, producto) | {"principios_detectados": detectado}), 201
+
+
+def _es_farmacia(con):
+    return leer_config(con).get("modulo_farmacia") == "1"
 
 
 @bp.put("/productos/<int:producto_id>")
@@ -393,6 +401,8 @@ def importar_productos():
     usuario_id = usuario_actual()["id"]
     # Cambiar el stock de lo que ya existe es un ajuste o una entrada de inventario.
     puede_inventario = tiene_permiso(usuario_actual(), "inventario")
+    # Farmacia: lo que venga sin principio activo se reconoce por la descripción y queda unido al vademécum.
+    farmacia, cache_principios, vinculados = _es_farmacia(con), {}, 0
     creados = actualizados = 0
     errores, avisos = [], []
     for n, registro in registros:
@@ -432,7 +442,12 @@ def importar_productos():
                             mover_existencia(con, existente, valor - existente["existencia"], "ajuste",
                                              usuario_id, nota="Importación CSV")
                     if registro.get("principio_activo"):
-                        guardar_principios_producto(con, existente["id"], registro["principio_activo"])
+                        guardar_principios_producto(con, existente["id"], registro["principio_activo"],
+                                                    cache_principios)
+                    elif farmacia and not con.execute("SELECT 1 FROM producto_principios WHERE producto_id = ?",
+                                                      (existente["id"],)).fetchone():
+                        vinculados += bool(vincular_por_descripcion(con, existente["id"], p["descripcion"],
+                                                                    cache_principios))
                     actualizados += 1
                 else:
                     if not registro.get("precio_venta"):
@@ -441,8 +456,17 @@ def importar_productos():
                     producto_id = _guardar_nuevo(
                         con, p, cantidad(registro.get("existencia") or 0, "existencia"), usuario_id)
                     if registro.get("principio_activo"):
-                        guardar_principios_producto(con, producto_id, registro["principio_activo"])
+                        guardar_principios_producto(con, producto_id, registro["principio_activo"], cache_principios)
+                    elif farmacia:
+                        vinculados += bool(vincular_por_descripcion(con, producto_id, p["descripcion"],
+                                                                    cache_principios))
                     creados += 1
         except ErrorNegocio as e:
             errores.append({"fila": n, "error": e.mensaje})
-    return jsonify(creados=creados, actualizados=actualizados, errores=(errores + avisos)[:200])
+    sin_ficha = con.execute(
+        "SELECT COUNT(*) FROM principios_activos pa WHERE COALESCE(pa.accion_terapeutica, '') = '' "
+        "AND COALESCE(pa.dosis, '') = '' AND EXISTS (SELECT 1 FROM producto_principios pp "
+        "JOIN productos p ON p.id = pp.producto_id WHERE pp.principio_id = pa.id AND p.activo = 1)").fetchone()[0] \
+        if farmacia else 0
+    return jsonify(creados=creados, actualizados=actualizados, vinculados=vinculados,
+                   principios_sin_ficha=sin_ficha, errores=(errores + avisos)[:200])

@@ -257,7 +257,7 @@ Se activa en **Configuración → Opciones → Farmacia**, o al configurar Neji 
 
 - Cada producto tiene sus **principios activos** con concentración, por ejemplo
   `PARACETAMOL 500 mg + CAFEINA 65 mg`.
-- Cada principio activo tiene su ficha: acción terapéutica, efectos adversos,
+- Cada principio activo tiene su ficha: para qué sirve, **dosis habitual**, efectos adversos,
   contraindicaciones y notas.
 - Al vender, la **ficha del vademécum** se muestra a la izquierda del buscador: para
   qué sirve, efectos adversos, contraindicaciones y notas de cada principio activo.
@@ -278,6 +278,31 @@ Se activa en **Configuración → Opciones → Farmacia**, o al configurar Neji 
   producto no tiene stock, la ficha lo marca y recuerda usar `Ctrl+B`.
 - La pantalla **Vademécum** lista los principios activos con cuántos productos hay en
   stock. Desde la ficha se puede vender directamente.
+- **Vademécum base**: Neji trae unos 170 principios activos comunes escritos en palabras simples (para qué
+  sirven, dosis habitual de adultos y, en los de uso común, de niños, efectos adversos y precauciones), en
+  `neji/static/referencia/vademecum_base.csv`. El botón **Vademécum base** los carga: agrega los que falten y le pone
+  la ficha a los que ya existen, aunque estén con su sal (LOSARTÁN completa LOSARTAN POTASICO). Se elige entre
+  **completar** solo lo vacío (lo que la farmacia escribió se respeta) o **reemplazar** las fichas técnicas por
+  las simples. Es información de referencia: **la debe revisar el químico farmacéutico** antes de usarla con
+  pacientes.
+- **Una farmacia nueva parte con el vademécum base**: al configurar Neji como farmacia (o al activar Farmacia en
+  Opciones) se carga solo, una vez.
+- **Los productos quedan unidos solos a su principio activo.** Al crear un producto o importar el inventario sin
+  la columna de principio activo, Neji lo busca en la descripción: «KITADOL 500 MG PARACETAMOL X 24 COMP» queda
+  con PARACETAMOL 500 mg (la dosis que va junto al nombre, antes o después), «PARACETAMOL 500MG + CAFEINA 65MG»
+  con los dos. También reconoce la sal (LOSARTAN POTASICO → LOSARTÁN) y los **otros nombres** del principio
+  activo (sinónimos o marcas: ASPIRINA, ACETAMINOFENO); en la ficha se agregan más, como KITADOL o ZOLOFT.
+- **Vincular productos** (pantalla Vademécum): para el inventario que ya estaba, muestra lo que Neji encontró en
+  cada descripción para aprobarlo o desmarcarlo, y la lista de los productos que no reconoció.
+- **Planilla del vademécum**: una ventana como una hoja de Excel, con las columnas en el mismo orden que la
+  planilla de importar (Principio activo, Para qué sirve, Dosis habitual, Efectos adversos, Contraindicaciones y
+  precauciones, Notas, Otros nombres) y Tab para pasar de casilla. Se abre con **Nuevo principio activo** (varias
+  filas a la vez), sola al **guardar un producto cuyo principio activo es nuevo** (sin ficha), al **importar el
+  inventario** si quedaron principios activos sin ficha, y con **Completar fichas vacías**.
+- **Importar y exportar** (Excel `.xlsx` o CSV): una fila por principio activo con las columnas *Principio
+  activo, Para qué sirve, Dosis habitual, Efectos adversos, Contraindicaciones y precauciones, Notas* (y
+  opcionalmente *Otros nombres*, separados por `|`, y el precio del recetario). Se puede exportar, corregir en
+  Excel y volver a importar. Una celda vacía nunca borra lo que había.
 
 **Recetario magistral**
 

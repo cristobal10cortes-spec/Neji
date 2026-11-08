@@ -33,6 +33,7 @@ CONFIG_POR_DEFECTO = {
     "respaldos_mantener": "10",
     "ultimo_respaldo": "",
     "modulo_farmacia": "0",
+    "vademecum_base": "0",       # 1 = ya se cargó una vez el vademécum base (al activar Farmacia)
     "receta_redondeo": "1",
     "recetario_semilla": "0",
     "modo_red": "0",
@@ -154,6 +155,9 @@ def migrar(con):
     for columna, tipo in (("autorizacion", "TEXT"), ("tarjeta", "TEXT"), ("pos_cobro_id", "INTEGER")):   # máquina POS
         if columna not in pagos:
             con.execute(f"ALTER TABLE venta_pagos ADD COLUMN {columna} {tipo}")
+    for columna in ("dosis", "otros_nombres"):        # vademécum: dosis habitual y otros nombres
+        if columna not in _columnas(con, "principios_activos"):
+            con.execute(f"ALTER TABLE principios_activos ADD COLUMN {columna} TEXT")
     usuarios = _columnas(con, "usuarios")
     if "nombre_ticket" not in usuarios:
         con.execute("ALTER TABLE usuarios ADD COLUMN nombre_ticket TEXT")

@@ -487,3 +487,15 @@ ol.pasos { margin: .4rem 0 0 1.3rem; padding: 0; }
 ol.pasos li { margin: .35rem 0; }
 .panel h4 { margin: 1rem 0 .35rem; font-size: .95rem; }
 .panel > textarea { width: 100%; font-family: ui-monospace, Consolas, monospace; font-size: .85rem; }
+
+/* Planilla del vademécum: como una hoja de Excel (una fila por principio activo), columnas parejas. */
+.planilla-pa { max-height: 60vh; }
+.planilla-pa table { width: 100%; min-width: 980px; table-layout: fixed; border-collapse: collapse; }
+.planilla-pa th { position: sticky; top: 0; z-index: 1; white-space: normal; vertical-align: bottom; line-height: 1.2; }
+.planilla-pa th:first-child { width: 2.4rem; }
+.planilla-pa th:nth-child(2) { width: 10.5rem; }
+.planilla-pa td { padding: .25rem; vertical-align: top; border-top: 1px solid var(--borde); }
+.planilla-pa td:first-child { padding-top: .7rem; }
+.planilla-pa input, .planilla-pa textarea { width: 100%; min-width: 0; font-size: .88rem; }
+.planilla-pa textarea { min-height: 4.2rem; }
+.planilla-pa .pa-fijo { display: block; padding: .45rem .2rem; overflow-wrap: anywhere; }
