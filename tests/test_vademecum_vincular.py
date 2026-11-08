@@ -120,3 +120,40 @@ def test_vincular_el_inventario_que_ya_estaba(app, api):
     assert api.get("/api/productos/codigo/2")["principios"] is None
     assert [s["codigo"] for s in api.get("/api/principios/vincular")["sugerencias"]] == ["2"]
     assert "Elige" in api.post("/api/principios/vincular", {"ids": []}, esperado=400)["error"]
+
+
+def test_planilla_crea_varios_y_completa_los_sin_ficha(farmacia):
+    # Un producto con un principio activo que no está en el vademécum: queda sin ficha.
+    p = producto(farmacia, "7800009", "MAGNECAL 400MG", principios="CITRATO DE MAGNESIO 400 mg")
+    nuevo = p["principios_detalle"][0]
+    assert nuevo["nombre"] == "CITRATO DE MAGNESIO" and not nuevo["accion_terapeutica"] and not nuevo["dosis"]
+    sin_ficha = farmacia.get("/api/principios?sin_ficha=1")
+    assert [pa["nombre"] for pa in sin_ficha] == ["CITRATO DE MAGNESIO"]
+    # La planilla: completa ese y crea otros dos (las filas vacías se saltan).
+    r = farmacia.post("/api/principios/lote", {"principios": [
+        {"id": nuevo["id"], "nombre": "CITRATO DE MAGNESIO", "accion_terapeutica": "Suplemento de magnesio.",
+         "dosis": "300 a 400 mg al día.", "otros_nombres": "MAGNECAL"},
+        {"nombre": "Própolis", "accion_terapeutica": "Para la garganta irritada."},
+        {"nombre": "", "dosis": ""},
+        {"nombre": "Colágeno", "dosis": "10 g al día."},
+    ]})
+    assert r == {"creados": 2, "actualizados": 1}
+    assert farmacia.get("/api/principios?sin_ficha=1") == []
+    magnesio = next(pa for pa in farmacia.get("/api/principios?q=magnesio") if pa["nombre"] == "CITRATO DE MAGNESIO")
+    assert (magnesio["dosis"], magnesio["otros_nombres"]) == ("300 a 400 mg al día.", "MAGNECAL")
+    assert {"PRÓPOLIS", "COLÁGENO"} <= set(nombres(farmacia, "o"))
+    # Una fila con problema: no se guarda nada y se dice cuál.
+    r = farmacia.post("/api/principios/lote", {"principios": [
+        {"nombre": "Zinc", "accion_terapeutica": "Defensas."}, {"nombre": "paracetamol", "dosis": "x"}]}, esperado=400)
+    assert r["error"].startswith("Fila 2: ya existe el principio activo PARACETAMOL")
+    assert nombres(farmacia, "zinc") == []
+    assert "No hay" in farmacia.post("/api/principios/lote", {"principios": []}, esperado=400)["error"]
+
+
+def test_al_importar_avisa_los_principios_sin_ficha(farmacia):
+    planilla = ("Código;Producto;P. Venta;Principio activo\n"
+                "7901;MAGNECAL 400MG;2990;CITRATO DE MAGNESIO 400 mg\n"
+                "7902;KITADOL 500 MG PARACETAMOL X 24;2990;\n").encode("utf-8")
+    r = farmacia.http.post("/api/productos/importar", data={"archivo": (io.BytesIO(planilla), "inventario.csv")},
+                           content_type="multipart/form-data").get_json()
+    assert (r["creados"], r["vinculados"], r["principios_sin_ficha"]) == (2, 1, 1)

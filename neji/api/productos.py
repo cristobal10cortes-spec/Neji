@@ -463,5 +463,10 @@ def importar_productos():
                     creados += 1
         except ErrorNegocio as e:
             errores.append({"fila": n, "error": e.mensaje})
+    sin_ficha = con.execute(
+        "SELECT COUNT(*) FROM principios_activos pa WHERE COALESCE(pa.accion_terapeutica, '') = '' "
+        "AND COALESCE(pa.dosis, '') = '' AND EXISTS (SELECT 1 FROM producto_principios pp "
+        "JOIN productos p ON p.id = pp.producto_id WHERE pp.principio_id = pa.id AND p.activo = 1)").fetchone()[0] \
+        if farmacia else 0
     return jsonify(creados=creados, actualizados=actualizados, vinculados=vinculados,
-                   errores=(errores + avisos)[:200])
+                   principios_sin_ficha=sin_ficha, errores=(errores + avisos)[:200])

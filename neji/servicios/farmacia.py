@@ -246,7 +246,7 @@ def principios_de_productos(con, ids):
         return resultado
     for pa in filas(con.execute(
             f"""SELECT pp.producto_id, pa.id, pa.nombre, pp.concentracion, pa.accion_terapeutica, pa.dosis,
-                       pa.efectos_adversos, pa.contraindicaciones, pa.notas
+                       pa.efectos_adversos, pa.contraindicaciones, pa.notas, pa.otros_nombres
                 FROM producto_principios pp JOIN principios_activos pa ON pa.id = pp.principio_id
                 WHERE pp.producto_id IN ({', '.join('?' for _ in ids)})
                 ORDER BY pp.producto_id, pp.orden""", list(ids))):

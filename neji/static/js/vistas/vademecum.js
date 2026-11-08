@@ -45,6 +45,124 @@ export function formPrincipio(pa = null, { soloRecetario = false } = {}) {
   });
 }
 
+// --- Planilla del vademécum -------------------------------------------------------------------------------
+// Varios principios activos a la vez, como en Excel: una fila por principio activo y las columnas en el mismo
+// orden que la planilla de importar/exportar. Se abre al crear principios activos, al guardar un producto cuyo
+// principio activo todavía no tiene ficha y al importar el inventario.
+
+const COLUMNAS_PLANILLA = [
+  ['nombre', 'Principio activo', 'Ej: PARACETAMOL'],
+  ['accion_terapeutica', 'Para qué sirve', 'Ej: Analgésico y antipirético: dolor leve a moderado y fiebre.'],
+  ['dosis', 'Dosis habitual', 'Ej: Adultos: 500 mg a 1 g cada 6 a 8 horas. Máximo 4 g al día.'],
+  ['efectos_adversos', 'Efectos adversos', 'Ej: Náuseas; en exceso daña el hígado.'],
+  // Guion suave: en una columna angosta el título se corta como «CONTRA-INDICACIONES».
+  ['contraindicaciones', 'Contra\u00adindicaciones y precauciones', 'Ej: Daño hepático grave.'],
+  ['notas', 'Notas', 'Ej: Se puede usar en el embarazo.'],
+  ['otros_nombres', 'Otros nombres', 'Ej: KITADOL | PANADOL'],
+];
+
+/**
+ * Abre la planilla. `filas`: principios activos (con id si ya existen) o [] para empezar con una fila en blanco.
+ * Devuelve true si se guardó algo.
+ */
+export function planillaVademecum(filas = [], { titulo = 'Principios activos nuevos', intro = null, agregar = true } = {}) {
+  return new Promise((resolver) => {
+    let guardado = false;
+    const cuerpo = h('tbody');
+    const filaVacia = () => ({ nombre: '' });
+    const agregarFila = (pa) => {
+      const n = cuerpo.children.length + 1;
+      const celdas = COLUMNAS_PLANILLA.map(([clave, titulo_, ejemplo]) => {
+        const valor = clave === 'otros_nombres' ? (pa[clave] || '').split('|').filter(Boolean).join(' | ') : (pa[clave] || '');
+        if (clave === 'nombre' && pa.id) {
+          // Ya existe: el nombre se muestra completo y no se cambia aquí.
+          const fijo = h('input', { type: 'hidden', value: valor });
+          fijo.dataset.clave = clave;
+          return h('td', h('b.pa-fijo', valor), fijo);
+        }
+        const control = clave === 'nombre'
+          ? h('input', { value: valor, placeholder: n === 1 ? ejemplo : '', 'aria-label': `${titulo_} (fila ${n})` })
+          : h('textarea', { rows: 3, placeholder: n === 1 ? ejemplo : '', 'aria-label': `${titulo_} (fila ${n})` }, valor);
+        control.dataset.clave = clave;
+        return h('td', control);
+      });
+      const tr = h('tr', h('td.num.suave', String(n)), celdas);
+      tr.dataset.id = pa.id || '';
+      cuerpo.append(tr);
+      return tr;
+    };
+    (filas.length ? filas : [filaVacia()]).forEach(agregarFila);
+    const leer = () => [...cuerpo.children].map((tr) => {
+      const datos = Object.fromEntries([...tr.querySelectorAll('[data-clave]')].map((c) => [c.dataset.clave, c.value.trim()]));
+      return tr.dataset.id ? { ...datos, id: Number(tr.dataset.id) } : datos;
+    });
+    const tablaPlanilla = h('div.tabla-caja.planilla-pa', h('table',
+      h('thead', h('tr', h('th', 'N°'), COLUMNAS_PLANILLA.map(([, t]) => h('th', t)))),
+      cuerpo));
+    const m = modal({
+      titulo,
+      ancho: 'muy-ancho',
+      cuerpo: [
+        intro ? h('p', intro) : null,
+        h('p.ayuda', 'Escribe en palabras simples, como para explicarlo en el mesón. Tab pasa a la casilla siguiente. Lo que quede vacío se puede completar después en Vademécum. Es información de referencia: que la revise el químico farmacéutico.'),
+        tablaPlanilla,
+      ],
+      alCerrar: () => resolver(guardado),
+      botones: [
+        agregar ? { texto: 'Agregar fila', accion: () => agregarFila(filaVacia()).querySelector('input, textarea').focus() } : null,
+        { texto: filas.length ? 'Después' : 'Cancelar', accion: (mm) => mm.cerrar() },
+        { texto: 'Guardar en el vademécum', clase: 'primario', accion: async (mm) => {
+          const principios = leer().filter((p) => p.id || Object.values(p).some(Boolean));
+          if (!principios.length) return mm.error('Escribe al menos un principio activo.');
+          if (principios.some((p) => !p.nombre)) return mm.error('Cada fila necesita el nombre del principio activo.');
+          try {
+            const r = await api.post('/api/principios/lote', { principios });
+            guardado = true;
+            aviso(`Vademécum guardado: ${[r.creados ? `${r.creados} nuevos` : '', r.actualizados ? `${r.actualizados} completados` : ''].filter(Boolean).join(', ')}.`, 'ok', 5000);
+            return mm.cerrar();
+          } catch (e) {
+            return mm.error(e.message);
+          }
+        } },
+      ].filter(Boolean),
+    });
+    requestAnimationFrame(() => m.el.querySelector('.planilla-pa input:not([type=hidden]), .planilla-pa textarea')?.focus());
+  });
+}
+
+/** Si alguno de esos principios activos (de un producto recién guardado) no tiene ficha, ofrece completarla. */
+export async function completarFichasDe(principios) {
+  if (!puede('vademecum')) return false;
+  const vacios = (principios || []).filter((p) => !p.accion_terapeutica && !p.dosis);
+  if (!vacios.length) return false;
+  return planillaVademecum(vacios, {
+    titulo: vacios.length === 1 ? `${vacios[0].nombre}: nuevo en el vademécum` : 'Principios activos nuevos en el vademécum',
+    intro: vacios.length === 1 ? 'Este principio activo todavía no tiene ficha. Complétala ahora (o después, en Vademécum).'
+      : 'Estos principios activos todavía no tienen ficha. Complétalas ahora (o después, en Vademécum).',
+    agregar: false,
+  });
+}
+
+/** Los principios activos sin ficha (todavía no dicen para qué sirven ni su dosis), en la planilla. */
+export async function completarFichasVacias() {
+  let vacios;
+  try {
+    vacios = await api.get('/api/principios?sin_ficha=1&limite=300');
+  } catch (e) {
+    avisoError(e);
+    return false;
+  }
+  if (!vacios.length) {
+    aviso('Todos los principios activos tienen su ficha.', 'ok');
+    return false;
+  }
+  return planillaVademecum(vacios, {
+    titulo: `Completar fichas vacías (${numero(vacios.length)}${vacios.length >= 300 ? ' primeras' : ''})`,
+    intro: 'Principios activos que todavía no dicen para qué sirven ni su dosis (por ejemplo, los que llegaron con un producto o al importar el inventario).',
+    agregar: false,
+  });
+}
+
 function bloque(titulo, texto) {
   return texto ? h('div', h('h3', titulo), h('p', { style: { whiteSpace: 'pre-wrap', marginTop: 0 } }, texto)) : null;
 }
@@ -461,7 +579,8 @@ export async function montar(contenedor) {
         puede('productos') ? h('button.btn', { type: 'button', onclick: () => vincularProductos(cargar) }, 'Vincular productos') : null,
         h('button.btn', { type: 'button', onclick: () => importarPlanilla(cargar) }, 'Importar'),
         h('button.btn', { type: 'button', onclick: () => descargar('/api/principios/exportar').catch(avisoError) }, 'Exportar'),
-        h('button.btn.primario', { type: 'button', onclick: async () => { if (await formPrincipio()) cargar(); } }, 'Nuevo principio activo')) : null),
+        h('button.btn', { type: 'button', onclick: async () => { if (await completarFichasVacias()) cargar(); } }, 'Completar fichas vacías'),
+        h('button.btn.primario', { type: 'button', onclick: async () => { if (await planillaVademecum()) cargar(); } }, 'Nuevo principio activo')) : null),
     h('div.fila', buscar, h('label.check', conStock, 'Solo con productos en stock'), h('span.espacio'), contador),
     h('p.ayuda', 'En la venta, escribe % antes del nombre para buscar productos por componente (ej: %paracetamol).'),
     lista);

@@ -3,6 +3,7 @@
 import { api, descargar, qs } from '../api.js';
 import { esFarmacia, puede } from '../estado.js';
 import { hojaEtiquetas, imprimir } from '../impresion.js';
+import { completarFichasDe, completarFichasVacias } from './vademecum.js';
 import {
   aviso, avisoError, confirmar, debounce, fecha, formulario, h, leerCantidad, leerMonto, modal, numero, pesos, tabla, vaciar,
 } from '../ui.js';
@@ -19,7 +20,10 @@ export async function formProducto(producto = null) {
   if (formularioAbierto) return null;
   formularioAbierto = true;
   try {
-    return await abrirFormProducto(producto);
+    const guardado = await abrirFormProducto(producto);
+    // Farmacia: si su principio activo es nuevo en el vademécum (sin ficha), la planilla para completarla.
+    if (guardado && esFarmacia()) await completarFichasDe(guardado.principios_detalle);
+    return guardado;
   } finally {
     formularioAbierto = false;
   }
@@ -158,6 +162,8 @@ export function importadorCsv({ alTerminar = () => {} } = {}) {
       vaciar(resultado, h('div.panel',
         h('p', h('b', `${r.creados} creados, ${r.actualizados} actualizados.`)),
         r.vinculados ? h('p', `${r.vinculados === 1 ? '1 producto quedó unido' : `${r.vinculados} productos quedaron unidos`} al vademécum por su descripción (Vademécum → «Vincular productos» muestra los que faltan).`) : null,
+        r.principios_sin_ficha && puede('vademecum') ? h('p', `${r.principios_sin_ficha === 1 ? 'Hay 1 principio activo' : `Hay ${r.principios_sin_ficha} principios activos`} de tus productos sin ficha en el vademécum. `,
+          h('button.btn.chico.primario', { type: 'button', onclick: () => completarFichasVacias() }, 'Completar fichas')) : null,
         r.errores.length ? [h('p.rojo', r.errores.length === 1 ? 'Revisa esta fila:' : `Revisa estas ${r.errores.length} filas:`),
           h('ul', r.errores.map((e) => h('li', `Fila ${e.fila}: ${e.error}`)))] : null));
       archivo.value = '';

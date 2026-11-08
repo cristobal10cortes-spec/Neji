@@ -14,6 +14,9 @@ from ..servicios.recetario import MAX_PRECIO, UNIDADES_PRINCIPIO, numero
 from ..validar import ErrorNegocio, booleano, celda_csv, entero, leer_celda_csv, texto
 from . import bp, datos_json, sin_costos
 
+# Un principio activo «sin ficha»: todavía no dice para qué sirve ni su dosis (p. ej. creado desde un producto).
+SQL_SIN_FICHA = "(COALESCE(pa.accion_terapeutica, '') = '' AND COALESCE(pa.dosis, '') = '')"
+
 SQL_CONTEOS = """
     (SELECT COUNT(*) FROM producto_principios pp JOIN productos p ON p.id = pp.producto_id
      WHERE pp.principio_id = pa.id AND p.activo = 1) AS productos,
@@ -59,6 +62,8 @@ def listar_principios():
         params += [f"%{sin_acentos(palabra)}%"] * 2
     if booleano(request.args.get("recetario", "")):
         condiciones.append("pa.precio_receta IS NOT NULL")
+    if booleano(request.args.get("sin_ficha", "")):
+        condiciones.append(SQL_SIN_FICHA)
     if booleano(request.args.get("con_stock", "")):
         condiciones.append("""EXISTS (SELECT 1 FROM producto_principios pp JOIN productos p ON p.id = pp.producto_id
                                       WHERE pp.principio_id = pa.id AND p.activo = 1
@@ -124,6 +129,51 @@ def editar_principio(principio_id):
         con.execute(f"UPDATE principios_activos SET {', '.join(f'{k} = ?' for k in datos)} WHERE id = ?",
                     list(datos.values()) + [principio_id])
     return ver_principio(principio_id)
+
+
+@bp.post("/principios/lote")
+@con_permiso("vademecum")
+def guardar_lote():
+    """Guarda varios principios activos de una vez (la planilla del vademécum): los que traen id se actualizan (su
+    ficha; el precio del recetario queda como estaba) y los demás se crean. Si una fila tiene un problema, no se
+    guarda ninguna y se dice cuál."""
+    filas_ = datos_json().get("principios")
+    if not isinstance(filas_, list) or not filas_:
+        raise ErrorNegocio("No hay principios activos para guardar.")
+    if len(filas_) > 500:
+        raise ErrorNegocio("Son demasiadas filas de una vez (máximo 500).")
+    con = get_db()
+    creados = actualizados = 0
+    with transaccion(con):
+        for n, entrada in enumerate(filas_, start=1):
+            if not isinstance(entrada, dict):
+                raise ErrorNegocio(f"Fila {n}: datos inválidos.")
+            if not any(str(entrada.get(k) or "").strip() for k in ("nombre", *CAMPOS_FICHA)):
+                continue                                      # fila vacía de la planilla
+            try:
+                datos = _leer_principio({k: v for k, v in entrada.items() if k not in ("unidad_receta", "precio_receta")})
+            except ErrorNegocio as e:
+                raise ErrorNegocio(f"Fila {n}: {e.mensaje}") from None
+            ficha = {k: datos[k] for k in ("nombre", *CAMPOS_FICHA)}
+            principio_id = entrada.get("id")
+            otro = con.execute("SELECT id, nombre FROM principios_activos WHERE sin_acentos(nombre) = sin_acentos(?) "
+                               "AND id IS NOT ?", (datos["nombre"], principio_id)).fetchone()
+            if otro:
+                raise ErrorNegocio(f"Fila {n}: ya existe el principio activo {otro['nombre']}.")
+            if principio_id:
+                principio_id = entero(principio_id, "principio activo", minimo=1)
+                if not con.execute("SELECT 1 FROM principios_activos WHERE id = ?", (principio_id,)).fetchone():
+                    raise ErrorNegocio(f"Fila {n}: el principio activo ya no existe.")
+                con.execute(f"UPDATE principios_activos SET {', '.join(f'{k} = ?' for k in ficha)}, actualizado = ? "
+                            "WHERE id = ?", list(ficha.values()) + [ahora(), principio_id])
+                actualizados += 1
+            else:
+                fecha = ahora()
+                ficha |= {"creado": fecha, "actualizado": fecha}
+                con.execute(f"INSERT INTO principios_activos ({', '.join(ficha)}) VALUES ({', '.join('?' for _ in ficha)})",
+                            list(ficha.values()))
+                creados += 1
+    return jsonify({"creados": creados, "actualizados": actualizados})
 
 
 @bp.delete("/principios/<int:principio_id>")

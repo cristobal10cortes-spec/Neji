@@ -294,6 +294,11 @@ Se activa en **Configuración → Opciones → Farmacia**, o al configurar Neji 
   activo (sinónimos o marcas: ASPIRINA, ACETAMINOFENO); en la ficha se agregan más, como KITADOL o ZOLOFT.
 - **Vincular productos** (pantalla Vademécum): para el inventario que ya estaba, muestra lo que Neji encontró en
   cada descripción para aprobarlo o desmarcarlo, y la lista de los productos que no reconoció.
+- **Planilla del vademécum**: una ventana como una hoja de Excel, con las columnas en el mismo orden que la
+  planilla de importar (Principio activo, Para qué sirve, Dosis habitual, Efectos adversos, Contraindicaciones y
+  precauciones, Notas, Otros nombres) y Tab para pasar de casilla. Se abre con **Nuevo principio activo** (varias
+  filas a la vez), sola al **guardar un producto cuyo principio activo es nuevo** (sin ficha), al **importar el
+  inventario** si quedaron principios activos sin ficha, y con **Completar fichas vacías**.
 - **Importar y exportar** (Excel `.xlsx` o CSV): una fila por principio activo con las columnas *Principio
   activo, Para qué sirve, Dosis habitual, Efectos adversos, Contraindicaciones y precauciones, Notas* (y
   opcionalmente *Otros nombres*, separados por `|`, y el precio del recetario). Se puede exportar, corregir en
