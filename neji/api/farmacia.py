@@ -8,7 +8,8 @@ from flask import Response, jsonify, request
 
 from ..auth import con_permiso
 from ..db import ahora, fila, filas, get_db, sin_acentos, transaccion
-from ..servicios.farmacia import SQL_PRINCIPIOS_TEXTO, clave_base, normalizar_nombre
+from ..servicios.farmacia import (SQL_PRINCIPIOS_TEXTO, Reconocedor, clave_base, normalizar_nombre, separar_alias,
+                                  vincular_por_descripcion)
 from ..servicios.recetario import MAX_PRECIO, UNIDADES_PRINCIPIO, numero
 from ..validar import ErrorNegocio, booleano, celda_csv, entero, leer_celda_csv, texto
 from . import bp, datos_json, sin_costos
@@ -44,6 +45,7 @@ def _leer_principio(datos):
         "efectos_adversos": texto(datos, "efectos_adversos", max_largo=2000),
         "contraindicaciones": texto(datos, "contraindicaciones", max_largo=2000),
         "notas": texto(datos, "notas", max_largo=4000),
+        "otros_nombres": "|".join(separar_alias(texto(datos, "otros_nombres", max_largo=1000))) or None,
         "unidad_receta": unidad,
         "precio_receta": precio,
     }
@@ -150,9 +152,10 @@ def borrar_principio(principio_id):
 COLUMNAS_VADEMECUM = [
     ("nombre", "Principio activo"), ("accion_terapeutica", "Para qué sirve"), ("dosis", "Dosis habitual"),
     ("efectos_adversos", "Efectos adversos"), ("contraindicaciones", "Contraindicaciones y precauciones"),
-    ("notas", "Notas"), ("unidad_receta", "Unidad recetario"), ("precio_receta", "Precio recetario"),
+    ("notas", "Notas"), ("otros_nombres", "Otros nombres"), ("unidad_receta", "Unidad recetario"),
+    ("precio_receta", "Precio recetario"),
 ]
-CAMPOS_FICHA = ("accion_terapeutica", "dosis", "efectos_adversos", "contraindicaciones", "notas")
+CAMPOS_FICHA = ("accion_terapeutica", "dosis", "efectos_adversos", "contraindicaciones", "notas", "otros_nombres")
 ALIAS_VADEMECUM = {sin_acentos(k): v for k, v in {
     "principio activo": "nombre", "principio": "nombre", "nombre": "nombre", "principios activos": "nombre",
     "p. activo": "nombre", "farmaco": "nombre", "droga": "nombre", "medicamento": "nombre",
@@ -168,7 +171,7 @@ ALIAS_VADEMECUM = {sin_acentos(k): v for k, v in {
     "notas": "notas", "nota": "notas", "observaciones": "notas",
     "otros nombres": "otros_nombres", "sinonimos": "otros_nombres", "alias": "otros_nombres",
     "unidad recetario": "unidad_receta", "precio recetario": "precio_receta",
-}.items()} | {c: c for c, _ in COLUMNAS_VADEMECUM} | {"otros_nombres": "otros_nombres"}
+}.items()} | {c: c for c, _ in COLUMNAS_VADEMECUM}
 MODOS_IMPORTAR = ("completar", "reemplazar")
 VADEMECUM_BASE = Path(__file__).resolve().parent.parent / "static" / "referencia" / "vademecum_base.csv"
 
@@ -201,8 +204,10 @@ def importar_vademecum(con, registros, modo="completar", crear=True):
     por_nombre, por_base = {}, {}
 
     def recordar(pa):
-        por_nombre.setdefault(sin_acentos(pa["nombre"]), []).append(dict(pa))
-        por_base.setdefault(clave_base(pa["nombre"]), []).append(por_nombre[sin_acentos(pa["nombre"])][-1])
+        pa = dict(pa)
+        for nombre in [pa["nombre"]] + separar_alias(pa.get("otros_nombres")):
+            por_nombre.setdefault(sin_acentos(nombre), []).append(pa)
+            por_base.setdefault(clave_base(nombre), []).append(pa)
 
     for pa in con.execute("SELECT * FROM principios_activos"):
         recordar(pa)
@@ -212,12 +217,11 @@ def importar_vademecum(con, registros, modo="completar", crear=True):
         if not any(r.values()):
             continue
         try:
-            datos = _leer_principio({k: v for k, v in r.items() if k != "otros_nombres"})
+            datos = _leer_principio(r)
         except ErrorNegocio as e:
             errores.append({"fila": n, "error": e.mensaje})
             continue
-        nombres = [datos["nombre"]] + [normalizar_nombre(x) for x in (r.get("otros_nombres") or "").split("|")
-                                       if x.strip()]
+        nombres = [datos["nombre"]] + separar_alias(datos["otros_nombres"])
         destino = [pa for x in nombres for pa in por_nombre.get(sin_acentos(x), [])]
         if not destino:
             destino = [pa for x in nombres for pa in por_base.get(clave_base(x), [])]
@@ -238,6 +242,12 @@ def importar_vademecum(con, registros, modo="completar", crear=True):
         for pa in {id(p): p for p in destino}.values():
             cambios = {k: v for k, v in ficha.items()
                        if v != pa.get(k) and (modo == "reemplazar" or pa.get(k) in (None, ""))}
+            # Los otros nombres se suman a los que ya tenía (sirven para encontrarlo).
+            otros = "|".join(separar_alias(f"{pa.get('otros_nombres') or ''}|{datos['otros_nombres'] or ''}"))
+            if otros and otros != (pa.get("otros_nombres") or ""):
+                cambios["otros_nombres"] = otros
+            else:
+                cambios.pop("otros_nombres", None)
             if ficha.get("unidad_receta") and ("unidad_receta" in cambios) != ("precio_receta" in cambios):
                 cambios.pop("unidad_receta", None)       # la unidad y el precio del recetario van juntos
                 cambios.pop("precio_receta", None)
@@ -265,15 +275,27 @@ def importar_principios():
     return jsonify(resultado)
 
 
+def cargar_base(con, modo="completar"):
+    """Carga el vademécum base de Neji (principios activos comunes en palabras simples). Dentro de una transacción."""
+    resultado = importar_vademecum(con, _filas_vademecum(VADEMECUM_BASE.read_bytes()), modo)
+    con.execute("UPDATE config SET valor = '1' WHERE clave = 'vademecum_base'")
+    return resultado
+
+
+def cargar_base_si_falta(con):
+    """Al activar Farmacia (al configurar Neji o en Opciones): el vademécum base se carga solo, una vez."""
+    fila_ = con.execute("SELECT valor FROM config WHERE clave = 'vademecum_base'").fetchone()
+    if fila_ is None or fila_["valor"] != "1":
+        cargar_base(con)
+
+
 @bp.post("/principios/base")
 @con_permiso("vademecum")
 def cargar_vademecum_base():
-    """El vademécum base de Neji (principios activos comunes en lenguaje simple): crea los que falten y completa
-    (o reemplaza) las fichas."""
-    registros = _filas_vademecum(VADEMECUM_BASE.read_bytes())
+    """El vademécum base: crea los principios activos que falten y completa (o reemplaza) las fichas."""
     con = get_db()
     with transaccion(con):
-        resultado = importar_vademecum(con, registros, (datos_json().get("modo") or "completar"))
+        resultado = cargar_base(con, datos_json().get("modo") or "completar")
     return jsonify(resultado)
 
 
@@ -288,3 +310,47 @@ def exportar_principios():
                            ("" if pa[c] is None else str(pa[c]).replace(".", ",")) for c, _ in COLUMNAS_VADEMECUM])
     return Response("\ufeff" + salida.getvalue(), mimetype="text/csv; charset=utf-8",
                     headers={"Content-Disposition": "attachment; filename=vademecum.csv"})
+
+
+# --- Vincular productos con el vademécum ---------------------------------------------------------------------
+# Los productos sin principio activo se reconocen por su descripción («KITADOL 500 MG PARACETAMOL X 24 COMP» ->
+# PARACETAMOL 500 mg). Primero se muestra lo encontrado y se vincula lo que la persona aprueba.
+
+SQL_SIN_PRINCIPIO = """SELECT p.id, p.codigo, p.descripcion FROM productos p
+                       WHERE p.activo = 1 AND NOT EXISTS (SELECT 1 FROM producto_principios pp
+                                                          WHERE pp.producto_id = p.id)
+                       ORDER BY p.descripcion"""
+
+
+@bp.get("/principios/vincular")
+@con_permiso("productos")
+def sugerir_vinculos():
+    con = get_db()
+    reconocedor = Reconocedor(con)
+    sugerencias, sin_reconocer = [], []
+    for p in con.execute(SQL_SIN_PRINCIPIO):
+        detectados = reconocedor.detectar(p["descripcion"])
+        if detectados:
+            sugerencias.append(dict(p) | {"principios": " + ".join(
+                d["nombre"] + (f" {d['concentracion']}" if d["concentracion"] else "") for d in detectados)})
+        else:
+            sin_reconocer.append(dict(p))
+    return jsonify({"sugerencias": sugerencias, "sin_reconocer": sin_reconocer[:500],
+                    "total_sin_reconocer": len(sin_reconocer)})
+
+
+@bp.post("/principios/vincular")
+@con_permiso("productos")
+def vincular_productos():
+    """Vincula los productos elegidos (que sigan sin principio activo) con lo que nombra su descripción."""
+    ids = datos_json().get("ids")
+    if not isinstance(ids, list) or not ids:
+        raise ErrorNegocio("Elige los productos que quieres vincular.")
+    elegidos = {entero(i, "producto", minimo=1) for i in ids}
+    con = get_db()
+    vinculados, cache = 0, {}
+    with transaccion(con):
+        for p in con.execute(SQL_SIN_PRINCIPIO).fetchall():
+            if p["id"] in elegidos and vincular_por_descripcion(con, p["id"], p["descripcion"], cache):
+                vinculados += 1
+    return jsonify({"vinculados": vinculados})

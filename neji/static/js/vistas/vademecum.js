@@ -22,6 +22,7 @@ export function formPrincipio(pa = null, { soloRecetario = false } = {}) {
       { nombre: 'efectos_adversos', etiqueta: 'Efectos adversos', tipo: 'area', valor: pa?.efectos_adversos, ancho: true },
       { nombre: 'contraindicaciones', etiqueta: 'Contraindicaciones e interacciones', tipo: 'area', valor: pa?.contraindicaciones, ancho: true },
       { nombre: 'notas', etiqueta: 'Notas (embarazo, lactancia, conservación...)', tipo: 'area', valor: pa?.notas, ancho: true },
+      { nombre: 'otros_nombres', etiqueta: 'Otros nombres (marcas, sinónimos o sales)', valor: (pa?.otros_nombres || '').split('|').join(' | '), ancho: true, placeholder: 'Ej: KITADOL | ACETAMINOFENO', ayuda: 'Separados por |. Sirven para reconocer el principio activo en la descripción de los productos.' },
     );
   }
   campos.push(
@@ -36,7 +37,7 @@ export function formPrincipio(pa = null, { soloRecetario = false } = {}) {
       // Al editar solo el precio se conserva la ficha clínica tal como estaba.
       const ficha = soloRecetario && pa ? {
         accion_terapeutica: pa.accion_terapeutica, dosis: pa.dosis, efectos_adversos: pa.efectos_adversos,
-        contraindicaciones: pa.contraindicaciones, notas: pa.notas,
+        contraindicaciones: pa.contraindicaciones, notas: pa.notas, otros_nombres: pa.otros_nombres,
       } : {};
       const datos = { ...ficha, ...v, unidad_receta: v.unidad_receta || null, precio_receta: v.precio_receta === '' ? null : v.precio_receta };
       return pa ? api.put(`/api/principios/${pa.id}`, datos) : api.post('/api/principios', datos);
@@ -72,6 +73,7 @@ export async function fichaPrincipio(id, alCambiar = () => {}, { alVender = null
       bloque('Efectos adversos', pa.efectos_adversos),
       bloque('Contraindicaciones e interacciones', pa.contraindicaciones),
       bloque('Notas', pa.notas),
+      pa.otros_nombres ? h('p.ayuda', `También se reconoce como: ${pa.otros_nombres.split('|').join(', ')}.`) : null,
       h('h3', 'Productos que lo contienen'),
       tabla([
         { titulo: 'Código', valor: (p) => h('span.mono', p.codigo) },
@@ -305,6 +307,8 @@ export function panelVademecum({
 
 // --- Importar, exportar y vademécum base -----------------------------------------------------------------
 
+const cuantos = (n, uno, varios) => `${numero(n)} ${n === 1 ? uno : varios}`;
+
 const MODOS = [
   ['completar', 'Solo completar lo que está vacío (lo que ya escribiste se respeta)'],
   ['reemplazar', 'Reemplazar con lo del archivo (las celdas vacías no borran nada)'],
@@ -314,7 +318,7 @@ function mostrarResultado(titulo, r) {
   modal({
     titulo,
     cuerpo: [
-      h('p', `${numero(r.creados)} principios activos nuevos, ${numero(r.actualizados)} fichas completadas o cambiadas, ${numero(r.sin_cambios)} sin cambios.`),
+      h('p', `${cuantos(r.creados, 'principio activo nuevo', 'principios activos nuevos')}, ${cuantos(r.actualizados, 'ficha completada o cambiada', 'fichas completadas o cambiadas')}, ${numero(r.sin_cambios)} sin cambios.`),
       r.errores.length ? [h('p.rojo', `${r.errores.length} filas con problemas:`),
         h('ul', r.errores.map((e) => h('li', `Fila ${e.fila}: ${e.error}`)))] : null,
     ],
@@ -384,6 +388,65 @@ function cargarBase(alTerminar) {
   });
 }
 
+/**
+ * Productos sin principio activo: Neji lo busca en la descripción («KITADOL 500 MG PARACETAMOL X 24 COMP») y
+ * muestra lo que encontró para aprobarlo (o desmarcar lo que esté mal). Lista también los que no reconoció.
+ */
+async function vincularProductos(alTerminar) {
+  let r;
+  try {
+    r = await api.get('/api/principios/vincular');
+  } catch (e) {
+    avisoError(e);
+    return;
+  }
+  const elegidos = new Set(r.sugerencias.map((s) => s.id));
+  const contador = h('b');
+  const actualizar = () => { contador.textContent = `${numero(elegidos.size)} de ${numero(r.sugerencias.length)} elegidos`; };
+  const todos = h('input', { type: 'checkbox', checked: true, 'aria-label': 'Elegir todos', onchange: (e) => {
+    r.sugerencias.forEach((s) => (e.target.checked ? elegidos.add(s.id) : elegidos.delete(s.id)));
+    lista.querySelectorAll('input[data-producto]').forEach((c) => { c.checked = e.target.checked; });
+    actualizar();
+  } });
+  const lista = tabla([
+    { titulo: todos, valor: (s) => h('input', { type: 'checkbox', checked: true, 'data-producto': s.id, 'aria-label': `Vincular ${s.descripcion}`,
+      onchange: (e) => { if (e.target.checked) elegidos.add(s.id); else elegidos.delete(s.id); actualizar(); } }) },
+    { titulo: 'Código', valor: (s) => h('span.mono', s.codigo) },
+    { titulo: 'Producto', valor: (s) => s.descripcion },
+    { titulo: 'Principio activo encontrado', valor: (s) => h('b', s.principios) },
+  ], r.sugerencias, { vacio: 'No hay productos para vincular: todos tienen principio activo o no se reconoció ninguno.' });
+  actualizar();
+  const sinReconocer = r.total_sin_reconocer ? h('details', { style: { marginTop: '.8rem' } },
+    h('summary', r.total_sin_reconocer === 1 ? '1 producto sin principio activo que no se reconoció' : `${numero(r.total_sin_reconocer)} productos sin principio activo que no se reconocieron`),
+    h('p.ayuda', 'Por ejemplo, insumos o productos que no son medicamentos, o una marca sin el nombre del principio activo en la descripción. Para una marca, agrégala en «Otros nombres» del principio activo (Editar) y vuelve a vincular; o escribe el principio activo en el producto.'),
+    h('ul', r.sin_reconocer.slice(0, 200).map((p) => h('li', `${p.codigo} · ${p.descripcion}`))),
+    r.total_sin_reconocer > 200 ? h('p.suave', `… y ${numero(r.total_sin_reconocer - 200)} más.`) : null) : null;
+  modal({
+    titulo: 'Vincular productos con el vademécum',
+    ancho: 'muy-ancho',
+    cuerpo: [
+      h('p', 'Neji buscó el principio activo en la descripción de los productos que no lo tienen. Revisa la lista, desmarca lo que esté mal y vincula el resto.'),
+      h('p', contador),
+      lista,
+      sinReconocer,
+    ],
+    botones: [
+      { texto: 'Cancelar', accion: (m) => m.cerrar() },
+      { texto: 'Vincular los elegidos', clase: 'primario', accion: async (m) => {
+        if (!elegidos.size) return m.error('Elige al menos un producto.');
+        try {
+          const res = await api.post('/api/principios/vincular', { ids: [...elegidos] });
+          m.cerrar();
+          aviso(`${cuantos(res.vinculados, 'producto quedó unido', 'productos quedaron unidos')} al vademécum.`, 'ok', 6000);
+          return alTerminar();
+        } catch (e) {
+          return m.error(e.message);
+        }
+      } },
+    ],
+  });
+}
+
 export async function montar(contenedor) {
   const buscar = h('input', { type: 'search', placeholder: 'Principio activo o uso terapéutico (ej: losartán, antihipertensivo)', autofocus: true, style: { maxWidth: '460px' } });
   const conStock = h('input', { type: 'checkbox' });
@@ -395,6 +458,7 @@ export async function montar(contenedor) {
       h('h2', 'Vademécum'),
       puede('vademecum') ? h('div.fila',
         h('button.btn', { type: 'button', onclick: () => cargarBase(cargar) }, 'Vademécum base'),
+        puede('productos') ? h('button.btn', { type: 'button', onclick: () => vincularProductos(cargar) }, 'Vincular productos') : null,
         h('button.btn', { type: 'button', onclick: () => importarPlanilla(cargar) }, 'Importar'),
         h('button.btn', { type: 'button', onclick: () => descargar('/api/principios/exportar').catch(avisoError) }, 'Exportar'),
         h('button.btn.primario', { type: 'button', onclick: async () => { if (await formPrincipio()) cargar(); } }, 'Nuevo principio activo')) : null),

@@ -177,6 +177,9 @@ def setup():
         con.execute("UPDATE config SET valor = ? WHERE clave = 'negocio_rut'", (rut or "",))
         con.execute("UPDATE config SET valor = ? WHERE clave = 'modulo_farmacia'",
                     ("1" if booleano(datos.get("modulo_farmacia", False)) else "0",))
+        if booleano(datos.get("modulo_farmacia", False)):
+            from .farmacia import cargar_base_si_falta
+            cargar_base_si_falta(con)            # farmacia con vademécum: parte con el vademécum base
         usuario_id = con.execute(
             "INSERT INTO usuarios (usuario, nombre, password_hash, rol, creado) "
             "VALUES (?, ?, ?, 'admin', ?)",
@@ -289,6 +292,9 @@ def guardar_config():
     with transaccion(con):
         for clave, valor in cambios.items():
             con.execute("UPDATE config SET valor = ? WHERE clave = ?", (valor, clave))
+        if cambios.get("modulo_farmacia") == "1":
+            from .farmacia import cargar_base_si_falta
+            cargar_base_si_falta(con)            # al activar Farmacia, el vademécum base (una vez)
     return jsonify(leer_config(con))
 
 

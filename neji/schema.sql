@@ -286,6 +286,7 @@ CREATE TABLE IF NOT EXISTS principios_activos (
     nombre             TEXT NOT NULL UNIQUE COLLATE NOCASE,
     accion_terapeutica TEXT,
     dosis              TEXT,             -- dosis habitual (posología de referencia)
+    otros_nombres      TEXT,             -- sinónimos, sales o marcas, separados por | (KITADOL|ACETAMINOFENO)
     efectos_adversos   TEXT,
     contraindicaciones TEXT,
     notas              TEXT,

@@ -42,7 +42,7 @@ async function abrirFormProducto(producto) {
     { nombre: 'descripcion', etiqueta: 'Descripción', valor: producto?.descripcion, requerido: true },
     { nombre: 'departamento', etiqueta: 'Departamento', valor: producto?.departamento, atributos: { list: 'lista-departamentos' }, placeholder: 'Ej: Bebidas' },
     { nombre: 'tipo_venta', etiqueta: 'Se vende por', tipo: 'select', valor: producto?.tipo_venta || 'unidad', opciones: [['unidad', 'Unidad / pieza'], ['granel', 'Granel (kg, litro, metro)']] },
-    farmacia ? { nombre: 'principios', etiqueta: 'Principio(s) activo(s)', valor: producto?.principios, ancho: true, placeholder: 'Ej: PARACETAMOL 500 mg + CAFEINA 65 mg', atributos: { list: 'lista-principios' }, ayuda: 'Separa con + si tiene varios. Quedan unidos al vademécum y permiten buscar con %.' } : null,
+    farmacia ? { nombre: 'principios', etiqueta: 'Principio(s) activo(s)', valor: producto?.principios, ancho: true, placeholder: 'Ej: PARACETAMOL 500 mg + CAFEINA 65 mg', atributos: { list: 'lista-principios' }, ayuda: producto ? 'Separa con + si tiene varios. Quedan unidos al vademécum y permiten buscar con %.' : 'Si lo dejas vacío, Neji lo busca en la descripción (ej: KITADOL 500 MG PARACETAMOL X 24 COMP). Separa con + si tiene varios.' } : null,
     { nombre: 'precio_costo', etiqueta: 'Precio de costo', tipo: 'monto', valor: producto?.precio_costo ?? '' },
     { nombre: 'margen', etiqueta: '% de ganancia', tipo: 'cantidad', valor: margen, ayuda: 'Calcula el precio de venta desde el costo' },
     { nombre: 'precio_venta', etiqueta: 'Precio de venta (con IVA)', tipo: 'monto', valor: producto?.precio_venta ?? '', requerido: true },
@@ -91,9 +91,12 @@ async function abrirFormProducto(producto) {
       e.precio_costo.addEventListener('input', () => (e.margen.value ? desdeMargen() : haciaMargen()));
       e.precio_venta.addEventListener('input', haciaMargen);
     },
-    alEnviar: (v) => {
+    alEnviar: async (v) => {
       delete v.margen;
-      return producto ? api.put(`/api/productos/${producto.id}`, v) : api.post('/api/productos', v);
+      if (producto) return api.put(`/api/productos/${producto.id}`, v);
+      const nuevo = await api.post('/api/productos', v);
+      if (nuevo.principios_detectados) aviso(`Unido al vademécum: ${nuevo.principios_detectados}.`, 'ok', 6000);
+      return nuevo;
     },
   });
 }
@@ -154,6 +157,7 @@ export function importadorCsv({ alTerminar = () => {} } = {}) {
       const r = await api.subir('/api/productos/importar', datos);
       vaciar(resultado, h('div.panel',
         h('p', h('b', `${r.creados} creados, ${r.actualizados} actualizados.`)),
+        r.vinculados ? h('p', `${r.vinculados === 1 ? '1 producto quedó unido' : `${r.vinculados} productos quedaron unidos`} al vademécum por su descripción (Vademécum → «Vincular productos» muestra los que faltan).`) : null,
         r.errores.length ? [h('p.rojo', r.errores.length === 1 ? 'Revisa esta fila:' : `Revisa estas ${r.errores.length} filas:`),
           h('ul', r.errores.map((e) => h('li', `Fila ${e.fila}: ${e.error}`)))] : null));
       archivo.value = '';

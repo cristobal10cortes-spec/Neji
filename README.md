@@ -285,6 +285,15 @@ Se activa en **Configuración → Opciones → Farmacia**, o al configurar Neji 
   **completar** solo lo vacío (lo que la farmacia escribió se respeta) o **reemplazar** las fichas técnicas por
   las simples. Es información de referencia: **la debe revisar el químico farmacéutico** antes de usarla con
   pacientes.
+- **Una farmacia nueva parte con el vademécum base**: al configurar Neji como farmacia (o al activar Farmacia en
+  Opciones) se carga solo, una vez.
+- **Los productos quedan unidos solos a su principio activo.** Al crear un producto o importar el inventario sin
+  la columna de principio activo, Neji lo busca en la descripción: «KITADOL 500 MG PARACETAMOL X 24 COMP» queda
+  con PARACETAMOL 500 mg (la dosis que va junto al nombre, antes o después), «PARACETAMOL 500MG + CAFEINA 65MG»
+  con los dos. También reconoce la sal (LOSARTAN POTASICO → LOSARTÁN) y los **otros nombres** del principio
+  activo (sinónimos o marcas: ASPIRINA, ACETAMINOFENO); en la ficha se agregan más, como KITADOL o ZOLOFT.
+- **Vincular productos** (pantalla Vademécum): para el inventario que ya estaba, muestra lo que Neji encontró en
+  cada descripción para aprobarlo o desmarcarlo, y la lista de los productos que no reconoció.
 - **Importar y exportar** (Excel `.xlsx` o CSV): una fila por principio activo con las columnas *Principio
   activo, Para qué sirve, Dosis habitual, Efectos adversos, Contraindicaciones y precauciones, Notas* (y
   opcionalmente *Otros nombres*, separados por `|`, y el precio del recetario). Se puede exportar, corregir en
