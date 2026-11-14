@@ -153,7 +153,7 @@ export async function montar(contenedor) {
         kpi('Ventas netas', pesos(x.total), true),
         kpi('Tickets', numero(x.n_ventas)),
         kpi('Ticket promedio', pesos(x.ticket_promedio)),
-        kpi('Ganancia estimada', `${pesos(x.ganancia)} · ${numero(x.margen)}%`),
+        kpi('Ganancia (sin IVA)', `${pesos(x.ganancia)} · ${numero(x.margen)}%`),
         kpi('IVA débito', pesos(x.iva)),
         kpi('Devoluciones', pesos(x.devuelto)),
         kpi('Descuentos', pesos(x.descuentos))),
@@ -195,7 +195,7 @@ export async function montar(contenedor) {
           { titulo: 'Ganancia', valor: (p) => pesos(p.ganancia), clase: 'num' },
           { titulo: '', valor: (p) => barraRelativa(p.total, maxProd) },
         ], r.top_productos, { vacio: 'Sin ventas.' })),
-      h('p.ayuda', `Neto ${pesos(x.neto)} · IVA ${pesos(x.iva)} · Exento ${pesos(x.exento)} · Redondeo efectivo ${pesos(x.redondeo)}. La ganancia usa el costo registrado en cada producto al momento de la venta.`));
+      h('p.ayuda', `Neto ${pesos(x.neto)} · IVA ${pesos(x.iva)} · Exento ${pesos(x.exento)} · Redondeo efectivo ${pesos(x.redondeo)}. La ganancia es sin IVA: lo vendido menos el costo, los dos sin su IVA (el IVA no es ganancia: se le paga al SII). El % es sobre lo vendido sin IVA. Usa el costo registrado en cada producto al momento de la venta.`));
   }
 
   await cargar();

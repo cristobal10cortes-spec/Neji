@@ -204,7 +204,24 @@ def test_reporte_ventas(api, turno, productos):
     r = api.get("/api/reportes/ventas")
     assert r["resumen"]["n_ventas"] == 2
     assert r["resumen"]["total"] == 3380
-    assert r["resumen"]["ganancia"] == (1590 - 900) * 2 + 200
+    # La ganancia es sin IVA: (venta - costo) / 1,19 (el chicle, artículo común, no tiene costo).
+    assert r["resumen"]["ganancia"] == round(((1590 - 900) * 2 + 200) / 1.19)
+    assert r["resumen"]["margen"] == round(100 * (((1590 - 900) * 2 + 200) / 1.19) / (3380 / 1.19), 1)
     deps = {d["departamento"]: d["total"] for d in r["por_departamento"]}
     assert deps == {"Bebidas": 3180, "Artículos comunes": 200}
     assert r["top_productos"][0]["descripcion"] == "Bebida cola 1.5L"
+
+
+def test_la_ganancia_es_sin_iva(api, turno):
+    """Costo $1.190 y venta $1.785 (con IVA): la ganancia real es $500 (no $595) y el margen, 50 % del costo."""
+    afecto = api.post("/api/productos", {"codigo": "A1", "descripcion": "Afecto", "precio_costo": 1190,
+                                         "precio_venta": 1785, "existencia": 10}, esperado=201)
+    exento = api.post("/api/productos", {"codigo": "E1", "descripcion": "Exento", "precio_costo": 1000,
+                                         "precio_venta": 1500, "existencia": 10, "exento": True}, esperado=201)
+    vender(api, [{"producto_id": afecto["id"], "cantidad": 2}])
+    assert api.get("/api/caja/1/turno")["turno"]["ganancia"] == 1000
+    vender(api, [{"producto_id": exento["id"], "cantidad": 1}])          # exento: no hay IVA que sacar
+    assert api.get("/api/caja/1/turno")["turno"]["ganancia"] == 1500
+    r = api.get("/api/reportes/ventas")["resumen"]
+    assert r["ganancia"] == 1500
+    assert r["margen"] == round(100 * 1500 / (3000 + 1500), 1)            # sobre lo vendido sin IVA

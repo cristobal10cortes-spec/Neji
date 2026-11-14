@@ -359,9 +359,14 @@ la planilla de Excel (`.xlsx`) tal como la exporta eleventa u otro sistema, o un
 - **Etiquetas con código de barras** (Code 128) para imprimir: se escanean los productos (una vez por etiqueta)
   o se agregan todos los de la lista.
 - La lista se filtra por departamento y por existencia: **con existencia** (1 o más) o **agotados** (en 0).
+- **Escanear en Productos abre ese producto** para editarlo, con **Kardex** y **Eliminar** en la misma ventana
+  (también con un clic en la fila). Si el código no existe, se abre **Nuevo producto** con ese código.
+- **Ganancia real**: el costo y el precio llevan IVA, y la ganancia se muestra sin IVA (el IVA no es ganancia: se le
+  paga al SII). Ej.: costo $1.190 y venta $1.785 dejan **$500** por unidad, no $595; el % sobre el costo (50 %) es
+  el mismo con o sin IVA. Lo mismo en Caja y Reportes.
 - **Entradas de mercadería con su factura**: en Inventario se escanea el producto y se abre su entrada; se pide el
   **proveedor** y el **N° de factura** (quedan escritos para el producto siguiente de la misma factura), la cantidad
-  y el costo con IVA (que actualiza el del producto). Cada producto se suma a esa factura en **Proveedores**: si no
+  y el costo con IVA (que actualiza el del producto). En la misma ventana se cambia a **Salida** o **Ajuste**. Cada producto se suma a esa factura en **Proveedores**: si no
   estaba, se crea por pagar.
 - Salidas por merma y ajustes por conteo físico.
 - **Kardex**: el historial de cada producto.

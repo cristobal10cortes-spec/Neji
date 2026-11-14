@@ -53,7 +53,7 @@ function detalleTurno(t) {
     h('div.kpis',
       kpi('Debe haber en caja', pesos(t.efectivo_esperado), true),
       kpi('Ventas', `${t.n_ventas} · ${pesos(t.total_ventas)}`),
-      t.ganancia != null ? kpi('Ganancia estimada', pesos(t.ganancia)) : null,
+      t.ganancia != null ? kpi('Ganancia (sin IVA)', pesos(t.ganancia)) : null,
       t.estado === 'cerrado' ? kpi(t.diferencia < 0 ? 'Faltante' : t.diferencia > 0 ? 'Sobrante' : 'Cuadrada', pesos(t.diferencia)) : null),
     h('div.columnas',
       h('div.panel',

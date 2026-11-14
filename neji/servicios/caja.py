@@ -10,13 +10,42 @@ SQL_DEPARTAMENTO_ITEM = """
                             ELSE 'Sin departamento' END)
 """
 
-# Ganancia de una línea de venta descontando lo devuelto y repartiendo el
-# descuento general del ticket en proporción. Requiere alias vi (venta_items) y v (ventas).
-SQL_GANANCIA_ITEM = """
+# Lo cobrado por una línea de venta (con IVA), descontando lo devuelto y repartiendo el descuento general del
+# ticket en proporción. Requiere alias vi (venta_items) y v (ventas).
+SQL_IMPORTE_ITEM = """
     (vi.importe * (vi.cantidad - vi.cantidad_devuelta) / vi.cantidad)
       * (CASE WHEN v.subtotal > 0 THEN 1.0 * v.total / v.subtotal ELSE 1 END)
-    - vi.precio_costo * (vi.cantidad - vi.cantidad_devuelta)
 """
+
+
+def factor_iva(con):
+    """1 + la tasa de IVA de Configuración (1,19): un monto con IVA dividido por esto queda sin IVA."""
+    fila = con.execute("SELECT valor FROM config WHERE clave = 'iva_porcentaje'").fetchone()
+    try:
+        tasa = float(str(fila["valor"]).replace(",", ".")) if fila else 19.0
+    except ValueError:
+        tasa = 19.0
+    return 1 + tasa / 100
+
+
+def _sin_iva(con, sql):
+    """El monto de una línea sin IVA (las exentas no lo llevan)."""
+    return f"(({sql}) / (CASE WHEN vi.exento = 1 THEN 1 ELSE {factor_iva(con):.6f} END))"
+
+
+def sql_venta_sin_iva_item(con):
+    """Lo cobrado por una línea de venta, sin IVA."""
+    return _sin_iva(con, SQL_IMPORTE_ITEM)
+
+
+def sql_ganancia_item(con):
+    """La ganancia real de una línea de venta: sin IVA.
+
+    El precio de venta y el costo llevan IVA; ese IVA no es ganancia (el de la venta menos el de la compra se le
+    paga al SII), así que se saca de los dos: (venta - costo) / 1,19. Ej.: costo $1.190 y venta $1.785 dejan
+    $500 (no $595). En los productos exentos no hay IVA que sacar.
+    """
+    return _sin_iva(con, f"{SQL_IMPORTE_ITEM} - vi.precio_costo * (vi.cantidad - vi.cantidad_devuelta)")
 
 
 def turno_abierto(con, caja_id):
@@ -96,7 +125,7 @@ def resumen_turno(con, turno_id):
     n_ventas = valor("SELECT COUNT(*) FROM ventas WHERE turno_id = ?", turno_id)
     total_ventas = valor("SELECT SUM(total) FROM ventas WHERE turno_id = ?", turno_id)
     ganancia = valor(
-        f"""SELECT SUM({SQL_GANANCIA_ITEM})
+        f"""SELECT SUM({sql_ganancia_item(con)})
            FROM venta_items vi JOIN ventas v ON v.id = vi.venta_id WHERE v.turno_id = ?""",
         turno_id,
     )
