@@ -591,6 +591,9 @@ export async function montar(contenedor, parametros = {}) {
       const exacto = lista.findIndex((p) => p.codigo === consulta);
       if (exacto >= 0) return elegirResultado(exacto);
       if (lista.length === 1 && calzaPorNombre(lista[0], consulta)) return elegirResultado(0);
+      // Un nombre (o %principio) con la lista a la vista: se agrega el marcado, sin pedir otro Enter. Un número
+      // que no es un código exacto sigue pidiendo confirmar (puede ser un código mal escrito).
+      if (consulta.startsWith('%') || /\p{L}/u.test(consulta)) return elegirResultado(sel);
     }
     return procesarCodigo();
   }

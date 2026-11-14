@@ -254,26 +254,85 @@ async function administrarDepartamentos(alCambiar) {
   cargar();
 }
 
-function imprimirEtiquetas(productos) {
-  const copias = new Map(productos.map((p) => [p.id, h('input', { type: 'number', min: '0', max: '200', value: '1', style: { width: '90px' } })]));
+/**
+ * Etiquetas con código de barras: se escanean (o se buscan) los productos que las llevan; escanear dos veces el
+ * mismo suma una copia. `enLista` son los productos que se ven en la lista, para agregarlos todos de una vez.
+ */
+function imprimirEtiquetas(enLista = []) {
+  const elegidos = new Map(); // id del producto → { producto, copias (campo) }
+  const entrada = h('input', {
+    type: 'search', placeholder: 'Escanea el código o busca el producto', autocomplete: 'off', autofocus: true,
+    'data-lector': 'aqui', 'aria-label': 'Código o descripción del producto',
+  });
+  const resultados = h('div');
+  const elegidosEl = h('div');
+  const copiasDe = (id) => Math.min(parseInt(elegidos.get(id).copias.value, 10) || 0, 200);
+
+  const pintar = () => vaciar(elegidosEl, elegidos.size
+    ? tabla([
+      { titulo: 'Producto', valor: ({ producto: p }) => p.descripcion },
+      { titulo: 'Código', valor: ({ producto: p }) => h('span.mono', p.codigo) },
+      { titulo: 'Precio', valor: ({ producto: p }) => pesos(p.precio_venta), clase: 'num' },
+      { titulo: 'Copias', valor: (e) => e.copias },
+      { titulo: '', valor: ({ producto: p }) => h('button.btn.chico', { type: 'button', title: 'Quitar', 'aria-label': `Quitar ${p.descripcion}`, onclick: () => { elegidos.delete(p.id); pintar(); entrada.focus(); } }, '×') },
+    ], [...elegidos.values()])
+    : h('p.vacio', 'Escanea o busca los productos que llevan etiqueta.'));
+
+  const agregar = (p) => {
+    const ya = elegidos.get(p.id);
+    if (ya) ya.copias.value = String(copiasDe(p.id) + 1);
+    else elegidos.set(p.id, { producto: p, copias: h('input', { type: 'number', min: '0', max: '200', value: '1', style: { width: '90px' }, 'aria-label': `Copias de ${p.descripcion}` }) });
+    vaciar(resultados);
+    entrada.value = '';
+    pintar();
+    entrada.focus();
+  };
+
+  async function buscar() {
+    const q = entrada.value.trim();
+    if (!q) return;
+    try {
+      agregar(await api.get(`/api/productos/codigo/${encodeURIComponent(q)}`));
+      return;
+    } catch { /* no es un código: se busca por descripción */ }
+    const r = await api.get(`/api/productos${qs({ q, por_pagina: 10 })}`).catch(() => ({ productos: [] }));
+    if (r.productos.length === 1) {
+      agregar(r.productos[0]);
+      return;
+    }
+    vaciar(resultados, r.productos.length
+      ? [h('p.ayuda', 'Haz clic en el producto para agregarlo.'), tabla([
+        { titulo: 'Código', valor: (p) => h('span.mono', p.codigo) },
+        { titulo: 'Producto', valor: (p) => p.descripcion },
+        { titulo: 'Precio', valor: (p) => pesos(p.precio_venta), clase: 'num' },
+      ], r.productos, { alClic: agregar })]
+      : h('p.vacio', `Sin resultados para «${q}».`));
+    entrada.select(); // lo próximo que se escanee reemplaza lo escrito
+  }
+  entrada.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    buscar();
+  });
+
+  pintar();
   modal({
     titulo: 'Imprimir etiquetas con código de barras',
     ancho: 'ancho',
     cuerpo: [
-      h('p.ayuda', 'Etiquetas de 50 × 30 mm con descripción, precio y código de barras (Code 128).'),
-      tabla([
-        { titulo: 'Producto', valor: (p) => p.descripcion },
-        { titulo: 'Código', valor: (p) => h('span.mono', p.codigo) },
-        { titulo: 'Precio', valor: (p) => pesos(p.precio_venta), clase: 'num' },
-        { titulo: 'Copias', valor: (p) => copias.get(p.id) },
-      ], productos),
+      h('p.ayuda', 'Etiquetas de 50 × 30 mm con descripción, precio y código de barras (Code 128). Escanea un producto una vez por cada etiqueta, o cambia las copias.'),
+      h('div.fila', entrada,
+        enLista.length ? h('button.btn', { type: 'button', onclick: () => { enLista.forEach(agregar); } }, `Agregar los de la lista (${enLista.length})`) : null),
+      resultados,
+      h('div', { style: { height: '.5rem' } }),
+      elegidosEl,
     ],
     botones: [{
       texto: 'Imprimir',
       clase: 'primario',
       accion: (m) => {
-        const items = productos.map((p) => ({ producto: p, copias: Math.min(parseInt(copias.get(p.id).value, 10) || 0, 200) })).filter((i) => i.copias > 0);
-        if (!items.length) return m.error('Indica al menos una copia.');
+        const items = [...elegidos.values()].map((e) => ({ producto: e.producto, copias: copiasDe(e.producto.id) })).filter((i) => i.copias > 0);
+        if (!items.length) return m.error('Escanea o busca al menos un producto.');
         imprimir(hojaEtiquetas(items));
       },
     }],
@@ -284,24 +343,22 @@ export async function montar(contenedor) {
   const admin = puede('productos');
   const buscar = h('input', { type: 'search', placeholder: esFarmacia() ? 'Descripción, código o %principio activo' : 'Buscar por descripción o código', autofocus: true, style: { maxWidth: '380px' } });
   const departamento = h('select', { style: { width: 'auto' } });
+  const existencia = h('select', { style: { width: 'auto' }, 'aria-label': 'Existencia' },
+    h('option', { value: '' }, 'Todas las existencias'),
+    h('option', { value: 'con' }, 'Con existencia (1 o más)'),
+    h('option', { value: 'agotados' }, 'Agotados (en 0)'));
   const bajoMinimo = h('input', { type: 'checkbox' });
   const lista = h('div');
   const paginacion = h('div.fila.fin');
-  const seleccionados = new Map();
   let pagina = 1;
   let ultimos = [];
 
-  const btnEtiquetas = h('button.btn', { type: 'button', onclick: () => imprimirEtiquetas([...seleccionados.values()]) }, 'Etiquetas (0)');
+  const btnEtiquetas = h('button.btn', { type: 'button', onclick: () => imprimirEtiquetas(ultimos) }, 'Etiquetas');
 
   async function cargarDepartamentos() {
     const actual = departamento.value;
     const deps = await api.get('/api/departamentos').catch(() => []);
     vaciar(departamento, h('option', { value: '' }, 'Todos los departamentos'), deps.map((d) => h('option', { value: d.id, selected: String(d.id) === actual }, d.nombre)));
-  }
-
-  function actualizarSeleccion() {
-    btnEtiquetas.textContent = `Etiquetas (${seleccionados.size})`;
-    btnEtiquetas.disabled = seleccionados.size === 0;
   }
 
   vaciar(contenedor,
@@ -315,7 +372,7 @@ export async function montar(contenedor) {
           h('button.btn', { type: 'button', onclick: () => descargar('/api/productos/exportar') }, 'Exportar CSV'),
           h('button.btn.primario', { type: 'button', onclick: async () => { if (await formProducto()) { aviso('Producto guardado.', 'ok'); cargar(); } } }, 'Nuevo producto'),
         ] : null)),
-    h('div.fila', buscar, departamento, h('label.check', bajoMinimo, 'Solo bajo el mínimo')),
+    h('div.fila', buscar, departamento, existencia, h('label.check', bajoMinimo, 'Solo bajo el mínimo')),
     h('div', { style: { height: '.75rem' } }),
     lista,
     paginacion);
@@ -323,22 +380,12 @@ export async function montar(contenedor) {
   async function cargar() {
     let r = { productos: [], total: 0 };
     try {
-      r = await api.get(`/api/productos${qs({ q: buscar.value.trim(), departamento_id: departamento.value, bajo_minimo: bajoMinimo.checked ? 1 : '', pagina, por_pagina: POR_PAGINA })}`);
+      r = await api.get(`/api/productos${qs({ q: buscar.value.trim(), departamento_id: departamento.value, existencia: existencia.value, bajo_minimo: bajoMinimo.checked ? 1 : '', pagina, por_pagina: POR_PAGINA })}`);
     } catch (e) {
       avisoError(e);
     }
     ultimos = r.productos;
     const columnas = [
-      {
-        titulo: '',
-        valor: (p) => h('input', {
-          type: 'checkbox',
-          checked: seleccionados.has(p.id),
-          'aria-label': 'Seleccionar para etiquetas',
-          onclick: (e) => e.stopPropagation(),
-          onchange: (e) => { if (e.target.checked) seleccionados.set(p.id, p); else seleccionados.delete(p.id); actualizarSeleccion(); },
-        }),
-      },
       { titulo: 'Código', valor: (p) => h('span.mono', p.codigo) },
       { titulo: 'Descripción', valor: (p) => [p.descripcion, p.tipo_venta === 'granel' ? [' ', h('span.etiqueta', 'granel')] : null, p.exento ? [' ', h('span.etiqueta', 'exento')] : null, esFarmacia() && p.principios ? h('div.ayuda.pa', p.principios) : null] },
       { titulo: 'Departamento', valor: (p) => p.departamento || '' },
@@ -355,7 +402,7 @@ export async function montar(contenedor) {
             onclick: async (e) => {
               e.stopPropagation();
               if (!(await confirmar('Eliminar producto', `¿Eliminar «${p.descripcion}»?`, { aceptar: 'Eliminar', peligro: true }))) return;
-              try { await api.del(`/api/productos/${p.id}`); seleccionados.delete(p.id); actualizarSeleccion(); cargar(); } catch (err) { avisoError(err); }
+              try { await api.del(`/api/productos/${p.id}`); cargar(); } catch (err) { avisoError(err); }
             },
           }, 'Eliminar') : null),
       },
@@ -366,7 +413,7 @@ export async function montar(contenedor) {
     }));
     const paginas = Math.max(1, Math.ceil(r.total / POR_PAGINA));
     vaciar(paginacion,
-      h('span.suave', `${r.total} productos · página ${pagina} de ${paginas}`),
+      h('span.suave', `${r.total} ${r.total === 1 ? 'producto' : 'productos'} · página ${pagina} de ${paginas}`),
       h('button.btn.chico', { type: 'button', disabled: pagina <= 1, onclick: () => { pagina--; cargar(); } }, '‹ Anterior'),
       h('button.btn.chico', { type: 'button', disabled: pagina >= paginas, onclick: () => { pagina++; cargar(); } }, 'Siguiente ›'));
   }
@@ -374,8 +421,8 @@ export async function montar(contenedor) {
   const reiniciar = () => { pagina = 1; cargar(); };
   buscar.addEventListener('input', debounce(reiniciar));
   departamento.addEventListener('change', reiniciar);
+  existencia.addEventListener('change', reiniciar);
   bajoMinimo.addEventListener('change', reiniciar);
-  actualizarSeleccion();
   await cargarDepartamentos();
   await cargar();
   buscar.focus();

@@ -65,6 +65,13 @@ def crear_factura():
     return jsonify(_factura(con, factura_id) | {"proveedor_nuevo": nuevo}), 201
 
 
+@bp.get("/proveedores/facturas/<int:factura_id>")
+@con_permiso("proveedores")
+def ver_factura(factura_id):
+    con = get_db()
+    return jsonify(_factura(con, factura_id) | {"productos": svc.productos_de_factura(con, factura_id)})
+
+
 @bp.put("/proveedores/facturas/<int:factura_id>")
 @con_permiso("proveedores")
 def editar_factura(factura_id):
@@ -80,6 +87,8 @@ def borrar_factura(factura_id):
     con = get_db()
     with transaccion(con):
         svc.exigir_factura(con, factura_id)
+        # Las entradas de mercadería quedan en el kardex (con el número en su referencia), sin la factura.
+        con.execute("UPDATE movimientos_inventario SET factura_id = NULL WHERE factura_id = ?", (factura_id,))
         con.execute("DELETE FROM facturas_proveedor WHERE id = ?", (factura_id,))
     return jsonify(ok=True)
 

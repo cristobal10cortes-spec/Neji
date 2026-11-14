@@ -8,6 +8,7 @@ from flask import jsonify, request
 from ..auth import con_permiso, usuario_actual
 from ..db import ahora, config_activa, filas, get_db, transaccion
 from ..validar import ErrorNegocio, booleano, cantidad, entero, texto
+from ..servicios import proveedores as svc_proveedores
 from ..servicios.inventario import mover_existencia
 from . import bp, datos_json, rango_fechas
 
@@ -39,19 +40,37 @@ def movimiento_inventario():
         if producto["tipo_venta"] == "unidad" and delta != int(delta):
             raise ErrorNegocio("Este producto se maneja por unidad: la cantidad debe ser entera.")
 
-        costo = None
-        if tipo == "entrada" and datos.get("costo_unitario") not in (None, ""):
-            costo = entero(datos["costo_unitario"], "costo unitario", minimo=0)
+        costo, factura, proveedor_nuevo, referencia = None, None, False, texto(datos, "referencia", max_largo=80)
+        if tipo == "entrada":
+            # Toda entrada de mercadería viene con su factura: el producto se suma a esa factura en Proveedores.
+            proveedor = texto(datos, "proveedor", requerido=True, nombre="el proveedor", max_largo=80)
+            numero = texto(datos, "factura", requerido=True, nombre="el número de factura", max_largo=30)
+            costo = entero(datos.get("costo_unitario"), "costo unitario", minimo=0)
             if booleano(datos.get("actualizar_costo", True)) and costo != producto["precio_costo"]:
                 con.execute("UPDATE productos SET precio_costo = ?, actualizado = ? WHERE id = ?",
                             (costo, ahora(), producto["id"]))
+            factura, proveedor_nuevo = svc_proveedores.sumar_entrada(
+                con, proveedor, numero, round(delta * costo), usuario_actual()["id"])
+            referencia = f"Factura {factura['numero']} · {factura['proveedor']}"[:80]
 
         nueva = mover_existencia(
             con, producto, delta, tipo, usuario_actual()["id"],
-            referencia=texto(datos, "referencia", max_largo=80), nota=texto(datos, "nota"),
-            costo_unitario=costo,
-            permitir_negativo=tipo != "salida" or config_activa(con, "permitir_stock_negativo"))
-    return jsonify(existencia=nueva)
+            referencia=referencia, nota=texto(datos, "nota"), costo_unitario=costo,
+            permitir_negativo=tipo != "salida" or config_activa(con, "permitir_stock_negativo"),
+            factura_id=factura["id"] if factura else None)
+        if factura:
+            productos = con.execute("SELECT COUNT(*) FROM movimientos_inventario WHERE factura_id = ?",
+                                    (factura["id"],)).fetchone()[0]
+            factura = {k: factura[k] for k in ("id", "numero", "proveedor", "monto", "origen")} | {
+                "productos": productos, "proveedor_nuevo": proveedor_nuevo}
+    return jsonify(existencia=nueva, factura=factura)
+
+
+@bp.get("/inventario/proveedores")
+@con_permiso("inventario")
+def proveedores_para_entradas():
+    """Los nombres para el campo «Proveedor» de la entrada de mercadería."""
+    return jsonify(svc_proveedores.sugeridos(get_db()))
 
 
 @bp.get("/inventario/sugeridos")

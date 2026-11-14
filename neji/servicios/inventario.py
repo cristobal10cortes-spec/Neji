@@ -9,7 +9,7 @@ def formatear_cantidad(valor):
 
 
 def mover_existencia(con, producto, cantidad, tipo, usuario_id, referencia=None, nota=None,
-                     costo_unitario=None, permitir_negativo=True):
+                     costo_unitario=None, permitir_negativo=True, factura_id=None):
     """Suma `cantidad` (negativa para sacar) a la existencia y deja registro en el kardex.
 
     `producto` es una fila de productos. Debe llamarse dentro de una transacción.
@@ -33,10 +33,10 @@ def mover_existencia(con, producto, cantidad, tipo, usuario_id, referencia=None,
     con.execute(
         """INSERT INTO movimientos_inventario
            (producto_id, fecha, tipo, cantidad, existencia_anterior, existencia_nueva,
-            costo_unitario, referencia, usuario_id, nota)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            costo_unitario, referencia, usuario_id, nota, factura_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (producto["id"], fecha, tipo, cantidad, anterior, nueva,
          costo_unitario if costo_unitario is not None else producto["precio_costo"],
-         referencia, usuario_id, nota),
+         referencia, usuario_id, nota, factura_id),
     )
     return nueva

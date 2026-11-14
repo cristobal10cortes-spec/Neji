@@ -14,7 +14,8 @@ function formFactura(datos, factura = null) {
   const lista = `prov-sugeridos-${Date.now()}`;
   const sugeridos = h('datalist', { id: lista }, datos.sugeridos.map((n) => h('option', { value: n })));
   return formulario({
-    titulo: factura ? `Editar ${factura.tipo === 'nota_credito' ? 'nota de crédito' : 'factura'}` : 'Anotar factura de proveedor',
+    titulo: factura ? `Editar ${factura.tipo === 'nota_credito' ? 'nota de crédito' : 'factura'}` : 'Ingresar factura de proveedor',
+    intro: factura ? null : h('p.ayuda', 'Las facturas de mercadería se ingresan solas al registrar la entrada de los productos en Inventario. Aquí se ingresan las demás (o una nota de crédito).'),
     ancho: 'ancho',
     enterAvanza: true,
     extra: sugeridos,
@@ -22,7 +23,7 @@ function formFactura(datos, factura = null) {
       { nombre: 'proveedor', etiqueta: 'Proveedor', valor: factura?.proveedor, requerido: true, autofocus: true, atributos: { list: lista }, ayuda: 'Si es nuevo, queda agregado a la lista de proveedores.' },
       { nombre: 'tipo', etiqueta: 'Documento', tipo: 'select', valor: factura?.tipo || 'factura', opciones: Object.entries(datos.tipos) },
       { nombre: 'numero', etiqueta: 'N° de factura', valor: factura?.numero, requerido: true },
-      { nombre: 'monto', etiqueta: 'Monto total (con IVA)', tipo: 'monto', valor: factura?.monto, requerido: true },
+      { nombre: 'monto', etiqueta: 'Monto total (con IVA)', tipo: 'monto', valor: factura?.monto, requerido: true, ayuda: factura?.origen === 'inventario' ? 'Va sumando los productos ingresados en Inventario. Si lo cambias, desde ahí manda lo que escribas.' : null },
       { nombre: 'fecha', etiqueta: 'Fecha de la factura', tipo: 'fecha', valor: factura?.fecha || hoy() },
       { nombre: 'vence', etiqueta: 'Vence (pagar hasta)', tipo: 'fecha', valor: factura?.vence, ayuda: 'Opcional. Las notas de crédito no vencen.' },
       { nombre: 'nota', etiqueta: 'Nota', valor: factura?.nota, ancho: true, placeholder: 'Opcional: pedido, despacho, observación…' },
@@ -73,7 +74,7 @@ export async function montar(contenedor) {
     h('div.fila.entre', h('h2', 'Proveedores'),
       h('div.fila',
         h('button.btn', { type: 'button', onclick: () => administrarProveedores() }, 'Lista de proveedores'),
-        h('button.btn.primario', { type: 'button', onclick: () => nuevaFactura() }, 'Anotar factura'))),
+        h('button.btn.primario', { type: 'button', onclick: () => nuevaFactura() }, 'Ingresar factura'))),
     resumen, barra, zonaLista, zonaProveedores);
 
   async function cargarTodo() {
@@ -161,7 +162,7 @@ export async function montar(contenedor) {
           f.pagada ? null : h('button.btn.chico', { type: 'button', onclick: (e) => { e.stopPropagation(); pagar([f]); } }, f.tipo === 'nota_credito' ? 'Descontar' : 'Pagar'),
           h('button.btn.chico', { type: 'button', onclick: (e) => { e.stopPropagation(); verFactura(f); } }, 'Ver')) },
       ], facturas, {
-        vacio: filtro.estado === 'por_pagar' ? 'No hay facturas por pagar. Anótalas con «Anotar factura».' : 'No hay facturas.',
+        vacio: filtro.estado === 'por_pagar' ? 'No hay facturas por pagar. Se ingresan con «Ingresar factura» o al registrar una entrada en Inventario.' : 'No hay facturas.',
         alClic: (f) => verFactura(f),
         pie: [{ valor: tituloTotal, colspan: 5 }, { valor: h('b', conSigno(total)), clase: 'num' }, { valor: '', colspan: 2 }],
       }));
@@ -188,7 +189,7 @@ export async function montar(contenedor) {
   async function nuevaFactura() {
     const r = await formFactura(datos);
     if (!r) return;
-    aviso(r.proveedor_nuevo ? `Factura anotada. «${r.proveedor || 'El proveedor'}» quedó en la lista de proveedores.` : 'Factura anotada.', 'ok');
+    aviso(r.proveedor_nuevo ? `Factura ingresada. «${r.proveedor || 'El proveedor'}» quedó en la lista de proveedores.` : 'Factura ingresada.', 'ok');
     cargarTodo();
   }
 
@@ -205,11 +206,19 @@ export async function montar(contenedor) {
     if (lista.length) pagar(lista);
   }
 
-  function verFactura(f) {
+  async function verFactura(resumida) {
+    let f = resumida;
+    try {
+      f = { ...resumida, ...(await api.get(`/api/proveedores/facturas/${resumida.id}`)) };
+    } catch (e) {
+      avisoError(e);
+    }
     const nombre = f.tipo === 'nota_credito' ? 'Nota de crédito' : 'Factura';
     const fila = (t, v) => h('div.fila.entre', h('span.suave', t), h('span', v));
+    const productos = f.productos || [];
     modal({
       titulo: `${nombre} N° ${f.numero} · ${f.proveedor}`,
+      ancho: productos.length ? 'ancho' : '',
       cuerpo: [
         fila('Monto', h('b', pesos(f.monto))),
         fila('Fecha', fechaCorta(f.fecha)),
@@ -217,6 +226,17 @@ export async function montar(contenedor) {
         fila('Estado', estadoDe(f)),
         f.pagada && f.medio_pago ? fila('Cómo se pagó', datos.medios[f.medio_pago] || f.medio_pago) : null,
         f.nota ? h('p', f.nota) : null,
+        productos.length ? [
+          h('h3', 'Productos ingresados en Inventario'),
+          tabla([
+            { titulo: 'Código', valor: (p) => h('span.mono', p.codigo) },
+            { titulo: 'Producto', valor: (p) => p.descripcion },
+            { titulo: 'Cantidad', valor: (p) => numero(p.cantidad), clase: 'num' },
+            { titulo: 'Costo', valor: (p) => pesos(p.costo_unitario || 0), clase: 'num' },
+            { titulo: 'Importe', valor: (p) => pesos(p.importe), clase: 'num' },
+          ], productos, { pie: [{ valor: 'Suma de los productos', colspan: 4 }, { valor: h('b', pesos(productos.reduce((s, p) => s + p.importe, 0))), clase: 'num' }] }),
+          f.origen === 'inventario' ? null : h('p.ayuda', 'El monto de esta factura se escribió a mano: las entradas no lo cambian.'),
+        ] : null,
       ],
       botones: [
         { texto: 'Borrar', clase: 'peligro', accion: async (m) => {
@@ -249,7 +269,7 @@ export async function montar(contenedor) {
           if (!(await confirmar('Quitar proveedor', `¿Quitar a «${p.nombre}» de la lista? Sus facturas pagadas se conservan.`, { aceptar: 'Quitar', peligro: true }))) return;
           try { await api.del(`/api/proveedores/${p.id}`); await cargarTodo(); pintar(); } catch (err) { avisoError(err); }
         } }, 'Quitar')) },
-    ], datos.proveedores, { vacio: 'Todavía no hay proveedores: se agregan solos al anotar su primera factura.' }));
+    ], datos.proveedores, { vacio: 'Todavía no hay proveedores: se agregan solos al ingresar su primera factura.' }));
     pintar();
     modal({
       titulo: 'Lista de proveedores',

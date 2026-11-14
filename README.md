@@ -221,10 +221,10 @@ nueva ahí. Las otras cajas la cargan solas al cambiar de pantalla (o con el bot
 
 - Captura por código de barras, con la sintaxis `3*código` para varias unidades.
 - **Buscador en vivo**: al escribir un nombre en el mismo campo del código aparece la
-  lista de productos con su código, nombre, precio y existencia. Se elige con `↑` `↓` y
-  `Enter`, o con un clic. Si el nombre calza con un solo producto, `Enter` lo agrega
-  directo; si lo escrito solo se parece a un código (o son solo números), pide
-  confirmar con `Enter`. `3*nombre` también funciona.
+  lista de productos con su código, nombre, precio y existencia, con el primero marcado.
+  Un solo `Enter` agrega el marcado (se cambia con `↑` `↓` o con un clic). Si lo escrito
+  son solo números y no es un código exacto (puede ser un código mal escrito), pide
+  confirmar con otro `Enter`. `3*nombre` también funciona.
 - Los atajos (`INS` Varios, `Ctrl+P` Art. común, `F10` Buscar, `F11` Mayoreo,
   `F9` Verificador, `F7` Entrada, `F8` Salida) van en una fila bajo el buscador, como en
   eleventa, y **Cancelar ticket** queda justo encima de **Cobrar**.
@@ -356,8 +356,14 @@ la planilla de Excel (`.xlsx`) tal como la exporta eleventa u otro sistema, o un
 - Generador de código interno EAN-13 para productos sin código de barras.
 - En **Nuevo producto** y al editar uno, `Enter` pasa al dato siguiente (código,
   descripción, departamento, se vende por, principio activo…) hasta **Guardar**.
-- **Etiquetas con código de barras** (Code 128) para imprimir.
-- Entradas de mercadería (actualizan el costo), salidas por merma y ajustes por conteo físico.
+- **Etiquetas con código de barras** (Code 128) para imprimir: se escanean los productos (una vez por etiqueta)
+  o se agregan todos los de la lista.
+- La lista se filtra por departamento y por existencia: **con existencia** (1 o más) o **agotados** (en 0).
+- **Entradas de mercadería con su factura**: en Inventario se escanea el producto y se abre su entrada; se pide el
+  **proveedor** y el **N° de factura** (quedan escritos para el producto siguiente de la misma factura), la cantidad
+  y el costo con IVA (que actualiza el del producto). Cada producto se suma a esa factura en **Proveedores**: si no
+  estaba, se crea por pagar.
+- Salidas por merma y ajustes por conteo físico.
 - **Kardex**: el historial de cada producto.
 - **Compras sugeridas**: productos bajo el mínimo, con lo vendido en los últimos 30 días.
 - Opción de permitir inventario negativo.
@@ -367,19 +373,22 @@ la planilla de Excel (`.xlsx`) tal como la exporta eleventa u otro sistema, o un
 
 ### Proveedores (facturas por pagar)
 
-En **Proveedores** se anota cada factura que llega: **proveedor, N° de factura, monto total**, fecha y, si tiene
-plazo, cuándo vence. Arriba se ve **cuánto se debe en total**, cuánto está **vencido**, cuánto **vence en los
+Las facturas de mercadería se ingresan solas al registrar la **entrada** de sus productos en Inventario: su monto
+es la suma de cantidad × costo de cada producto, y al abrirla se ven los productos que entraron. Las demás (o una
+factura con su total ya escrito) se ingresan con **Ingresar factura**: **proveedor, N° de factura, monto total**,
+fecha y, si tiene plazo, cuándo vence. Si una factura se ingresó a mano con su total, las entradas quedan unidas a
+ella sin cambiarlo. Arriba se ve **cuánto se debe en total**, cuánto está **vencido**, cuánto **vence en los
 próximos 7 días** y cuánto se **pagó este mes**.
 
 - **La lista suma sola**: abajo sale el total de lo que se está viendo (todas, o las de un proveedor).
 - **Cuánto se le debe a cada proveedor**: un resumen por proveedor; con un clic se ven solo sus facturas.
 - **Sumar y pagar varias**: se marcan las casillas de las facturas, se ve la suma de las elegidas y se marcan como
   pagadas de una vez (fecha y cómo se pagó: transferencia, cheque, efectivo u otro). Se puede deshacer.
-- **Notas de crédito** del proveedor (por devoluciones): se anotan igual y restan de lo que se le debe.
-- **Proveedores**: se agregan solos al anotar su primera factura (sin duplicarse por mayúsculas o tildes); en
+- **Notas de crédito** del proveedor (por devoluciones): se ingresan igual y restan de lo que se le debe.
+- **Proveedores**: se agregan solos al ingresar su primera factura (sin duplicarse por mayúsculas o tildes); en
   «Lista de proveedores» se les pone RUT y contacto. Al escribir el proveedor se sugieren también los que tienen
   los productos.
-- No deja anotar dos veces el mismo número del mismo proveedor.
+- No deja ingresar dos veces el mismo número del mismo proveedor.
 - La pestaña la ve el administrador y los cajeros con el permiso **«Proveedores»** (Configuración → Usuarios).
 
 ### Clientes y crédito

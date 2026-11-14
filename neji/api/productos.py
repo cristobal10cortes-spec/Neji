@@ -147,6 +147,12 @@ def listar_productos():
         params.append(entero(request.args["departamento_id"], "departamento"))
     if booleano(request.args.get("bajo_minimo", "")):
         condiciones.append("p.usa_inventario = 1 AND p.existencia <= p.minimo")
+    # Solo los que tienen existencia (1 o más) o solo los agotados (en 0 o menos).
+    existencia = request.args.get("existencia") or ""
+    if existencia not in ("", "con", "agotados"):
+        raise ErrorNegocio("El filtro de existencia es «con» o «agotados».")
+    if existencia:
+        condiciones.append("p.usa_inventario = 1 AND p.existencia " + ("> 0" if existencia == "con" else "<= 0"))
     where = " AND ".join(condiciones)
     por_pagina = min(entero(request.args.get("por_pagina") or 50, "por_pagina", minimo=1), 500)
     pagina = entero(request.args.get("pagina") or 1, "página", minimo=1)

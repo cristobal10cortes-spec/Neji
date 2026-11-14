@@ -306,11 +306,13 @@ document.addEventListener('keydown', (e) => {
 window.addEventListener('hashchange', mostrarVista);
 
 // Lo que lee el lector de códigos va a la venta: a la que está abierta o, desde otra pantalla, a una nueva.
+// Una pantalla que recibe ella las lecturas (Inventario: abre la entrada del producto) se lo queda.
 iniciarLector({
   llevarCodigo(codigo) {
-    if ((location.hash.slice(1) || 'ventas') === 'ventas' && vistaActual?.recibirCodigo) vistaActual.recibirCodigo(codigo);
+    if (vistaActual?.recibirCodigo) vistaActual.recibirCodigo(codigo);
     else ir('ventas', { codigo });
   },
+  pantallaRecibe: () => Boolean(vistaActual?.recibirCodigo),
 });
 
 // Soltar un archivo fuera de un campo de archivo haría que la ventana lo abra y reemplace a Neji.
