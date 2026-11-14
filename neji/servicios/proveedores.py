@@ -132,7 +132,7 @@ def leer_factura(con, datos, proveedor_id, factura_id=None):
                            "AND id IS NOT ?", (proveedor_id, tipo, numero, factura_id)).fetchone()
     if repetida:
         proveedor = exigir_proveedor(con, proveedor_id)["nombre"]
-        raise ErrorNegocio(f"La {TIPOS[tipo].lower()} N° {numero} de {proveedor} ya está anotada.")
+        raise ErrorNegocio(f"La {TIPOS[tipo].lower()} N° {numero} de {proveedor} ya está ingresada.")
     return {"proveedor_id": proveedor_id, "tipo": tipo, "numero": numero, "fecha": emitida, "vence": vence,
             "monto": monto, "nota": texto(datos, "nota", nombre="la nota", max_largo=300)}
 
@@ -146,12 +146,56 @@ def crear_factura(con, datos, usuario_id):
 
 
 def editar_factura(con, factura_id, datos):
-    exigir_factura(con, factura_id)
+    anterior = exigir_factura(con, factura_id)
     proveedor_id, nuevo = proveedor_para_factura(con, datos)
     f = leer_factura(con, datos, proveedor_id, factura_id)
+    if f["monto"] != anterior["monto"]:
+        f["origen"] = None   # el total escrito a mano manda: las próximas entradas ya no lo cambian
     con.execute(f"UPDATE facturas_proveedor SET {', '.join(f'{k} = ?' for k in f)} WHERE id = ?",
                 list(f.values()) + [factura_id])
     return nuevo
+
+
+def sumar_entrada(con, proveedor, numero, monto, usuario_id):
+    """La factura a la que va una entrada de mercadería (por proveedor y número); si no está, se crea.
+
+    Si la creó una entrada, su monto va sumando cada producto ingresado (cantidad × costo con IVA). Si se ingresó a
+    mano en Proveedores con su total, ese total se respeta: la entrada solo queda unida a ella.
+    Devuelve (factura, proveedor_nuevo).
+    """
+    proveedor_id, nuevo = proveedor_para_factura(con, {"proveedor": proveedor})
+    numero = (numero or "").strip()
+    if not numero:
+        raise ErrorNegocio("Falta el número de factura.")
+    if len(numero) > 30:
+        raise ErrorNegocio("El número de factura tiene más de 30 letras.")
+    factura = con.execute("SELECT * FROM facturas_proveedor WHERE proveedor_id = ? AND tipo = 'factura' "
+                          "AND numero = ?", (proveedor_id, numero)).fetchone()
+    if factura is None:
+        if monto <= 0:
+            raise ErrorNegocio("La factura es nueva: ingresa primero un producto con su costo. Las unidades "
+                               "bonificadas (costo $0) se agregan después.")
+        factura_id = con.execute(
+            "INSERT INTO facturas_proveedor (proveedor_id, tipo, numero, fecha, monto, usuario_id, creado, origen) "
+            "VALUES (?, 'factura', ?, ?, ?, ?, ?, 'inventario')",
+            (proveedor_id, numero, date.today().isoformat(), monto, usuario_id, ahora())).lastrowid
+    else:
+        if factura["pagada"]:
+            raise ErrorNegocio(f"La factura N° {numero} de {exigir_proveedor(con, proveedor_id)['nombre']} ya está "
+                               "pagada. Revisa el número o vuélvela a «por pagar» en Proveedores.")
+        factura_id = factura["id"]
+        if factura["origen"] == "inventario" and monto:
+            con.execute("UPDATE facturas_proveedor SET monto = monto + ? WHERE id = ?", (monto, factura_id))
+    return dict(exigir_factura(con, factura_id)) | {"proveedor": exigir_proveedor(con, proveedor_id)["nombre"]}, nuevo
+
+
+def productos_de_factura(con, factura_id):
+    """Lo que entró al inventario con esa factura (las entradas de mercadería unidas a ella)."""
+    return [dict(f) for f in con.execute(
+        """SELECT m.id, m.fecha, m.cantidad, m.costo_unitario, ROUND(m.cantidad * COALESCE(m.costo_unitario, 0))
+                  AS importe, p.codigo, p.descripcion
+           FROM movimientos_inventario m JOIN productos p ON p.id = m.producto_id
+           WHERE m.factura_id = ? ORDER BY m.id""", (factura_id,))]
 
 
 def pagar(con, ids, fecha_pago=None, medio=None):

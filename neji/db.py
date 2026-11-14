@@ -158,6 +158,13 @@ def migrar(con):
     for columna in ("dosis", "otros_nombres"):        # vademécum: dosis habitual y otros nombres
         if columna not in _columnas(con, "principios_activos"):
             con.execute(f"ALTER TABLE principios_activos ADD COLUMN {columna} TEXT")
+    # Entradas de mercadería unidas a la factura del proveedor.
+    if "factura_id" not in _columnas(con, "movimientos_inventario"):
+        con.execute("ALTER TABLE movimientos_inventario ADD COLUMN factura_id INTEGER "
+                    "REFERENCES facturas_proveedor(id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_mov_inv_factura ON movimientos_inventario(factura_id)")
+    if "origen" not in _columnas(con, "facturas_proveedor"):
+        con.execute("ALTER TABLE facturas_proveedor ADD COLUMN origen TEXT")
     usuarios = _columnas(con, "usuarios")
     if "nombre_ticket" not in usuarios:
         con.execute("ALTER TABLE usuarios ADD COLUMN nombre_ticket TEXT")

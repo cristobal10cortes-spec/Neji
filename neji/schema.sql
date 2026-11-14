@@ -74,7 +74,8 @@ CREATE TABLE IF NOT EXISTS movimientos_inventario (
     costo_unitario      INTEGER,
     referencia          TEXT,
     usuario_id          INTEGER REFERENCES usuarios(id),
-    nota                TEXT
+    nota                TEXT,
+    factura_id          INTEGER REFERENCES facturas_proveedor(id)   -- entrada de mercadería: su factura
 );
 CREATE INDEX IF NOT EXISTS idx_mov_inv_producto ON movimientos_inventario(producto_id, fecha);
 CREATE INDEX IF NOT EXISTS idx_mov_inv_fecha ON movimientos_inventario(fecha);
@@ -450,6 +451,7 @@ CREATE TABLE IF NOT EXISTS facturas_proveedor (
     medio_pago   TEXT,             -- transferencia, cheque, efectivo, otro
     usuario_id   INTEGER REFERENCES usuarios(id),
     creado       TEXT NOT NULL,
+    origen       TEXT,             -- 'inventario': la creó una entrada de mercadería y su monto suma los productos
     UNIQUE (proveedor_id, tipo, numero)
 );
 CREATE INDEX IF NOT EXISTS idx_facturas_proveedor_pagada ON facturas_proveedor(pagada, vence);

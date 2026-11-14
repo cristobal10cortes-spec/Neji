@@ -1,4 +1,4 @@
-"""Proveedores: anotar sus facturas, ver cuánto se les debe y marcar los pagos."""
+"""Proveedores: ingresar sus facturas, ver cuánto se les debe y marcar los pagos."""
 
 from datetime import date, timedelta
 
@@ -51,7 +51,7 @@ def test_anotar_facturas_y_ver_el_total_por_pagar(api, productos):
 def test_datos_que_no_valen(api):
     anotar(api, "Droguería Ñuñoa", "10234", 1000)
     r = anotar(api, "DROGUERIA ÑUÑOA", "10234", 5000, esperado=400)
-    assert "ya está anotada" in r["error"]
+    assert "ya está ingresada" in r["error"]
     assert "número" in anotar(api, "X", "", 1000, esperado=400)["error"]
     assert "monto" in anotar(api, "X", "1", 0, esperado=400)["error"]
     assert "proveedor" in anotar(api, "", "1", 100, esperado=400)["error"]
@@ -108,7 +108,7 @@ def test_editar_borrar_y_quitar_proveedor(api):
     # Si vuelve a facturar, vuelve a la lista (el mismo proveedor, no uno nuevo).
     otra = anotar(api, "Droguería Ñuñoa", "2", 1000)
     assert otra["proveedor_id"] == f["proveedor_id"] and otra["proveedor_nuevo"] is False
-    api.get(f"/api/proveedores/facturas/{999}", esperado=405)
+    assert "no encontrada" in api.get(f"/api/proveedores/facturas/{999}", esperado=404)["error"]
 
 
 def test_sugiere_los_proveedores_de_los_productos(api):

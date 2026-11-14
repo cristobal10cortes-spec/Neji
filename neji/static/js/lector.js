@@ -1,4 +1,4 @@
-// Lector de códigos de barras: lo que escanea va siempre a la venta.
+// Lector de códigos de barras: lo que escanea va siempre a la venta (o, en Inventario, a la entrada de mercadería).
 //
 // Un lector USB «de teclado» escribe el código muy rápido (unas pocas milésimas entre letra y letra) y
 // termina con Enter. Aquí se reconoce esa ráfaga: si el foco no está en el campo de la venta ni en otro campo
@@ -32,7 +32,8 @@ export function guardarLector(cambios) {
   } catch { /* sin almacenamiento: queda lo de fábrica */ }
 }
 
-let llevar = null;   // (codigo) => lo agrega a la venta (lo da app.js)
+let llevar = null;   // (codigo) => lo agrega a la venta, o a la pantalla que recibe lecturas (lo da app.js)
+let capturaPantalla = () => false; // si la pantalla abierta recibe ella las lecturas (Inventario: la entrada)
 let prueba = null; // «Probar el lector» (Configuración → Esta terminal): muestra la lectura en vez de vender
 
 /**
@@ -54,6 +55,8 @@ const editable = (el) => Boolean(el) && (el.isContentEditable
     && !['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'range', 'color'].includes(el.type)));
 const modalArriba = () => [...document.querySelectorAll('#modales .modal')].at(-1) || null;
 const enLaVenta = () => (location.hash.slice(1) || 'ventas') === 'ventas';
+/** En la venta, o en una pantalla que recibe ella lo que lee el lector (como Inventario, que abre la entrada). */
+const recibeLaPantalla = () => enLaVenta() || capturaPantalla();
 
 /** Palabras de un campo hecho para escanear: el código de un producto, el verificador, buscar en inventario... */
 const PARA_CODIGOS = /c[oó]digo|barras|escane|\bean\b|\bsku\b/i;
@@ -74,7 +77,7 @@ function quiereCodigo(campo) {
  */
 function destino(campo) {
   const modal = modalAbierto() ? modalArriba() : null;
-  if (enLaVenta() && !modal) return campo?.id === 'codigo-producto' ? 'normal' : 'venta';
+  if (recibeLaPantalla() && !modal) return campo?.id === 'codigo-producto' ? 'normal' : 'venta';
   if (quiereCodigo(campo) && (!modal || modal.contains(campo))) return 'normal';
   if (modal) return modal.dataset.lector === 'cerrar' ? 'venta' : 'avisar';
   return 'venta';
@@ -240,9 +243,13 @@ async function escucharLectoresCom() {
   }
 }
 
-/** Se llama una vez al cargar Neji. `llevarCodigo(codigo)` agrega el código a la venta. */
-export function iniciarLector({ llevarCodigo }) {
+/**
+ * Se llama una vez al cargar Neji. `llevarCodigo(codigo)` agrega el código a la venta (o se lo da a la pantalla
+ * abierta); `pantallaRecibe()` dice si la pantalla abierta (no la venta) recibe ella las lecturas.
+ */
+export function iniciarLector({ llevarCodigo, pantallaRecibe }) {
   llevar = llevarCodigo;
+  if (pantallaRecibe) capturaPantalla = pantallaRecibe;
   // En la fase de captura: antes que cualquier otra tecla de Neji, para poder quitarle la lectura al campo.
   document.addEventListener('keydown', teclear, true);
   escucharLectoresCom();

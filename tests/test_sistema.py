@@ -80,8 +80,8 @@ def test_busqueda_productos(api, productos):
 
 def test_inventario_movimientos_y_kardex(api, productos):
     bebida = productos["bebida"]
-    api.post("/api/inventario/movimiento", {"producto_id": bebida["id"], "tipo": "entrada",
-                                            "cantidad": 12, "costo_unitario": 950})
+    api.post("/api/inventario/movimiento", {"producto_id": bebida["id"], "tipo": "entrada", "cantidad": 12,
+                                            "costo_unitario": 950, "proveedor": "CCU", "factura": "5501"})
     assert api.get(f"/api/productos/{bebida['id']}")["precio_costo"] == 950
     api.post("/api/inventario/movimiento", {"producto_id": bebida["id"], "tipo": "salida",
                                             "cantidad": 2, "nota": "Merma"})

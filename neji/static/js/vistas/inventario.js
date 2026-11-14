@@ -12,27 +12,64 @@ const TIPOS = {
   ajuste: { titulo: 'Ajuste por conteo físico', etiqueta: 'Existencia real contada' },
 };
 
+// La factura de la última entrada: los productos de una misma factura se ingresan uno tras otro, así que el
+// proveedor y el número quedan escritos para el siguiente.
+let ultimaFactura = { proveedor: '', factura: '' };
+let nombresProveedores = null;
+
+async function proveedores() {
+  nombresProveedores ??= await api.get('/api/inventario/proveedores').catch(() => []);
+  return nombresProveedores;
+}
+
 async function movimiento(producto, tipo) {
-  const campos = [{ nombre: 'cantidad', etiqueta: TIPOS[tipo].etiqueta, tipo: 'cantidad', requerido: true, autofocus: true }];
+  const campos = [];
+  let extra = null;
+  let intro = h('p', h('b', producto.descripcion), ` · existencia actual: ${numero(producto.existencia)}`);
   if (tipo === 'entrada') {
+    // Toda entrada viene con su factura: cantidad × costo se suma a esa factura en Proveedores.
+    const lista = `proveedores-entrada-${Date.now()}`;
+    extra = h('datalist', { id: lista }, (await proveedores()).map((n) => h('option', { value: n })));
+    const misma = Boolean(ultimaFactura.proveedor && ultimaFactura.factura);
+    if (misma) intro = [intro, h('p.ayuda', `Sigue en la factura N° ${ultimaFactura.factura} de ${ultimaFactura.proveedor}. Si es otra, cambia el proveedor o el número.`)];
     campos.push(
-      { nombre: 'costo_unitario', etiqueta: 'Costo unitario (opcional)', tipo: 'monto', valor: producto.precio_costo },
+      { nombre: 'proveedor', etiqueta: 'Proveedor', valor: ultimaFactura.proveedor, requerido: true, autofocus: !misma, atributos: { list: lista } },
+      { nombre: 'factura', etiqueta: 'N° de factura', valor: ultimaFactura.factura, requerido: true },
+      { nombre: 'cantidad', etiqueta: TIPOS[tipo].etiqueta, tipo: 'cantidad', requerido: true, autofocus: misma },
+      { nombre: 'costo_unitario', etiqueta: 'Costo unitario (con IVA)', tipo: 'monto', valor: producto.precio_costo, requerido: true, ayuda: 'Cantidad × costo se suma a la factura en Proveedores.' },
       { nombre: 'actualizar_costo', etiqueta: 'Actualizar el costo del producto', tipo: 'check', valor: true },
-      { nombre: 'referencia', etiqueta: 'Factura / guía (opcional)' },
     );
+  } else {
+    campos.push({ nombre: 'cantidad', etiqueta: TIPOS[tipo].etiqueta, tipo: 'cantidad', requerido: true, autofocus: true });
   }
   campos.push({ nombre: 'nota', etiqueta: 'Nota', tipo: 'area', ancho: true });
   return formulario({
     titulo: `${TIPOS[tipo].titulo}`,
     aceptar: 'Registrar',
-    intro: h('p', h('b', producto.descripcion), ` · existencia actual: ${numero(producto.existencia)}`),
+    intro,
+    extra,
     campos,
-    alEnviar: (v) => api.post('/api/inventario/movimiento', { ...v, producto_id: producto.id, tipo }),
+    alEnviar: async (v) => {
+      const r = await api.post('/api/inventario/movimiento', { ...v, producto_id: producto.id, tipo });
+      if (r.factura) {
+        ultimaFactura = { proveedor: r.factura.proveedor, factura: r.factura.numero };
+        if (r.factura.proveedor_nuevo) nombresProveedores = null;
+      }
+      return r;
+    },
   });
+}
+
+/** El aviso después de un movimiento: la existencia nueva y, en una entrada, cómo va su factura. */
+function avisarMovimiento(producto, r) {
+  const f = r.factura;
+  const enFactura = f ? ` · Factura N° ${f.numero} de ${f.proveedor}: ${pesos(f.monto)} (${f.productos === 1 ? '1 producto' : `${f.productos} productos`})` : '';
+  aviso(`Existencia de «${producto.descripcion}»: ${numero(r.existencia)}${enFactura}`, 'ok', f ? 6000 : 3500);
 }
 
 export async function montar(contenedor) {
   let pestana = 'ajustes';
+  let entradaDeAjustes = null; // al volver de una entrada, la pestaña «Entradas y ajustes» se pone al día
   let filtro = { desde: hoy(-7), hasta: hoy() };
   const resumen = h('div.kpis');
   const zona = h('div');
@@ -79,7 +116,7 @@ export async function montar(contenedor) {
             class: t === 'entrada' ? 'primario' : null,
             onclick: async () => {
               const res = await movimiento(p, t);
-              if (res) { aviso(`Existencia de «${p.descripcion}»: ${numero(res.existencia)}`, 'ok'); cargar(); cargarResumen(); buscar.select(); }
+              if (res) { avisarMovimiento(p, res); cargar(); cargarResumen(); buscar.select(); }
             },
           }, { entrada: '+ Entrada', salida: '− Salida', ajuste: 'Ajustar' }[t]))),
         },
@@ -89,17 +126,11 @@ export async function montar(contenedor) {
     buscar.addEventListener('keydown', async (e) => {
       if (e.key !== 'Enter') return;
       e.preventDefault();
-      try {
-        const p = await api.get(`/api/productos/codigo/${encodeURIComponent(buscar.value.trim())}`);
-        const res = await movimiento(p, 'entrada');
-        if (res) { aviso(`Existencia de «${p.descripcion}»: ${numero(res.existencia)}`, 'ok'); cargarResumen(); }
-        buscar.select();
-      } catch {
-        cargar();
-      }
+      if (!(await entradaPorCodigo(buscar.value.trim(), false))) cargar();
     });
+    entradaDeAjustes = async () => { cargar(); buscar.select(); };
     vaciar(zona, h('div.panel',
-      h('p.suave', 'Escanea un código y presiona Enter para registrar una entrada rápida, o busca y elige el movimiento.'),
+      h('p.suave', 'Escanea un producto y se abre su entrada de mercadería, con el proveedor y el N° de factura. También puedes buscarlo y elegir el movimiento.'),
       buscar, h('div', { style: { height: '.75rem' } }), lista));
     buscar.focus();
     cargar();
@@ -188,5 +219,39 @@ export async function montar(contenedor) {
   }
 
   await cargarResumen();
+  /**
+   * Entrada de mercadería del producto con ese código (lo escaneado o escrito y Enter). Devuelve false si no hay
+   * un producto con ese código (con `avisar`, lo dice).
+   */
+  async function entradaPorCodigo(codigo, avisar = true) {
+    if (!codigo) return false;
+    let p;
+    try {
+      p = await api.get(`/api/productos/codigo/${encodeURIComponent(codigo)}`);
+    } catch (e) {
+      if (avisar) avisoError(e);
+      return false;
+    }
+    if (!p.usa_inventario) {
+      aviso(`«${p.descripcion}» no lleva control de inventario.`, 'error');
+      return true;
+    }
+    const res = await movimiento(p, 'entrada');
+    if (res) {
+      avisarMovimiento(p, res);
+      cargarResumen();
+      if (pestana === 'ajustes') await entradaDeAjustes?.();
+    }
+    return true;
+  }
+
   cambiar(pestana);
+
+  return {
+    /** Lo que lee el lector en Inventario (en cualquier pestaña o campo) abre la entrada de ese producto. */
+    recibirCodigo(codigo) {
+      if (pestana !== 'ajustes') cambiar('ajustes');
+      entradaPorCodigo(codigo);
+    },
+  };
 }
