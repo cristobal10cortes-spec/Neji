@@ -22,10 +22,10 @@ async function proveedores() {
   return nombresProveedores;
 }
 
-async function movimiento(producto, tipo) {
+async function movimiento(producto, tipo, arriba = null) {
   const campos = [];
   let extra = null;
-  let intro = h('p', h('b', producto.descripcion), ` · existencia actual: ${numero(producto.existencia)}`);
+  let intro = [arriba, h('p', h('b', producto.descripcion), ` · existencia actual: ${numero(producto.existencia)}`)];
   if (tipo === 'entrada') {
     // Toda entrada viene con su factura: cantidad × costo se suma a esa factura en Proveedores.
     const lista = `proveedores-entrada-${Date.now()}`;
@@ -58,6 +58,30 @@ async function movimiento(producto, tipo) {
       return r;
     },
   });
+}
+
+/**
+ * El movimiento de un producto escaneado: parte en Entrada y arriba se cambia a Salida o Ajuste (la ventana se
+ * vuelve a abrir con lo de ese movimiento). Devuelve { tipo, ...respuesta } o null.
+ */
+async function movimientoElegible(producto, tipo = 'entrada') {
+  for (;;) {
+    let otro = null;
+    const opciones = h('div.metodos.movimientos', { role: 'group', 'aria-label': 'Movimiento' },
+      [['entrada', '+ Entrada'], ['salida', '− Salida'], ['ajuste', 'Ajuste']].map(([t, texto]) => h('button', {
+        type: 'button',
+        class: t === tipo ? 'activo' : null,
+        'aria-pressed': String(t === tipo),
+        onclick: (e) => {
+          if (t === tipo) return;
+          otro = t;
+          e.currentTarget.closest('.modal').querySelector('footer .btn:not(.primario)').click(); // cierra esta
+        },
+      }, texto)));
+    const r = await movimiento(producto, tipo, opciones);
+    if (otro === null) return r ? { ...r, tipo } : null;
+    tipo = otro;
+  }
 }
 
 /** El aviso después de un movimiento: la existencia nueva y, en una entrada, cómo va su factura. */
@@ -236,7 +260,7 @@ export async function montar(contenedor) {
       aviso(`«${p.descripcion}» no lleva control de inventario.`, 'error');
       return true;
     }
-    const res = await movimiento(p, 'entrada');
+    const res = await movimientoElegible(p, 'entrada');
     if (res) {
       avisarMovimiento(p, res);
       cargarResumen();

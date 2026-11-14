@@ -7,15 +7,9 @@ from flask import Response, jsonify
 
 from ..auth import con_permiso
 from ..db import filas, get_db
-from ..servicios.caja import SQL_DEPARTAMENTO_ITEM, SQL_GANANCIA_ITEM
+from ..servicios.caja import SQL_DEPARTAMENTO_ITEM, SQL_IMPORTE_ITEM, sql_ganancia_item, sql_venta_sin_iva_item
 from ..validar import celda_csv, numero_texto
 from . import bp, rango_fechas
-
-# Importe neto de devoluciones y con el descuento del ticket repartido.
-SQL_IMPORTE_ITEM = """
-    (vi.importe * (vi.cantidad - vi.cantidad_devuelta) / vi.cantidad)
-      * (CASE WHEN v.subtotal > 0 THEN 1.0 * v.total / v.subtotal ELSE 1 END)
-"""
 
 
 @bp.get("/reportes/ventas")
@@ -24,6 +18,7 @@ def reporte_ventas():
     desde, hasta, inicio, fin = rango_fechas()
     con = get_db()
     rango = (inicio, fin)
+    ganancia_item = sql_ganancia_item(con)
 
     r = dict(con.execute(
         """SELECT COUNT(*) AS n_ventas, COALESCE(SUM(total), 0) AS bruto,
@@ -33,11 +28,13 @@ def reporte_ventas():
            FROM ventas WHERE fecha BETWEEN ? AND ?""", rango).fetchone())
     r["total"] = r["bruto"] - r["devuelto"]
     r["ticket_promedio"] = round(r["bruto"] / r["n_ventas"]) if r["n_ventas"] else 0
-    ganancia = con.execute(
-        f"""SELECT COALESCE(SUM({SQL_GANANCIA_ITEM}), 0) FROM venta_items vi
-            JOIN ventas v ON v.id = vi.venta_id WHERE v.fecha BETWEEN ? AND ?""", rango).fetchone()[0]
+    # Ganancia real (sin IVA) y su margen sobre lo vendido sin IVA.
+    ganancia, venta_sin_iva = con.execute(
+        f"""SELECT COALESCE(SUM({ganancia_item}), 0), COALESCE(SUM({sql_venta_sin_iva_item(con)}), 0)
+            FROM venta_items vi JOIN ventas v ON v.id = vi.venta_id WHERE v.fecha BETWEEN ? AND ?""",
+        rango).fetchone()
     r["ganancia"] = round(ganancia)
-    r["margen"] = round(100 * ganancia / r["total"], 1) if r["total"] else 0
+    r["margen"] = round(100 * ganancia / venta_sin_iva, 1) if venta_sin_iva else 0
 
     por_metodo = filas(con.execute(
         """SELECT p.metodo, SUM(p.monto) AS total, COUNT(DISTINCT p.venta_id) AS n_ventas
@@ -52,7 +49,7 @@ def reporte_ventas():
            FROM ventas WHERE fecha BETWEEN ? AND ? GROUP BY 1 ORDER BY 1""", rango))
     por_departamento = filas(con.execute(
         f"""SELECT {SQL_DEPARTAMENTO_ITEM} AS departamento,
-                   ROUND(SUM({SQL_IMPORTE_ITEM})) AS total, ROUND(SUM({SQL_GANANCIA_ITEM})) AS ganancia
+                   ROUND(SUM({SQL_IMPORTE_ITEM})) AS total, ROUND(SUM({ganancia_item})) AS ganancia
             FROM venta_items vi JOIN ventas v ON v.id = vi.venta_id
             LEFT JOIN departamentos d ON d.id = vi.departamento_id
             WHERE v.fecha BETWEEN ? AND ? GROUP BY 1 ORDER BY 2 DESC""", rango))
@@ -65,7 +62,7 @@ def reporte_ventas():
                    CASE WHEN vi.receta_id IS NOT NULL THEN 'Recetas magistrales' ELSE vi.descripcion END
                      AS descripcion,
                    SUM(vi.cantidad - vi.cantidad_devuelta) AS cantidad,
-                   ROUND(SUM({SQL_IMPORTE_ITEM})) AS total, ROUND(SUM({SQL_GANANCIA_ITEM})) AS ganancia
+                   ROUND(SUM({SQL_IMPORTE_ITEM})) AS total, ROUND(SUM({ganancia_item})) AS ganancia
             FROM venta_items vi JOIN ventas v ON v.id = vi.venta_id
             WHERE v.fecha BETWEEN ? AND ?
             GROUP BY CASE WHEN vi.receta_id IS NOT NULL THEN 'receta'

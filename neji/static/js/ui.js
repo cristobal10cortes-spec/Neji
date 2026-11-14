@@ -267,7 +267,7 @@ let contadorFormularios = 0;
  * Formulario en una ventana. Con `enterAvanza`, Enter pasa al campo siguiente (Mayús+Enter al anterior)
  * y desde el último al botón Guardar; Enter sobre Guardar guarda.
  */
-export function formulario({ titulo, campos, aceptar = 'Guardar', ancho = '', alEnviar, intro, extra, alMostrar, enterAvanza = false }) {
+export function formulario({ titulo, campos, aceptar = 'Guardar', ancho = '', alEnviar, intro, extra, alMostrar, enterAvanza = false, botonesExtra = [] }) {
   return new Promise((resolver) => {
     const id = `form-${++contadorFormularios}`;
     const entradas = {};
@@ -305,6 +305,8 @@ export function formulario({ titulo, campos, aceptar = 'Guardar', ancho = '', al
       cuerpo: form,
       alCerrar: () => resolver(resultado),
       botones: [
+        // Otras acciones (p. ej. Kardex o Eliminar en un producto): a la izquierda del pie.
+        ...botonesExtra.map((b, i) => ({ ...b, clase: [b.clase, i === botonesExtra.length - 1 ? 'al-inicio' : null].filter(Boolean).join('.') })),
         { texto: 'Cancelar', accion: (mm) => mm.cerrar() },
         { texto: aceptar, clase: 'primario', submit: true, form: id },
       ],

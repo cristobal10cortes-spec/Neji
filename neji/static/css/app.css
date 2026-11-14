@@ -308,6 +308,7 @@ main:has(> div > .ventas) { max-width: none; }
 /* Una tabla en una ventana no se encoge con barra propia: se desplaza la ventana entera (todas las filas a la vista). */
 .modal .cuerpo > .tabla-caja { flex-shrink: 0; }
 .modal footer { padding: .75rem 1.1rem; border-top: 1px solid var(--borde); display: flex; gap: .5rem; justify-content: flex-end; flex-wrap: wrap; }
+.modal footer .al-inicio { margin-right: auto; }
 .cerrar { border: 0; background: none; font-size: 1.4rem; cursor: pointer; color: var(--suave); line-height: 1; }
 .error-modal { background: var(--peligro-claro); color: var(--peligro); padding: .55rem .75rem; border-radius: 8px; }
 
@@ -331,6 +332,7 @@ body:has(.ventas) #avisos { top: auto; bottom: 160px; }
 .metodos kbd { display: block; margin: 0 auto .2rem; width: max-content; }
 .documento-sii:not(:empty) { margin-bottom: .7rem; }
 .metodos.documentos { grid-template-columns: repeat(2, minmax(110px, 170px)); }
+.metodos.movimientos { grid-template-columns: repeat(3, 1fr); margin-bottom: .75rem; }
 .billetes { display: flex; gap: .35rem; flex-wrap: wrap; }
 .cambio { font-size: 2rem; font-weight: 800; text-align: center; font-variant-numeric: tabular-nums; }
 .paga-con input { font-size: 1.6rem; text-align: right; min-height: 56px; font-variant-numeric: tabular-nums; }
